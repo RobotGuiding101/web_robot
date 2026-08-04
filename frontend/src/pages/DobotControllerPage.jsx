@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
 
@@ -39,6 +39,31 @@ const DobotControllerPage = () => {
   const [joints, setJoints] = useState({ J1: 0, J2: 0, J3: 0, J4: 0, J5: 0, J6: 0 })
   const [lastMoved, setLastMoved] = useState(null)
 
+  // Receive TCP position + joints from the 3D viewer iframe
+  useEffect(() => {
+    const handleMessage = (e) => {
+      if (!e.data || e.data.type !== 'tcpUpdate') return
+      const { x, y, z, rx, ry, rz, joints: j } = e.data
+      setPos((prev) => ({
+        ...prev,
+        X:  x  ?? prev.X,
+        Y:  y  ?? prev.Y,
+        Z:  z  ?? prev.Z,
+        RX: rx ?? prev.RX,
+        RY: ry ?? prev.RY,
+        RZ: rz ?? prev.RZ,
+      }))
+      if (Array.isArray(j) && j.length === 6) {
+        setJoints({
+          J1: j[0], J2: j[1], J3: j[2],
+          J4: j[3], J5: j[4], J6: j[5],
+        })
+      }
+    }
+    window.addEventListener('message', handleMessage)
+    return () => window.removeEventListener('message', handleMessage)
+  }, [])
+
   const handleEmergency = () => {
     // TODO: Call POST /api/robot/emergency-stop
     alert('EMERGENCY STOP!')
@@ -64,11 +89,23 @@ const DobotControllerPage = () => {
 
             {/* ── Left: 3D Viewer Area ── */}
             <div className="dobot-viewer-wrap">
-              <div className=" dobot-3d-box">
-                <span>Model 3D</span>
+              <div className="dobot-3d-box" style={{ padding: 0, overflow: 'hidden' }}>
+                <iframe
+                  src="/robot-viewer.html"
+                  title="Robot Arm 3D Viewer"
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    border: 'none',
+                    display: 'block',
+                    borderRadius: '16px',
+                  }}
+                  allow="accelerometer"
+                />
                 <button
                   className="dobot-fullscreen-btn"
                   title="Fullscreen"
+                  onClick={() => window.open('/robot-viewer.html', '_blank')}
                 >
                   ⛶
                 </button>
