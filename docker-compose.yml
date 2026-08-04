@@ -1,0 +1,43 @@
+# =============================================
+# docker-compose.yml — Robot Arm Web System
+# =============================================
+# Usage:
+#   docker compose up --build          # dev mode
+#   docker compose up -d               # background
+#   docker compose down                # stop
+
+services:
+
+  # ── Backend: FastAPI ────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: robot_backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    ports:
+      - "8000:8000"       # เปิดให้เข้าถึงโดยตรงสำหรับ debug
+    volumes:
+      - ./backend:/app    # hot-reload: mount source (dev only)
+    command: uvicorn main:app --reload --host 0.0.0.0 --port 8000
+
+  # ── Frontend: React + Vite → nginx ──────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+        VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:8000}
+    container_name: robot_frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+networks:
+  default:
+    name: robot_network
