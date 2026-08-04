@@ -1,4 +1,4 @@
-# 🤖 Web Robot - Control Center & Dashboard for Robotic Arm
+# 🤖 Web Robot — Control Center & Dashboard for Robotic Arm
 
 **Web Robot** คือเว็บแอปพลิเคชันสำหรับควบคุมและติดตามสถานะของหุ่นยนต์แขนกล (Robot Arm / Dobot) แบบเรียลไทม์ผ่านหน้าเว็บแบบ Interactive รองรับการสั่งงาน Jog Control, ดูภาพกล้องสด (Camera Stream), โหมดวาดภาพ (Drawing Mode), และมีระบบคำสั่งหยุดฉุกเฉิน (Emergency Stop) เพื่อความปลอดภัยสูงสุด
 
@@ -9,36 +9,51 @@
 - 🎮 **Dobot Controller (การควบคุมหุ่นยนต์)**
   - **Cartesian Control**: ควบคุมตำแหน่งพิกัด X, Y, Z, RX, RY, RZ
   - **Joint Control**: ควบคุมมุมข้อต่อ J1, J2, J3, J4, J5, J6
-  - **Step Value Selection**: ปรับระยะการเคลื่อนที่ได้ตั้งแต่ 0.1, 1, 5, ถึง 10 mm/deg
-  - **Live Coordinate Readout**: แสดงตำแหน่งพิกัดปัจจุบันและมุมข้อต่อแบบ Real-time
-  - **3D Model Viewer**: รองรับการจำลองท่าทางหุ่นยนต์ในรูปแบบ 3D
+  - **Step Value Selection**: ปรับระยะการเคลื่อนที่ตั้งแต่ 0.1, 1, 5, ถึง 10 mm/deg
+  - **Live Coordinate Readout**: แสดงพิกัดปัจจุบัน X/Y/Z/RX/RY/RZ และมุม J1–J6 แบบ Real-time
+  - **3D Model Viewer**: จำลองท่าทางหุ่นยนต์ด้วย Three.js + โมเดล `.dae` จริง
+  - **IK Drag Control**: ลากจุดปลายแขน (End-Effector) เพื่อขยับหุ่นยนต์ผ่าน CCD Inverse Kinematics
 - 📹 **Real-Time Camera Stream**
-  - สตรีมภาพวิดีโอสดจากกล้องที่ติดตั้งกับหุ่นยนต์ (MJPEG Stream)
+  - สตรีมภาพวิดีโอสดจากกล้อง (MJPEG Stream)
   - รองรับการบันทึกภาพนิ่ง (Snapshot Capture)
 - 🎨 **Drawing Mode (โหมดวาดภาพ)**
   - สร้างและส่ง Trajectory การวาดภาพไปยังแขนกล
 - 🚨 **Safety & Emergency Stop**
-  - ปุ่มหยุดฉุกเฉิน (E-Stop) ที่เข้าถึงได้ทันทีจากทุกหน้าเพจเพื่อตัดการทำงานทันที
+  - ปุ่มหยุดฉุกเฉิน (E-Stop) เข้าถึงได้จากทุกหน้า
 - 📊 **Dashboard & Analytics**
-  - แสดงภาพรวมสถานะการเชื่อมต่อ และการทำงานของระบบ
+  - แสดงภาพรวมสถานะการเชื่อมต่อและการทำงานของระบบ
 - ⚙️ **System Settings**
-  - ตั้งค่าการเชื่อมต่อ API, พอร์ตสื่อสาร Serial/TCP, และกล้อง
+  - ตั้งค่าการเชื่อมต่อ API, Serial/TCP Port, และกล้อง
+- 📱 **iPad-First Responsive Design**
+  - รองรับ Desktop, iPad (768–1024px), และ Mobile
 
 ---
 
 ## 🛠️ เทคโนโลยีที่ใช้ (Tech Stack)
 
 ### **Frontend**
-- **Framework**: [React 19](https://react.dev/) + [Vite](https://vitejs.dev/)
-- **Routing**: [React Router DOM v7](https://reactrouter.com/)
-- **Styling**: Vanilla CSS (Modern Dark Mode UI / Custom Design System)
-- **Linting**: [Oxlint](https://oxc.rs/)
+| เทคโนโลยี | เวอร์ชัน | หน้าที่ |
+|---|---|---|
+| [React](https://react.dev/) | 19 | UI Framework |
+| [Vite](https://vitejs.dev/) | 8 | Build Tool & Dev Server |
+| [React Router DOM](https://reactrouter.com/) | v7 | Client-side Routing |
+| [Three.js](https://threejs.org/) | r128 | 3D Robot Model Viewer |
+| Vanilla CSS | — | Design System, Dark UI, Glassmorphism |
+| [Oxlint](https://oxc.rs/) | — | Linting |
 
 ### **Backend**
-- **Framework**: [FastAPI](https://fastapi.tiangolo.com/) (Python 3.10+)
-- **Server**: [Uvicorn](https://www.uvicorn.org/)
-- **Data Validation**: [Pydantic](https://docs.pydantic.dev/)
-- **CORS Middleware**: รองรับ Cross-Origin Request จาก Frontend React
+| เทคโนโลยี | หน้าที่ |
+|---|---|
+| [FastAPI](https://fastapi.tiangolo.com/) | Python Web Framework |
+| [Uvicorn](https://www.uvicorn.org/) | ASGI Server |
+| [python-dotenv](https://pypi.org/project/python-dotenv/) | Environment Variables |
+| Pydantic | Data Validation |
+
+### **Infrastructure**
+| เทคโนโลยี | หน้าที่ |
+|---|---|
+| Docker + Docker Compose | Container Orchestration |
+| nginx (Alpine) | Static File Serving + API Proxy |
 
 ---
 
@@ -46,35 +61,50 @@
 
 ```text
 web_robot/
-├── README.md                 # เอกสารอธิบายโครงการ
-├── backend/                  # ส่วนของ Backend Server (FastAPI)
-│   ├── main.py               # จุดเริ่มต้นของ FastAPI App & CORS Config
-│   ├── requirements.txt      # รายการ Dependencies ของ Python
-│   ├── run.bat               # Script สำหรับรัน Backend Server บน Windows
-│   └── routers/              # API Route Handlers
-│       ├── __init__.py
-│       ├── auth.py           # API เข้าสู่ระบบ / ออกจากระบบ (/api/auth)
-│       ├── camera.py         # API สตรีมกล้องและแคปเจอร์ภาพ (/api/camera)
-│       └── robot.py          # API ควบคุมพิกัดและสถานะหุ่นยนต์ (/api/robot)
-└── frontend/                 # ส่วนของ Frontend Web App (React + Vite)
-    ├── index.html            # HTML Entry Point
-    ├── package.json          # รายการ Dependencies และ Scripts ของ Node.js
-    ├── vite.config.js        # การตั้งค่า Vite
-    ├── .oxlintrc.json        # การตั้งค่า Oxlint
+├── README.md
+├── docker-compose.yml            # รัน Frontend + Backend ด้วยคำสั่งเดียว
+│
+├── backend/                      # FastAPI Server
+│   ├── main.py                   # App entry point & CORS config
+│   ├── requirements.txt          # Python dependencies
+│   ├── run.bat                   # Windows run script
+│   ├── .env                      # Environment variables (ไม่ commit)
+│   ├── .env.example              # Template (commit ได้)
+│   ├── Dockerfile
+│   ├── .dockerignore
+│   └── routers/
+│       ├── auth.py               # /api/auth — Login/Logout
+│       ├── camera.py             # /api/camera — Stream & Snapshot
+│       └── robot.py              # /api/robot — Move, Status, E-Stop
+│
+└── frontend/                     # React + Vite Web App
+    ├── index.html
+    ├── package.json
+    ├── vite.config.js
+    ├── nginx.conf                # nginx config สำหรับ Docker
+    ├── .env                      # Environment variables (ไม่ commit)
+    ├── .env.example              # Template (commit ได้)
+    ├── Dockerfile                # Multi-stage: Node build → nginx serve
+    ├── .dockerignore
     └── src/
-        ├── App.jsx           # Main App Component & Client Routing
-        ├── main.jsx          # React Entry Point
-        ├── index.css         # Design System & Global Styles
-        ├── components/       # UI Components ส่วนกลาง
-        │   ├── Sidebar.jsx   # แถบเมนูด้านข้าง
-        │   └── TopBar.jsx    # แถบหัวเรื่องด้านบน + ปุ่ม Emergency Stop
-        └── pages/            # หน้าเว็บแต่ละหน้า
-            ├── LoginPage.jsx          # หน้าเข้าสู่ระบบ (/login)
-            ├── DashboardPage.jsx      # หน้าภาพรวมระบบ (/dashboard)
-            ├── DobotControllerPage.jsx# หน้าควบคุมหุ่นยนต์ Dobot (/dobot)
-            ├── CameraViewPage.jsx     # หน้าดูกล้องสด (/camera)
-            ├── DrawingModePage.jsx    # หน้าโหมดวาดภาพ (/drawing)
-            └── SystemSettingsPage.jsx # หน้าตั้งค่าระบบ (/settings)
+        ├── App.jsx               # Routing
+        ├── main.jsx
+        ├── index.css             # Global Design System
+        ├── components/
+        │   ├── Sidebar.jsx
+        │   └── TopBar.jsx
+        └── pages/
+            ├── LoginPage.jsx
+            ├── DashboardPage.jsx
+            ├── DobotControllerPage.jsx
+            ├── CameraViewPage.jsx
+            ├── DrawingModePage.jsx
+            └── SystemSettingsPage.jsx
+    └── public/
+        ├── robot-viewer.html     # Three.js 3D Robot Viewer (iframe)
+        └── models/               # โมเดล .dae ของหุ่นยนต์
+            ├── base_link.dae
+            ├── Link1.dae … Link6.dae
 ```
 
 ---
@@ -83,147 +113,223 @@ web_robot/
 
 ```mermaid
 graph TD
-    User([ผู้ใช้งาน / Operator]) <--> Frontend[Frontend React Web App<br/>Port: 5173]
-    Frontend <-->|REST API / HTTP Stream| Backend[Backend FastAPI Server<br/>Port: 8000]
+    User([ผู้ใช้งาน / Operator]) <--> Frontend["Frontend React Web App\n(Port 80 — Docker / 5173 — Dev)"]
+    Frontend <-->|iframe postMessage| Viewer["Three.js 3D Viewer\n/robot-viewer.html"]
+    Frontend <-->|REST API| Backend["Backend FastAPI\n(Port 8000)"]
     Backend <-->|SDK / Serial / TCP| Dobot[🤖 Dobot Robot Arm]
-    Backend <-->|OpenCV / RTSP / MJPEG| Camera[📹 Camera Device]
+    Backend <-->|OpenCV / MJPEG| Camera[📹 Camera Device]
 ```
 
 ---
 
-## 🚀 ขั้นตอนการติดตั้งและการใช้งาน (Installation & Setup)
+## 🚀 การติดตั้งและการใช้งาน (Setup)
 
 ### 📋 ความต้องการของระบบ (Prerequisites)
-- **Node.js** v18.0.0 ขึ้นไป
-- **Python** 3.10 ขึ้นไป
+
+#### แบบ Docker (แนะนำ)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) v24+
+
+#### แบบ Manual
+- **Node.js** v18+
+- **Python** 3.10+
 - **Git**
 
 ---
 
-### 1️⃣ การติดตั้งและรัน Backend (FastAPI)
+## 🐳 วิธีรันด้วย Docker (แนะนำ)
 
-1. เข้าไปยังโฟลเดอร์ `backend`:
-   ```bash
-   cd backend
-   ```
+```bash
+# 1. Clone โปรเจกต์
+git clone <repo-url>
+cd web_robot
 
-2. สร้าง Virtual Environment (แนะนำ):
-   ```bash
-   python -m venv venv
-   ```
-   *เปิดใช้งาน Virtual Environment:*
-   - **Windows**: `venv\Scripts\activate`
-   - **macOS/Linux**: `source venv/bin/activate`
+# 2. สร้างไฟล์ .env จาก template
+cp backend/.env.example backend/.env
+cp frontend/.env.example frontend/.env
 
-3. ติดตั้ง Dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+# 3. Build และรัน
+docker compose up --build
 
-4. เริ่มต้นทำงาน Backend Server:
-   - **วิธีที่ 1 (Windows Script)**:
-     ```cmd
-     run.bat
-     ```
-   - **วิธีที่ 2 (ผ่าน Uvicorn Command)**:
-     ```bash
-     uvicorn main:app --reload --host 0.0.0.0 --port 8000
-     ```
+# รัน background
+docker compose up -d --build
 
-   > 🌐 **Backend API**: `http://localhost:8000`  
-   > 📑 **Interactive API Docs (Swagger UI)**: `http://localhost:8000/docs`
+# ดู logs
+docker compose logs -f
 
----
+# หยุด
+docker compose down
+```
 
-### 2️⃣ การติดตั้งและรัน Frontend (React + Vite)
+| Service | URL |
+|---|---|
+| 🌐 **Frontend** | http://localhost |
+| 🔌 **Backend API** | http://localhost:8000 |
+| 📑 **Swagger Docs** | http://localhost:8000/docs |
 
-1. เปิด Terminal ใหม่ และเข้าไปยังโฟลเดอร์ `frontend`:
-   ```bash
-   cd frontend
-   ```
-
-2. ติดตั้ง Node Modules:
-   ```bash
-   npm install
-   ```
-
-3. เริ่มต้นทำงาน Development Server:
-   ```bash
-   npm run dev
-   ```
-
-4. เปิดบราวเซอร์เพื่อเข้าใช้งานเว็บแอปพลิเคชัน:
-   > 🔗 **Web Interface**: `http://localhost:5173`
+> **หมายเหตุ**: nginx proxy `/api/*` และ `/ws` ไปที่ backend อัตโนมัติ
 
 ---
 
-## 📡 รายละเอียด API Endpoints
+## 🛠️ วิธีรันแบบ Manual (Development)
+
+### 1️⃣ Backend (FastAPI)
+
+```bash
+cd backend
+
+# สร้าง Virtual Environment
+python -m venv venv
+
+# เปิดใช้งาน venv
+# Windows:
+venv\Scripts\activate
+# macOS/Linux:
+source venv/bin/activate
+
+# ติดตั้ง dependencies
+pip install -r requirements.txt
+
+# สร้างไฟล์ .env
+cp .env.example .env
+# แก้ไขค่าตามสภาพแวดล้อม
+
+# รัน server
+.\run.bat               # Windows
+# หรือ
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+> 🌐 **API**: `http://localhost:8000`  
+> 📑 **Swagger UI**: `http://localhost:8000/docs`
+
+---
+
+### 2️⃣ Frontend (React + Vite)
+
+```bash
+cd frontend
+
+# ติดตั้ง dependencies
+npm install
+
+# สร้างไฟล์ .env
+cp .env.example .env
+
+# รัน dev server
+npm run dev
+```
+
+> 🔗 **Web Interface**: `http://localhost:5173`
+
+---
+
+## ⚙️ Environment Variables
+
+### Frontend (`frontend/.env`)
+
+| Variable | Default | คำอธิบาย |
+|---|---|---|
+| `VITE_API_URL` | `http://localhost:8000` | URL ของ Backend API |
+| `VITE_WS_URL` | `ws://localhost:8000` | WebSocket URL สำหรับ Live Robot |
+
+ใช้งานใน React:
+```js
+const apiUrl = import.meta.env.VITE_API_URL
+```
+
+### Backend (`backend/.env`)
+
+| Variable | Default | คำอธิบาย |
+|---|---|---|
+| `HOST` | `0.0.0.0` | Host ที่ bind |
+| `PORT` | `8000` | Port ของ server |
+| `ALLOWED_ORIGINS` | `http://localhost:5173` | CORS Origins (คั่นด้วยคอมม่า) |
+| `ROBOT_IP` | `192.168.1.6` | IP ของตัวควบคุม Dobot |
+| `ROBOT_PORT` | `29999` | Port ของ Dobot |
+| `SECRET_KEY` | `change-me-in-production` | JWT Secret Key |
+
+---
+
+## 📡 API Endpoints
 
 ### 🔑 Authentication (`/api/auth`)
-| Method | Endpoint | Description | Request Body / Query |
-| :--- | :--- | :--- | :--- |
-| `POST` | `/api/auth/login` | เข้าสู่ระบบ | `{ "username": "admin", "password": "..." }` |
-| `POST` | `/api/auth/logout` | ออกจากระบบ | - |
-
----
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/auth/login` | เข้าสู่ระบบ `{ "username": "...", "password": "..." }` |
+| `POST` | `/api/auth/logout` | ออกจากระบบ |
 
 ### 🤖 Robot Control (`/api/robot`)
-| Method | Endpoint | Description | Request Body / Query |
-| :--- | :--- | :--- | :--- |
-| `POST` | `/api/robot/move` | ขยับพิกัด Cartesian หรือ Joint | `{ "axis": "X", "direction": "+", "step": 1.0 }` |
-| `POST` | `/api/robot/emergency-stop` | สั่งหยุดหุ่นยนต์ฉุกเฉินทันที | - |
-| `POST` | `/api/robot/draw` | ส่งชุดคำสั่งวาดภาพ | `{ ... }` |
-| `GET` | `/api/robot/status` | ดึงสถานะและพิกัดปัจจุบัน | ตอบกลับตำแหน่ง `(x, y, z)` และมุม `(j1..j6)` |
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/robot/status` | ดึงพิกัดและมุมข้อต่อปัจจุบัน |
+| `POST` | `/api/robot/move` | ขยับ `{ "axis": "X", "direction": "+", "step": 1.0 }` |
+| `POST` | `/api/robot/emergency-stop` | หยุดฉุกเฉินทันที |
+| `POST` | `/api/robot/draw` | ส่ง Trajectory วาดภาพ |
+
+### 📹 Camera (`/api/camera`)
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/camera/stream` | MJPEG Video Stream |
+| `GET` | `/api/camera/snapshot` | ดึงภาพนิ่ง (`image/jpeg`) |
 
 ---
 
-### 📹 Camera Control (`/api/camera`)
-| Method | Endpoint | Description | Response |
-| :--- | :--- | :--- | :--- |
-| `GET` | `/api/camera/stream` | สตรีมวิดีโอสดจากกล้อง | `multipart/x-mixed-replace` (MJPEG) |
-| `GET` | `/api/camera/snapshot` | ดึงภาพนิ่ง ณ เวลาปัจจุบัน | `image/jpeg` |
+## 🗺️ Frontend Routes
+
+| Path | หน้าที่ |
+|---|---|
+| `/login` | หน้า Login (Glassmorphism UI) |
+| `/dashboard` | ภาพรวมสถานะระบบ |
+| `/dobot` | ควบคุม Jog + 3D Viewer + Live Coords |
+| `/camera` | กล้องสด + Snapshot |
+| `/drawing` | Drawing Mode / Trajectory |
+| `/settings` | ตั้งค่าระบบ |
 
 ---
 
-## 🗺️ เส้นทางการนำทางในแอปพลิเคชัน (Frontend Routes)
+## 🧩 3D Robot Viewer (`/robot-viewer.html`)
 
-| Path | Component | หน้าที่การทำงาน |
-| :--- | :--- | :--- |
-| `/login` | [LoginPage](file:///e:/code/web_robot/frontend/src/pages/LoginPage.jsx) | หน้า Login เข้าใช้งานระบบ |
-| `/dashboard` | [DashboardPage](file:///e:/code/web_robot/frontend/src/pages/DashboardPage.jsx) | หน้าสรุปภาพรวมและสถานะการเชื่อมต่อ |
-| `/dobot` | [DobotControllerPage](file:///e:/code/web_robot/frontend/src/pages/DobotControllerPage.jsx) | หน้าแผงควบคุม Jog Control (Cartesian & Joint), Step value, พิกัดแบบ Real-time และ 3D View |
-| `/camera` | [CameraViewPage](file:///e:/code/web_robot/frontend/src/pages/CameraViewPage.jsx) | หน้าดูกล้องสดและบันทึกภาพ Snapshot |
-| `/drawing` | [DrawingModePage](file:///e:/code/web_robot/frontend/src/pages/DrawingModePage.jsx) | หน้าวาดภาพ/กำหนดทิศทาง Trajectory |
-| `/settings` | [SystemSettingsPage](file:///e:/code/web_robot/frontend/src/pages/SystemSettingsPage.jsx) | หน้ากำหนดค่าระบบ API, Serial Port, Baudrate |
+Three.js viewer โหลดโมเดล `.dae` จริงและรองรับ:
 
----
-
-## 🧪 การตรวจสอบโค้ดและสร้าง Build (Development & Build)
-
-- **ตรวจสอบ Linting ใน Frontend**:
-  ```bash
-  cd frontend
-  npm run lint
-  ```
-- **สร้าง Production Build สำหรับ Frontend**:
-  ```bash
-  cd frontend
-  npm run build
-  ```
-- **ทดสอบเปิด Production Preview**:
-  ```bash
-  npm run preview
-  ```
+| ฟีเจอร์ | วิธีใช้ |
+|---|---|
+| **IK Drag** | ลากลูกบอลสีส้ม 🟠 ที่ปลายแขนเพื่อขยับทุกข้อต่อ |
+| **Translate / Rotate** | กด `Space` สลับโหมด |
+| **หมุนกล้อง** | คลิกพื้นหลัง + ลาก |
+| **Zoom** | Scroll |
+| **Live Coords** | ส่งพิกัด X/Y/Z/RX/RY/RZ + J1–J6 ไปยัง Control Panel ผ่าน `postMessage` |
+| **ควบคุมจาก React** | `iframe.contentWindow.postMessage({ type: 'setJoints', joints: [j1..j6] }, '*')` |
 
 ---
 
-## 🛡️ ความปลอดภัยและการรับรองสิทธิ์ (Security & Safety)
+## 🧪 Development Commands
 
-1. **Emergency Stop (E-Stop)**: ออกแบบให้เรียกผ่าน HTTP POST ทันทีเมื่อผู้ใช้กดปุ่ม E-Stop แถบด้านบน
-2. **CORS Security**: Backend ถูกตั้งค่าเริ่มต้นให้ยอมรับการเชื่อมต่อจาก `http://localhost:5173` เท่านั้น สามารถปรับแต่งเพิ่มเติมได้ใน [backend/main.py](file:///e:/code/web_robot/backend/main.py)
+```bash
+# Lint
+cd frontend && npm run lint
+
+# Build production
+cd frontend && npm run build
+
+# Preview build
+cd frontend && npm run preview
+
+# Docker build เฉพาะ service
+docker compose build backend
+docker compose build frontend
+```
+
+---
+
+## 🛡️ ความปลอดภัย (Security)
+
+1. **Emergency Stop**: HTTP POST ทันทีเมื่อกดปุ่ม E-Stop
+2. **CORS**: อ่านจาก `ALLOWED_ORIGINS` env — ไม่ hardcode
+3. **Secrets**: `.env` อยู่ใน `.gitignore` — ห้าม commit
+4. **Docker**: Multi-stage build — image final ไม่มี Node.js source
 
 ---
 
 ## 📄 License & Credits
 
-พัฒนาขึ้นสำหรับการเชื่อมต่อและควบคุมหุ่นยนต์แขนกล Dobot ผ่าน Web Technologies (FastAPI + React)
+พัฒนาขึ้นสำหรับการเชื่อมต่อและควบคุมหุ่นยนต์แขนกล Dobot ผ่าน Web Technologies (FastAPI + React + Three.js)
