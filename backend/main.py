@@ -1,16 +1,23 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 
 from routers import auth, robot, camera
+
+load_dotenv()  # โหลด .env
 
 app = FastAPI(title="Robot Arm API", version="0.1.0")
 
 # ---------------------------------------------------------------------------
-# CORS — allow the React dev server to call this API
+# CORS — อ่านจาก env ALLOWED_ORIGINS (คั่นด้วยคอมม่า)
 # ---------------------------------------------------------------------------
+origins_raw = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173")
+allowed_origins = [o.strip() for o in origins_raw.split(",")]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Vite default port
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
