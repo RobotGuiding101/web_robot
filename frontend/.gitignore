@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Environment variables — ห้าม commit ไฟล์จริง
+.env
+.env.local
+.env.*.local
