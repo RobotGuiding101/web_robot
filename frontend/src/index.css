@@ -664,17 +664,109 @@ body {
 }
 
 .login-card {
-  background: #ffffff;
-  border-radius: 20px;
-  padding: 40px 32px;
+  background: rgba(255, 255, 255, 0.07);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-radius: 24px;
+  padding: 48px 40px;
   width: 100%;
-  max-width: 400px;
+  max-width: 420px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
-  border: 1.5px solid #d0e4f5;
-  box-shadow: 0 20px 50px rgba(0,0,0,0.25);
+  gap: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255,255,255,0.1);
+}
+
+.login-icon {
+  font-size: 52px;
+  line-height: 1;
+  filter: drop-shadow(0 4px 12px rgba(26, 143, 227, 0.5));
+  animation: float 3s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-6px); }
+}
+
+.login-title {
+  font-size: 22px;
+  font-weight: 800;
+  color: #ffffff;
+  text-align: center;
+  letter-spacing: -0.5px;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.login-subtitle {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.55);
+  text-align: center;
+  margin: -8px 0 4px;
+  font-weight: 400;
+}
+
+.login-form {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.login-form input {
+  width: 100%;
+  padding: 14px 18px;
+  border-radius: 12px;
+  border: 1.5px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  font-size: 15px;
+  font-family: inherit;
+  outline: none;
+  transition: all 0.2s ease;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.login-form input::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.login-form input:focus {
+  border-color: #1a8fe3;
+  background: rgba(26, 143, 227, 0.12);
+  box-shadow: 0 0 0 3px rgba(26, 143, 227, 0.2);
+}
+
+.login-btn {
+  width: 100%;
+  padding: 15px;
+  border-radius: 12px;
+  border: none;
+  background: linear-gradient(135deg, #1a8fe3 0%, #1061a8 100%);
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  margin-top: 4px;
+  transition: all 0.2s ease;
+  box-shadow: 0 6px 20px rgba(26, 143, 227, 0.4);
+  letter-spacing: 0.3px;
+}
+
+.login-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 28px rgba(26, 143, 227, 0.55);
+  background: linear-gradient(135deg, #2299f0 0%, #1a78d0 100%);
+}
+
+.login-btn:active {
+  transform: translateY(0) scale(0.98);
+  box-shadow: 0 4px 12px rgba(26, 143, 227, 0.3);
 }
 
 /* =============================================
@@ -720,6 +812,89 @@ body {
 
   .jog-dual {
     grid-template-columns: 1fr;
+  }
+}
+
+/* =============================================
+   iPad — 768px to 1024px
+   ============================================= */
+@media (min-width: 768px) and (max-width: 1024px) {
+  html {
+    font-size: 15px;
+  }
+
+  /* Sidebar collapses to icon-only strip */
+  .sidebar {
+    width: 68px;
+    padding: 12px 0;
+  }
+
+  .sidebar .logo {
+    font-size: 22px;
+    margin-bottom: 12px;
+  }
+
+  .sidebar .nav-item {
+    width: 44px;
+    height: 44px;
+    font-size: 20px;
+    border-radius: 10px;
+  }
+
+  .sidebar .speed-control {
+    width: 54px;
+    padding: 8px 4px;
+  }
+
+  .sidebar .speed-control input[type="range"] {
+    height: 120px;
+  }
+
+  /* TopBar */
+  .topbar {
+    padding: 10px 14px;
+  }
+
+  .topbar .page-title {
+    font-size: 17px;
+  }
+
+  .topbar-ip-badge {
+    padding: 5px 10px;
+    font-size: 12px;
+  }
+
+  /* Main page padding */
+  .page-content {
+    padding: 12px;
+  }
+
+  /* Dobot: stack 3D viewer on top, controls below */
+  .dobot-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: 55vh auto;
+    height: auto;
+    gap: 12px;
+  }
+
+  .dobot-viewer-wrap {
+    height: 55vh;
+    min-height: 300px;
+  }
+
+  /* Control panel: side-by-side coord + jog on iPad */
+  .jog-dual {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  /* Dashboard 2-col stays, camera layout adjusts */
+  .camera-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .camera-right-panel {
+    flex-direction: row;
+    flex-wrap: wrap;
   }
 }
 
