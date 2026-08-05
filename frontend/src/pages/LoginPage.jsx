@@ -1,13 +1,42 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+
+const API_URL = ''  // nginx proxy จัดการ /api/ → backend:8000 ให้แล้ว
 
 const LoginPage = () => {
   const navigate = useNavigate()
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault()
-    // TODO: Call POST /api/auth/login with username & password
-    navigate('/dashboard')
+    setError('')
+    setLoading(true)
+
+    const username = e.target.username.value
+    const password = e.target.password.value
+
+    try {
+      const res = await fetch(`${API_URL}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      })
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setError(data.detail || 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง')
+        return
+      }
+
+      const data = await res.json()
+      localStorage.setItem('access_token', data.access_token)
+      navigate('/dashboard')
+    } catch {
+      setError('ไม่สามารถเชื่อมต่อ server ได้ กรุณาลองใหม่')
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -18,10 +47,11 @@ const LoginPage = () => {
         <p className="login-subtitle">เข้าสู่ระบบเพื่อเริ่มควบคุมแขนกล</p>
 
         <form className="login-form" onSubmit={handleLogin}>
-          <input id="username" type="text" placeholder="Username" required />
-          <input id="password" type="password" placeholder="Password" required />
-          <button id="login-submit-btn" type="submit" className="login-btn">
-            Sign in
+          <input id="username" name="username" type="text" placeholder="Username" required />
+          <input id="password" name="password" type="password" placeholder="Password" required />
+          {error && <p className="login-error">{error}</p>}
+          <button id="login-submit-btn" type="submit" className="login-btn" disabled={loading}>
+            {loading ? 'กำลังเข้าสู่ระบบ...' : 'Sign in'}
           </button>
         </form>
       </div>
