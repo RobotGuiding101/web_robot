@@ -684,10 +684,18 @@ body {
 }
 
 .login-icon {
-  font-size: 52px;
-  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   filter: drop-shadow(0 4px 12px rgba(26, 143, 227, 0.3));
 }
+
+.login-icon-img {
+  width: 90px;
+  height: 90px;
+  object-fit: contain;
+}
+
 
 
 

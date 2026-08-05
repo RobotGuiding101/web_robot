@@ -42,7 +42,9 @@ const LoginPage = () => {
   return (
     <div className="login-page">
       <div className="login-card">
-        <div className="login-icon">🦾</div>
+        <div className="login-icon">
+          <img src="assets/images/robot-arm.png" alt="Robot Arm" className="login-icon-img" />
+        </div>
         <h1 className="login-title">Robot Arm System Login</h1>
         <p className="login-subtitle">เข้าสู่ระบบเพื่อเริ่มควบคุมแขนกล</p>
 
