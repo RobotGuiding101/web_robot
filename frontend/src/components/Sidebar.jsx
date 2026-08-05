@@ -2,11 +2,6 @@ import React, { useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 
 const NAV_ITEMS = [
-  // { icon: '🏠', label: 'Dashboard', path: '/dashboard' },
-  // { icon: '📷', label: 'Camera', path: '/camera' },
-  // { icon: '✏️', label: 'Drawing', path: '/drawing' },
-  // { icon: '📦', label: 'Dobot', path: '/dobot' },
-  // { icon: '⚙️', label: 'Settings', path: '/settings' },
   { img: 'assets/images/home.png' ,label: 'Dashboard', path: '/dashboard' },
   { img: 'assets/images/camera.png' ,label: 'Camera', path: '/camera' },
   { img: 'assets/images/drawing.png' ,label: 'Drawing', path: '/drawing' },
@@ -38,8 +33,9 @@ const Sidebar = () => {
     <>
       {/* ── Sidebar: Tablet / Desktop ── */}
       <div className="sidebar">
-        {/* <div className="logo" title="Robot Arm System">🤖</div> */}
-         <div className="logo" title="Robot Arm System"></div>
+        <div className="logo" title="Robot Arm System">
+          <img src="assets/images/robot-arm.png" alt="Robot Arm System" className="nav-icon" />
+        </div>
 
         <div className="nav-items">
           {NAV_ITEMS.map((item) => (
