@@ -6,6 +6,7 @@ import CameraViewPage from './pages/CameraViewPage'
 import DrawingModePage from './pages/DrawingModePage'
 import DobotControllerPage from './pages/DobotControllerPage'
 import SystemSettingsPage from './pages/SystemSettingsPage'
+import CalibrationPage from './pages/CalibrationPage'
 
 function App() {
   return (
@@ -18,6 +19,7 @@ function App() {
         <Route path="/drawing" element={<DrawingModePage />} />
         <Route path="/dobot" element={<DobotControllerPage />} />
         <Route path="/settings" element={<SystemSettingsPage />} />
+        <Route path="/calibration" element={<CalibrationPage />} />
       </Routes>
     </BrowserRouter>
   )

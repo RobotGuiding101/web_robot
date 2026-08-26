@@ -6,7 +6,9 @@ const NAV_ITEMS = [
   { img: 'assets/images/camera.png' ,label: 'Camera', path: '/camera' },
   { img: 'assets/images/drawing.png' ,label: 'Drawing', path: '/drawing' },
   { img: 'assets/images/3d-cube.png' ,label: 'Dobot', path: '/dobot' },
+  { img: 'assets/images/settings.png' ,label: 'Calibrate', path: '/calibration' },
   { img: 'assets/images/settings.png' ,label: 'Settings', path: '/settings' },
+
 ]
 
 const NavItem = ({ item, isActive, onClick }) => (
