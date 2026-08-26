@@ -1,63 +1,94 @@
 <!DOCTYPE html>
 <html lang="th">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Robot Arm 3D Viewer</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { overflow: hidden; background: #0f2942; }
-        #canvas-container { width: 100%; height: 100vh; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            overflow: hidden;
+            background: #f5f5f5;
+        }
+
+        #canvas-container {
+            width: 100%;
+            height: 100vh;
+        }
 
         #loading-overlay {
             position: absolute;
             inset: 0;
-            background: rgba(15, 41, 66, 0.85);
+            background: rgba(245, 245, 245, 0.90);
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
             gap: 12px;
-            color: #fff;
+            color: #333;
             font-family: system-ui, sans-serif;
             font-size: 13px;
             z-index: 50;
             transition: opacity 0.4s ease;
         }
+
         .spinner {
-            width: 36px; height: 36px;
-            border: 3px solid rgba(255,255,255,0.15);
+            width: 36px;
+            height: 36px;
+            border: 3px solid rgba(0, 0, 0, 0.1);
             border-top-color: #1a8fe3;
             border-radius: 50%;
             animation: spin 0.8s linear infinite;
         }
-        @keyframes spin { to { transform: rotate(360deg); } }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
 
         #hint {
             position: absolute;
             bottom: 12px;
             left: 50%;
             transform: translateX(-50%);
-            background: rgba(15,41,66,0.75);
+            background: rgba(255, 255, 255, 0.85);
             backdrop-filter: blur(6px);
-            color: rgba(255,255,255,0.75);
+            color: rgba(50, 50, 50, 0.85);
             font-family: system-ui, sans-serif;
             font-size: 11px;
             padding: 6px 14px;
             border-radius: 20px;
-            border: 1px solid rgba(255,255,255,0.12);
+            border: 1px solid rgba(0, 0, 0, 0.1);
             pointer-events: none;
             white-space: normal;
             text-align: center;
             max-width: 90vw;
         }
-        #hint span { color: #1a8fe3; font-weight: 600; }
+
+        #hint span {
+            color: #1a8fe3;
+            font-weight: 600;
+        }
 
         /* Touch: make canvas fill properly on iPad */
-        canvas { touch-action: none; display: block; }
+        canvas {
+            touch-action: none;
+            display: block;
+        }
 
         @media (max-width: 1024px) {
-            #hint { font-size: 10px; padding: 5px 12px; bottom: 8px; }
+            #hint {
+                font-size: 10px;
+                padding: 5px 12px;
+                bottom: 8px;
+            }
         }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -65,19 +96,20 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/TransformControls.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/ColladaLoader.js"></script>
 </head>
+
 <body>
     <div id="loading-overlay">
         <div class="spinner"></div>
         <span>กำลังโหลดโมเดล...</span>
     </div>
     <div id="canvas-container"></div>
-   
+
 
     <script>
         // ===== 1. Scene, Camera, Renderer =====
         const container = document.getElementById('canvas-container');
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x0f2942);
+        scene.background = new THREE.Color(0xf5f5f5);
 
         const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
         camera.position.set(1.8, 1.8, 2.2);
@@ -95,17 +127,17 @@
         cameraControls.target.set(0, 0.4, 0);
 
         // Lighting
-        scene.add(new THREE.AmbientLight(0xaaccff, 0.5));
-        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
         dirLight.position.set(4, 8, 4);
         dirLight.castShadow = true;
         scene.add(dirLight);
-        const fillLight = new THREE.DirectionalLight(0x4488ff, 0.3);
+        const fillLight = new THREE.DirectionalLight(0xddeeff, 0.4);
         fillLight.position.set(-4, 2, -4);
         scene.add(fillLight);
 
         // Grid
-        const gridHelper = new THREE.GridHelper(3, 15, 0x1a3f6f, 0x1a3f6f);
+        const gridHelper = new THREE.GridHelper(3, 15, 0xbbbbbb, 0xdddddd);
         scene.add(gridHelper);
         const axesHelper = new THREE.AxesHelper(0.4);
         scene.add(axesHelper);
@@ -151,37 +183,37 @@
         }
 
         loader.load('models/base_link.dae', (c) => {
-            c.scene.rotation.set(deg(-90), 0, 0);
+            c.scene.rotation.set(deg(-90), deg(0), deg(0));
             robotBase.add(c.scene); onModelLoaded();
         }, undefined, onModelLoaded);
 
         loader.load('models/Link1.dae', (c) => {
-            c.scene.rotation.set(deg(-90), 0, 0);
+            c.scene.rotation.set(deg(-90), deg(0), deg(0));
             link1.add(c.scene); onModelLoaded();
         }, undefined, onModelLoaded);
 
         loader.load('models/Link2.dae', (c) => {
-            c.scene.rotation.set(0, 0, deg(-90));
+            c.scene.rotation.set(deg(0), deg(0), deg(-90));
             link2.add(c.scene); onModelLoaded();
         }, undefined, onModelLoaded);
 
         loader.load('models/Link3.dae', (c) => {
-            c.scene.rotation.set(0, 0, deg(-90));
+            c.scene.rotation.set(deg(0), deg(0), deg(-90));
             link3.add(c.scene); onModelLoaded();
         }, undefined, onModelLoaded);
 
         loader.load('models/Link4.dae', (c) => {
-            c.scene.rotation.set(0, 0, deg(-180));
+            c.scene.rotation.set(deg(0), deg(0), deg(-180));
             link4.add(c.scene); onModelLoaded();
         }, undefined, onModelLoaded);
 
         loader.load('models/Link5.dae', (c) => {
-            c.scene.rotation.set(0, deg(180), deg(90));
+            c.scene.rotation.set(deg(90), deg(180), deg(90));
             link5.add(c.scene); onModelLoaded();
         }, undefined, onModelLoaded);
 
         loader.load('models/Link6.dae', (c) => {
-            c.scene.rotation.set(0, deg(3), 0);
+            c.scene.rotation.set(deg(180), deg(-90), deg(90));
             c.scene.traverse((child) => {
                 if (child.isMesh) {
                     child.material = child.material.clone();
@@ -239,7 +271,7 @@
         // ===== 5. CCD Inverse Kinematics =====
         const ikJoints = [
             { seg: link1, axis: 'y', min: deg(-180), max: deg(180) },
-            { seg: link2, axis: 'z', min: deg(-90),  max: deg(90)  },
+            { seg: link2, axis: 'z', min: deg(-90), max: deg(90) },
             { seg: link3, axis: 'z', min: deg(-150), max: deg(150) },
             { seg: link4, axis: 'z', min: deg(-180), max: deg(180) },
             { seg: link5, axis: 'z', min: deg(-120), max: deg(120) },
@@ -248,8 +280,8 @@
 
         function solveIK(targetPos) {
             const ITERATIONS = 20;
-            const TOLERANCE  = 0.004; // metres
-            const DAMPING    = 0.5;
+            const TOLERANCE = 0.004; // metres
+            const DAMPING = 0.5;
             const target = new THREE.Vector3().copy(targetPos);
             const effPos = new THREE.Vector3();
 
@@ -266,12 +298,12 @@
                     const jointPos = new THREE.Vector3();
                     seg.getWorldPosition(jointPos);
 
-                    const toEff    = effPos.clone().sub(jointPos).normalize();
+                    const toEff = effPos.clone().sub(jointPos).normalize();
                     const toTarget = target.clone().sub(jointPos).normalize();
 
-                    const localAxis = axis === 'x' ? new THREE.Vector3(1,0,0)
-                                    : axis === 'y' ? new THREE.Vector3(0,1,0)
-                                    :                new THREE.Vector3(0,0,1);
+                    const localAxis = axis === 'x' ? new THREE.Vector3(1, 0, 0)
+                        : axis === 'y' ? new THREE.Vector3(0, 1, 0)
+                            : new THREE.Vector3(0, 0, 1);
 
                     const parentQ = seg.parent
                         ? seg.parent.getWorldQuaternion(new THREE.Quaternion())
@@ -279,11 +311,11 @@
                     const worldAxis = localAxis.applyQuaternion(parentQ).normalize();
 
                     // Project onto plane perpendicular to rotation axis
-                    const effProj    = toEff.clone().sub(worldAxis.clone().multiplyScalar(toEff.dot(worldAxis))).normalize();
+                    const effProj = toEff.clone().sub(worldAxis.clone().multiplyScalar(toEff.dot(worldAxis))).normalize();
                     const targetProj = toTarget.clone().sub(worldAxis.clone().multiplyScalar(toTarget.dot(worldAxis))).normalize();
 
-                    const dot   = THREE.MathUtils.clamp(effProj.dot(targetProj), -1, 1);
-                    let angle   = Math.acos(dot) * DAMPING;
+                    const dot = THREE.MathUtils.clamp(effProj.dot(targetProj), -1, 1);
+                    let angle = Math.acos(dot) * DAMPING;
                     const cross = new THREE.Vector3().crossVectors(effProj, targetProj);
                     if (cross.dot(worldAxis) < 0) angle = -angle;
 
@@ -328,7 +360,7 @@
 
         // ===== 7. Render Loop =====
         // Cache TCP display elements
-        const _tcpPos  = new THREE.Vector3();
+        const _tcpPos = new THREE.Vector3();
         const _tcpQuat = new THREE.Quaternion();
         const _tcpEuler = new THREE.Euler();
         const _rad2deg = THREE.MathUtils.radToDeg;
@@ -398,4 +430,5 @@
         });
     </script>
 </body>
+
 </html>
