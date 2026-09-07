@@ -146,6 +146,7 @@ const SectionHead = ({ children }) => (
 const DobotControllerPage = () => {
   // ── Jog / position state ──────────────────────────────────────────────────
   const [stepValue, setStepValue] = useState(1)
+  const [speed, setSpeed] = useState(10)  // SpeedFactor 1-100%, loaded from DB
   const [pos, setPos] = useState({ X: 0, Y: 0, Z: 150, RX: 0, RY: 0, RZ: 0 })
   const [joints, setJoints] = useState({ J1: 0, J2: 0, J3: 0, J4: 0, J5: 0, J6: 0 })
   const [lastMoved, setLastMoved] = useState(null)
@@ -169,6 +170,19 @@ const DobotControllerPage = () => {
   // If IK drag is needed later, re-enable with a flag to avoid feedback loops.
   useEffect(() => {
     // Intentionally empty — real robot data drives the 3D model
+  }, [])
+
+  // ── Load speed from DB settings ───────────────────────────────────────
+  useEffect(() => {
+    const token = localStorage.getItem('access_token') || ''
+    fetch('/api/settings', {
+      headers: { 'Authorization': `Bearer ${token}` },
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data && data.sidebar_speed) setSpeed(Number(data.sidebar_speed))
+      })
+      .catch(() => {})
   }, [])
 
   // ── Poll real robot status from /api/map/status ──────────────────────────
@@ -299,20 +313,20 @@ const DobotControllerPage = () => {
     const delta = direction === '+' ? stepValue : -stepValue
     setLastMoved(`${axis}${direction}`)
 
-    // Send jog command to real robot via /api/map
+    // Send jog command to real robot via /api/map (with speed)
     if (axis.startsWith('J')) {
       const jointNum = parseInt(axis.replace('J', ''))
       fetch('/api/map/jog_joint', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ joint: jointNum, amount: delta }),
+        body: JSON.stringify({ joint: jointNum, amount: delta, speed }),
       }).catch(() => { })
       setJoints((prev) => ({ ...prev, [axis]: +(prev[axis] + delta).toFixed(2) }))
     } else {
       fetch('/api/map/jog', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ axis: axis.toLowerCase(), amount: delta }),
+        body: JSON.stringify({ axis: axis.toLowerCase(), amount: delta, speed }),
       }).catch(() => { })
       setPos((prev) => ({ ...prev, [axis]: +(prev[axis] + delta).toFixed(2) }))
     }
