@@ -35,7 +35,12 @@ state = AppState()
 start_tracking_thread(cam, state)   # keeps state.points glued to the object
 
 
-# ── request bodies ───────────────────────────────────────────────────────────
+class ConnectBody(BaseModel):
+    ip: Optional[str] = None
+    dashboard_port: Optional[int] = None
+    move_port: Optional[int] = None
+
+
 class PointBody(BaseModel):
     x: int
     y: int
@@ -154,8 +159,11 @@ def video_feed():
 
 # ── robot / camera lifecycle ─────────────────────────────────────────────────
 @router.post("/connect")
-def api_connect():
-    robot.connect()
+def api_connect(body: Optional[ConnectBody] = None):
+    if body:
+        robot.connect(ip=body.ip, dashboard_port=body.dashboard_port, move_port=body.move_port)
+    else:
+        robot.connect()
     return {"ok": robot.connected}
 
 

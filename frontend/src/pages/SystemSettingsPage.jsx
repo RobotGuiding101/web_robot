@@ -47,8 +47,9 @@ const StatusBadge = ({ connected }) => (
    ════════════════════════════════════════════════ */
 const SystemSettingsPage = () => {
   /* Robot connection */
-  const [robotIp, setRobotIp] = useState('192.168.10.110')
-  const [robotPort, setRobotPort] = useState('29999')
+  const [robotIp, setRobotIp] = useState(() => localStorage.getItem('robot_ip') || '192.168.10.110')
+  const [robotDashboardPort, setRobotDashboardPort] = useState(() => localStorage.getItem('robot_dashboard_port') || '29999')
+  const [robotMovePort, setRobotMovePort] = useState(() => localStorage.getItem('robot_move_port') || '30003')
   const [robotConnected, setRobotConnected] = useState(false)
   const [robotLoading, setRobotLoading] = useState(false)
 
@@ -57,16 +58,11 @@ const SystemSettingsPage = () => {
   const [cam1Index, setCam1Index] = useState('1')
   const [cam0Enabled, setCam0Enabled] = useState(true)
   const [cam1Enabled, setCam1Enabled] = useState(true)
-  const [camResolution, setCamResolution] = useState('640x480')
-  const [camFps, setCamFps] = useState('30')
 
   /* Home / Init Position */
   const [homeX, setHomeX] = useState(() => localStorage.getItem('home_x') || '0.0')
   const [homeY, setHomeY] = useState(() => localStorage.getItem('home_y') || '0.0')
   const [homeZ, setHomeZ] = useState(() => localStorage.getItem('home_z') || '0.0')
-  const [homeRx, setHomeRx] = useState(() => localStorage.getItem('home_rx') || '0.0')
-  const [homeRy, setHomeRy] = useState(() => localStorage.getItem('home_ry') || '0.0')
-  const [homeRz, setHomeRz] = useState(() => localStorage.getItem('home_rz') || '0.0')
   const [feedbackMsg, setFeedbackMsg] = useState(null)
 
   /* Save states */
@@ -98,7 +94,15 @@ const SystemSettingsPage = () => {
   const handleTestConnection = async () => {
     setRobotLoading(true)
     try {
-      const res = await fetch('/api/map/connect', { method: 'POST' })
+      const res = await fetch('/api/map/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ip: robotIp,
+          dashboard_port: parseInt(robotDashboardPort, 10) || 29999,
+          move_port: parseInt(robotMovePort, 10) || 30003,
+        }),
+      })
       const data = await res.json()
       setRobotConnected(!!data.ok)
       if (data.ok) {
@@ -115,6 +119,9 @@ const SystemSettingsPage = () => {
   }
 
   const handleSaveRobot = () => {
+    localStorage.setItem('robot_ip', robotIp)
+    localStorage.setItem('robot_dashboard_port', robotDashboardPort)
+    localStorage.setItem('robot_move_port', robotMovePort)
     showSaved('robot')
   }
 
@@ -127,9 +134,6 @@ const SystemSettingsPage = () => {
     localStorage.setItem('home_x', homeX)
     localStorage.setItem('home_y', homeY)
     localStorage.setItem('home_z', homeZ)
-    localStorage.setItem('home_rx', homeRx)
-    localStorage.setItem('home_ry', homeRy)
-    localStorage.setItem('home_rz', homeRz)
     showSaved('home')
   }
 
@@ -158,15 +162,29 @@ const SystemSettingsPage = () => {
                 placeholder="192.168.10.110"
               />
             </SettingsRow>
-            <SettingsRow label="Port" hint="Default: 29999">
-              <input
-                id="setting-robot-port"
-                className="settings-input settings-input--sm"
-                type="number"
-                value={robotPort}
-                onChange={(e) => setRobotPort(e.target.value)}
-                placeholder="29999"
-              />
+            <SettingsRow label="Ports" hint="Dashboard (29999) & Move (30003)">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 600, color: '#5c6f82' }}>Dashboard</span>
+                <input
+                  id="setting-robot-dashboard-port"
+                  className="settings-input settings-input--sm"
+                  type="number"
+                  value={robotDashboardPort}
+                  onChange={(e) => setRobotDashboardPort(e.target.value)}
+                  placeholder="29999"
+                />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 600, color: '#5c6f82' }}>Move</span>
+                <input
+                  id="setting-robot-move-port"
+                  className="settings-input settings-input--sm"
+                  type="number"
+                  value={robotMovePort}
+                  onChange={(e) => setRobotMovePort(e.target.value)}
+                  placeholder="30003"
+                />
+              </div>
             </SettingsRow>
             <SettingsRow label="Status">
               <StatusBadge connected={robotConnected} />
@@ -237,42 +255,6 @@ const SystemSettingsPage = () => {
                   placeholder="0.0"
                 />
               </div>
-              <div className="settings-coord-field">
-                <label className="settings-coord-label" htmlFor="home-rx">Rx</label>
-                <input
-                  id="home-rx"
-                  className="settings-coord-input"
-                  type="number"
-                  step="0.1"
-                  value={homeRx}
-                  onChange={(e) => setHomeRx(e.target.value)}
-                  placeholder="0.0"
-                />
-              </div>
-              <div className="settings-coord-field">
-                <label className="settings-coord-label" htmlFor="home-ry">Ry</label>
-                <input
-                  id="home-ry"
-                  className="settings-coord-input"
-                  type="number"
-                  step="0.1"
-                  value={homeRy}
-                  onChange={(e) => setHomeRy(e.target.value)}
-                  placeholder="0.0"
-                />
-              </div>
-              <div className="settings-coord-field">
-                <label className="settings-coord-label" htmlFor="home-rz">Rz</label>
-                <input
-                  id="home-rz"
-                  className="settings-coord-input"
-                  type="number"
-                  step="0.1"
-                  value={homeRz}
-                  onChange={(e) => setHomeRz(e.target.value)}
-                  placeholder="0.0"
-                />
-              </div>
             </div>
 
             <div className="settings-actions">
@@ -309,32 +291,6 @@ const SystemSettingsPage = () => {
                 onChange={(e) => setCam1Index(e.target.value)}
                 disabled={!cam1Enabled}
               />
-            </SettingsRow>
-            <SettingsRow label="Resolution">
-              <select
-                id="setting-cam-resolution"
-                className="settings-select"
-                value={camResolution}
-                onChange={(e) => setCamResolution(e.target.value)}
-              >
-                <option value="320x240">320 × 240</option>
-                <option value="640x480">640 × 480</option>
-                <option value="1280x720">1280 × 720 (HD)</option>
-                <option value="1920x1080">1920 × 1080 (FHD)</option>
-              </select>
-            </SettingsRow>
-            <SettingsRow label="Frame Rate" hint="fps">
-              <select
-                id="setting-cam-fps"
-                className="settings-select"
-                value={camFps}
-                onChange={(e) => setCamFps(e.target.value)}
-              >
-                <option value="10">10 fps</option>
-                <option value="15">15 fps</option>
-                <option value="30">30 fps</option>
-                <option value="60">60 fps</option>
-              </select>
             </SettingsRow>
             <div className="settings-actions">
               <button
