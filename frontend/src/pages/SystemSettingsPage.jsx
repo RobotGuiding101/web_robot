@@ -50,6 +50,7 @@ const SystemSettingsPage = () => {
   const [robotIp, setRobotIp] = useState(() => localStorage.getItem('robot_ip') || '192.168.10.110')
   const [robotDashboardPort, setRobotDashboardPort] = useState(() => localStorage.getItem('robot_dashboard_port') || '29999')
   const [robotMovePort, setRobotMovePort] = useState(() => localStorage.getItem('robot_move_port') || '30003')
+  const [savedRobotIp, setSavedRobotIp] = useState(() => localStorage.getItem('robot_ip') || '192.168.10.110')
   const [robotConnected, setRobotConnected] = useState(false)
   const [robotLoading, setRobotLoading] = useState(false)
 
@@ -122,6 +123,7 @@ const SystemSettingsPage = () => {
     localStorage.setItem('robot_ip', robotIp)
     localStorage.setItem('robot_dashboard_port', robotDashboardPort)
     localStorage.setItem('robot_move_port', robotMovePort)
+    setSavedRobotIp(robotIp)
     showSaved('robot')
   }
 
@@ -146,7 +148,7 @@ const SystemSettingsPage = () => {
     <div className="app-layout">
       <Sidebar />
       <div className="main-content">
-        <TopBar title="System Settings" onEmergency={handleEmergency} />
+        <TopBar title="System Settings" ip={savedRobotIp} onEmergency={handleEmergency} />
         <div className="page-content">
           <div className="settings-page">
 
