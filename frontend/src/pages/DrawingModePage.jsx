@@ -355,12 +355,33 @@ const DrawingModePage = () => {
     setIsSending(true)
     setStatus('Sending to robot…')
     try {
-      await fetch('/api/robot/draw', {
+      // Use /api/map/draw with strokes format
+      const strokes = pathData.map((obj) => {
+        // Convert fabric objects to stroke points
+        const points = []
+        if (obj.type === 'path' && obj.path) {
+          obj.path.forEach((cmd) => {
+            if (cmd[0] === 'M' || cmd[0] === 'L') {
+              points.push([cmd[1], cmd[2]])
+            }
+          })
+        } else if (obj.type === 'line') {
+          points.push([obj.x1, obj.y1], [obj.x2, obj.y2])
+        }
+        return { tool: 'pen', points }
+      }).filter(s => s.points.length > 0)
+
+      if (strokes.length === 0) {
+        setStatus('⚠ No drawable paths found')
+        return
+      }
+
+      await fetch('/api/map/draw', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ paths: pathData }),
+        body: JSON.stringify({ strokes }),
       })
-      setStatus(`✓ Sent ${pathData.length} object(s)`)
+      setStatus(`✓ Sent ${strokes.length} stroke(s)`)
     } catch {
       setStatus('✗ Failed — robot offline?')
     } finally {
@@ -370,7 +391,7 @@ const DrawingModePage = () => {
 
   // ── Emergency Stop ────────────────────────────────────────────────────────
   const handleEmergency = () => {
-    fetch('/api/robot/emergency-stop', { method: 'POST' }).catch(() => {})
+    fetch('/api/map/error', { method: 'POST' }).catch(() => {})
     setStatus('🛑 EMERGENCY STOP sent')
     alert('EMERGENCY STOP!')
   }
@@ -399,9 +420,9 @@ const DrawingModePage = () => {
             {/* ── Camera + Canvas overlay (fills all remaining space) ── */}
             <div className="dm-viewport">
 
-              {/* Camera feed — MJPEG stream from backend */}
+              {/* Camera feed — MJPEG stream from backend (use /api/map/video_feed) */}
               <img
-                src="/api/camera/stream"
+                src="/api/map/video_feed"
                 alt="Camera 1"
                 className="dm-camera-bg"
                 onError={(e) => { e.currentTarget.style.display = 'none' }}
