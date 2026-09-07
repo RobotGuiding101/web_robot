@@ -6,6 +6,7 @@ const STEP_VALUES = [0.1, 1, 5, 10]
 const CARTESIAN_AXES = ['X', 'Y', 'Z', 'RX', 'RY', 'RZ']
 const JOINT_AXES = ['J1', 'J2', 'J3', 'J4', 'J5', 'J6']
 const LOG_MAX = 200
+const STATUS_POLL_MS = 1000
 
 // ── Jog Button Group ──────────────────────────────────────────────────────────
 const JogGroup = ({ axes, onMove }) => (
@@ -61,17 +62,30 @@ const LogPanel = ({ title, channel, accentClass }) => {
       })
     }
 
-    fetch(`/api/robot/log/${channel}`)
+    // Use /api/map/robot_logs instead of /api/robot/log/robot (which doesn't exist)
+    fetch('/api/map/robot_logs')
       .then((r) => r.json())
-      .then((data) => { if (!dead && Array.isArray(data.lines)) setLines(data.lines) })
+      .then((data) => {
+        if (!dead && Array.isArray(data.entries)) {
+          setLines(data.entries.map(e => ({ t: e.t || '', msg: e.msg || e })))
+        }
+      })
       .catch(() => { })
 
-    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    ws = new WebSocket(`${proto}://${window.location.host}/api/robot/ws/log/${channel}`)
-    ws.onmessage = (ev) => { try { addLine(JSON.parse(ev.data)) } catch { } }
-    ws.onerror = () => { }
+    // Poll for new logs periodically (backend doesn't have WebSocket for logs)
+    const pollInterval = setInterval(() => {
+      if (dead || pausedRef.current) return
+      fetch('/api/map/robot_logs')
+        .then((r) => r.json())
+        .then((data) => {
+          if (!dead && Array.isArray(data.entries)) {
+            setLines(data.entries.map(e => ({ t: e.t || '', msg: e.msg || e })))
+          }
+        })
+        .catch(() => { })
+    }, 2000)
 
-    return () => { dead = true; ws?.close() }
+    return () => { dead = true; clearInterval(pollInterval) }
   }, [channel])
 
   const handleResume = useCallback(() => {
@@ -143,26 +157,68 @@ const DobotControllerPage = () => {
   // ── Stable cache-buster: สร้างครั้งเดียวตอน mount ไม่โหลดซ้ำทุก re-render ──
   const viewerKey = useRef(Date.now())
 
-  // ── 3D viewer sync ────────────────────────────────────────────────────────
+  // ── 3D viewer sync — receive TCP updates from 3D viewer's IK drag ───────
+  // NOTE: Disabled tcpUpdate listener. The 3D model is now driven by real
+  // robot data from /api/map/status polling → setJoints postMessage.
+  // The viewer's IK simulation was overwriting real robot positions.
+  // If IK drag is needed later, re-enable with a flag to avoid feedback loops.
   useEffect(() => {
-    const handleMessage = (e) => {
-      if (!e.data || e.data.type !== 'tcpUpdate') return
-      const { x, y, z, rx, ry, rz, joints: j } = e.data
-      setPos((prev) => ({
-        ...prev,
-        X: x ?? prev.X, Y: y ?? prev.Y, Z: z ?? prev.Z,
-        RX: rx ?? prev.RX, RY: ry ?? prev.RY, RZ: rz ?? prev.RZ,
-      }))
-      if (Array.isArray(j) && j.length === 6)
-        setJoints({ J1: j[0], J2: j[1], J3: j[2], J4: j[3], J5: j[4], J6: j[5] })
-    }
-    window.addEventListener('message', handleMessage)
-    return () => window.removeEventListener('message', handleMessage)
+    // Intentionally empty — real robot data drives the 3D model
   }, [])
+
+  // ── Poll real robot status from /api/map/status ──────────────────────────
+  useEffect(() => {
+    let dead = false
+    const fetchStatus = async () => {
+      try {
+        const res = await fetch('/api/map/status')
+        if (!res.ok || dead) return
+        const data = await res.json()
+        if (dead) return
+
+        // Update position from real robot (pose: [x, y, z, rx, ry, rz])
+        if (Array.isArray(data.pose) && data.pose.length === 6) {
+          setPos({
+            X: +data.pose[0].toFixed(2),
+            Y: +data.pose[1].toFixed(2),
+            Z: +data.pose[2].toFixed(2),
+            RX: +data.pose[3].toFixed(2),
+            RY: +data.pose[4].toFixed(2),
+            RZ: +data.pose[5].toFixed(2),
+          })
+        }
+
+        // Update joint angles from real robot (angles: [j1..j6])
+        if (Array.isArray(data.angles) && data.angles.length === 6) {
+          setJoints({
+            J1: +data.angles[0].toFixed(2),
+            J2: +data.angles[1].toFixed(2),
+            J3: +data.angles[2].toFixed(2),
+            J4: +data.angles[3].toFixed(2),
+            J5: +data.angles[4].toFixed(2),
+            J6: +data.angles[5].toFixed(2),
+          })
+        }
+      } catch { /* ignore */ }
+    }
+
+    fetchStatus()
+    const interval = setInterval(fetchStatus, STATUS_POLL_MS)
+    return () => { dead = true; clearInterval(interval) }
+  }, [])
+
+  // ── Sync real robot joints → 3D model iframe ─────────────────────────────
+  useEffect(() => {
+    const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
+    if (!iframe || !iframe.contentWindow) return
+    // robot-viewer.html expects joints as [j1..j6] in degrees
+    const jArr = [joints.J1, joints.J2, joints.J3, joints.J4, joints.J5, joints.J6]
+    iframe.contentWindow.postMessage({ type: 'setJoints', joints: jArr }, '*')
+  }, [joints])
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleEmergency = () => {
-    fetch('/api/robot/emergency-stop', { method: 'POST' }).catch(() => { })
+    fetch('/api/map/error', { method: 'POST' }).catch(() => { })
     alert('EMERGENCY STOP!')
   }
 
@@ -170,11 +226,11 @@ const DobotControllerPage = () => {
     if (initLoading) return
     setInitLoading(true); setInitStatus(null)
     try {
-      const res = await fetch('/api/robot/init', { method: 'POST' })
+      // First connect, then init
+      await fetch('/api/map/connect', { method: 'POST' })
+      const res = await fetch('/api/map/init', { method: 'POST' })
       if (!res.ok) throw new Error()
       setInitStatus('ok')
-      setPos({ X: 0, Y: 0, Z: 150, RX: 0, RY: 0, RZ: 0 })
-      setJoints({ J1: 0, J2: 0, J3: 0, J4: 0, J5: 0, J6: 0 })
       setLastMoved('Init (Home)')
     } catch { setInitStatus('error') }
     finally {
@@ -186,10 +242,24 @@ const DobotControllerPage = () => {
   const handleMove = (axis, direction) => {
     const delta = direction === '+' ? stepValue : -stepValue
     setLastMoved(`${axis}${direction}`)
-    if (axis.startsWith('J'))
+
+    // Send jog command to real robot via /api/map
+    if (axis.startsWith('J')) {
+      const jointNum = parseInt(axis.replace('J', ''))
+      fetch('/api/map/jog_joint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ joint: jointNum, amount: delta }),
+      }).catch(() => { })
       setJoints((prev) => ({ ...prev, [axis]: +(prev[axis] + delta).toFixed(2) }))
-    else
+    } else {
+      fetch('/api/map/jog', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ axis: axis.toLowerCase(), amount: delta }),
+      }).catch(() => { })
       setPos((prev) => ({ ...prev, [axis]: +(prev[axis] + delta).toFixed(2) }))
+    }
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
