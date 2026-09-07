@@ -5,3 +5,8 @@ python-dotenv
 opencv-python-headless
 numpy
 pyrealsense2
+sqlalchemy
+asyncpg
+passlib[bcrypt]
+bcrypt==4.0.1
+python-jose[cryptography]

@@ -8,6 +8,25 @@
 
 services:
 
+  # ── PostgreSQL ──────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: robot_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: robot_settings
+      POSTGRES_USER: robot
+      POSTGRES_PASSWORD: robot123
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U robot -d robot_settings"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   # ── Backend: FastAPI ────────────────────────────────
   backend:
     build:
@@ -18,11 +37,16 @@ services:
     privileged: true          # ให้เข้าถึง USB device ได้ (RealSense D455)
     env_file:
       - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql://robot:robot123@postgres:5432/robot_settings
     ports:
       - "8000:8000"       # เปิดให้เข้าถึงโดยตรงสำหรับ debug
     volumes:
       - ./backend:/app    # hot-reload: mount source (dev only)
     command: uvicorn main:app --reload --host 0.0.0.0 --port 8000
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   # ── Frontend: React + Vite → nginx ──────────────────
   frontend:
@@ -38,6 +62,9 @@ services:
       - "80:80"
     depends_on:
       - backend
+
+volumes:
+  pgdata:
 
 networks:
   default:

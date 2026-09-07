@@ -1,14 +1,13 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
-const API_URL = ''  // nginx proxy จัดการ /api/ → backend:8000 ให้แล้ว
-
 const LoginPage = () => {
   const navigate = useNavigate()
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [isRegister, setIsRegister] = useState(false)
 
-  const handleLogin = async (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
     setError('')
     setLoading(true)
@@ -17,7 +16,8 @@ const LoginPage = () => {
     const password = e.target.password.value
 
     try {
-      const res = await fetch(`${API_URL}/api/auth/login`, {
+      const endpoint = isRegister ? '/api/auth/register' : '/api/auth/login'
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
@@ -25,15 +25,16 @@ const LoginPage = () => {
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
-        setError(data.detail || 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง')
+        setError(data.detail || (isRegister ? 'Registration failed' : 'Invalid credentials'))
         return
       }
 
       const data = await res.json()
       localStorage.setItem('access_token', data.access_token)
+      localStorage.setItem('username', data.username)
       navigate('/dashboard')
     } catch {
-      setError('ไม่สามารถเชื่อมต่อ server ได้ กรุณาลองใหม่')
+      setError('Cannot connect to server')
     } finally {
       setLoading(false)
     }
@@ -45,17 +46,23 @@ const LoginPage = () => {
         <div className="login-icon">
           <img src="assets/images/robot-arm.png" alt="Robot Arm" className="login-icon-img" />
         </div>
-        <h1 className="login-title">Robot Arm System Login</h1>
-        <p className="login-subtitle">เข้าสู่ระบบเพื่อเริ่มควบคุมแขนกล</p>
+        <h1 className="login-title">Robot Arm System</h1>
+        <p className="login-subtitle">
+          {isRegister ? 'Create a new account' : 'Sign in to control the robot arm'}
+        </p>
 
-        <form className="login-form" onSubmit={handleLogin}>
-          <input id="username" name="username" type="text" placeholder="Username" required />
-          <input id="password" name="password" type="password" placeholder="Password" required />
+        <form className="login-form" onSubmit={handleSubmit}>
+          <input id="username" name="username" type="text" placeholder="Username" required minLength={2} />
+          <input id="password" name="password" type="password" placeholder="Password" required minLength={4} />
           {error && <p className="login-error">{error}</p>}
           <button id="login-submit-btn" type="submit" className="login-btn" disabled={loading}>
-            {loading ? 'กำลังเข้าสู่ระบบ...' : 'Sign in'}
+            {loading ? 'Loading...' : isRegister ? 'Register' : 'Sign in'}
           </button>
         </form>
+
+        <p className="login-toggle" onClick={() => { setIsRegister(!isRegister); setError('') }}>
+          {isRegister ? 'Already have an account? Sign in' : "Don't have an account? Register"}
+        </p>
       </div>
     </div>
   )

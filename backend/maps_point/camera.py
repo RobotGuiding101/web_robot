@@ -80,6 +80,14 @@ class Camera:
         except Exception as e:
             log(f"  [Cam] accel stream unavailable, continuing without it  {e}")
             self._has_imu = False
+            # Clean up the failed pipeline before retrying — without this
+            # the old pipeline still holds the device lock, causing the
+            # retry to hit "Device or resource busy" (errno=16).
+            try:
+                self.pipe.stop()
+            except Exception:
+                pass
+            self.pipe = None
             try:
                 self.pipe = rs.pipeline()
                 prof      = self.pipe.start(cfg)
