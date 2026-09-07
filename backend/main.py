@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base
 from routers import auth, robot, camera, mapcontrol
 from routers import settings as settings_router
+from routers import devices as devices_router
 
 
 @asynccontextmanager
@@ -43,6 +44,7 @@ app.include_router(settings_router.router)                              # /api/s
 app.include_router(robot.router,         prefix="/api/robot",   tags=["Robot"])
 app.include_router(camera.router,        prefix="/api/camera",  tags=["Camera"])
 app.include_router(mapcontrol.router)
+app.include_router(devices_router.router)                               # /api/devices
 
 
 @app.get("/")
