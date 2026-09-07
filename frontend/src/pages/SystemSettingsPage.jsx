@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
 
@@ -27,7 +27,7 @@ const SettingsRow = ({ label, hint, children }) => (
 const Section = ({ icon, title, children }) => (
   <div className="settings-section">
     <div className="settings-section-header">
-      <span className="settings-section-icon">{icon}</span>
+      {icon && <span className="settings-section-icon">{icon}</span>}
       <span className="settings-section-title">{title}</span>
     </div>
     <div className="settings-section-body">{children}</div>
@@ -47,7 +47,7 @@ const StatusBadge = ({ connected }) => (
    ════════════════════════════════════════════════ */
 const SystemSettingsPage = () => {
   /* Robot connection */
-  const [robotIp, setRobotIp] = useState('192.168.1.6')
+  const [robotIp, setRobotIp] = useState('192.168.10.110')
   const [robotPort, setRobotPort] = useState('29999')
   const [robotConnected, setRobotConnected] = useState(false)
   const [robotLoading, setRobotLoading] = useState(false)
@@ -60,14 +60,14 @@ const SystemSettingsPage = () => {
   const [camResolution, setCamResolution] = useState('640x480')
   const [camFps, setCamFps] = useState('30')
 
-  /* Security */
-  const [currentPw, setCurrentPw] = useState('')
-  const [newPw, setNewPw] = useState('')
-  const [confirmPw, setConfirmPw] = useState('')
-
-  /* Network / CORS */
-  const [allowedOrigins, setAllowedOrigins] = useState('http://localhost:5173')
-  const [autoReconnect, setAutoReconnect] = useState(true)
+  /* Home / Init Position */
+  const [homeX, setHomeX] = useState(() => localStorage.getItem('home_x') || '0.0')
+  const [homeY, setHomeY] = useState(() => localStorage.getItem('home_y') || '0.0')
+  const [homeZ, setHomeZ] = useState(() => localStorage.getItem('home_z') || '0.0')
+  const [homeRx, setHomeRx] = useState(() => localStorage.getItem('home_rx') || '0.0')
+  const [homeRy, setHomeRy] = useState(() => localStorage.getItem('home_ry') || '0.0')
+  const [homeRz, setHomeRz] = useState(() => localStorage.getItem('home_rz') || '0.0')
+  const [feedbackMsg, setFeedbackMsg] = useState(null)
 
   /* Save states */
   const [savedSection, setSavedSection] = useState(null)
@@ -77,56 +77,77 @@ const SystemSettingsPage = () => {
     setTimeout(() => setSavedSection(null), 2000)
   }
 
+  const showFeedback = (msg) => {
+    setFeedbackMsg(msg)
+    setTimeout(() => setFeedbackMsg(null), 3000)
+  }
+
+  useEffect(() => {
+    // Check robot connection status
+    fetch('/api/map/status')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.connected !== undefined) {
+          setRobotConnected(data.connected)
+        }
+      })
+      .catch(() => {})
+  }, [])
+
   /* ── Robot connect test ── */
   const handleTestConnection = async () => {
     setRobotLoading(true)
     try {
-      // TODO: replace with real fetch
-      await new Promise((r) => setTimeout(r, 1200))
-      setRobotConnected(true)
+      const res = await fetch('/api/map/connect', { method: 'POST' })
+      const data = await res.json()
+      setRobotConnected(!!data.ok)
+      if (data.ok) {
+        showFeedback('Robot connected')
+      } else {
+        showFeedback('Robot connection failed')
+      }
     } catch {
       setRobotConnected(false)
+      showFeedback('Network error')
     } finally {
       setRobotLoading(false)
     }
   }
 
   const handleSaveRobot = () => {
-    // TODO: PATCH /api/settings/robot  { ip: robotIp, port: robotPort }
     showSaved('robot')
   }
 
   const handleSaveCamera = () => {
-    // TODO: PATCH /api/settings/camera
     showSaved('camera')
   }
 
-  const handleSavePassword = () => {
-    if (!newPw || newPw !== confirmPw) {
-      alert('Password mismatch or empty')
-      return
-    }
-    // TODO: POST /api/auth/change-password
-    setCurrentPw(''); setNewPw(''); setConfirmPw('')
-    showSaved('security')
+  /* ── Home Handlers (local save only) ── */
+  const handleSaveHome = () => {
+    localStorage.setItem('home_x', homeX)
+    localStorage.setItem('home_y', homeY)
+    localStorage.setItem('home_z', homeZ)
+    localStorage.setItem('home_rx', homeRx)
+    localStorage.setItem('home_ry', homeRy)
+    localStorage.setItem('home_rz', homeRz)
+    showSaved('home')
   }
 
-  const handleSaveNetwork = () => {
-    // TODO: PATCH /api/settings/network
-    showSaved('network')
+  const handleEmergency = () => {
+    fetch('/api/map/error', { method: 'POST' }).catch(() => {})
+    alert('EMERGENCY STOP!')
   }
-
-  const handleEmergency = () => alert('EMERGENCY STOP!')
 
   return (
     <div className="app-layout">
       <Sidebar />
       <div className="main-content">
         <TopBar title="System Settings" onEmergency={handleEmergency} />
-        <div className="page-content settings-page">
+        <div className="page-content">
+          <div className="settings-page">
 
-          {/* ── Robot Connection ─────────────────────────────── */}
-          <Section icon="🤖" title="Robot Connection">
+            {/* ── Robot Connection ─────────────────────────────── */}
+            <Section title="Robot Connection">
             <SettingsRow label="Robot IP Address" hint="Dobot CR5 Dashboard Port">
               <input
                 id="setting-robot-ip"
@@ -134,7 +155,7 @@ const SystemSettingsPage = () => {
                 type="text"
                 value={robotIp}
                 onChange={(e) => setRobotIp(e.target.value)}
-                placeholder="192.168.1.6"
+                placeholder="192.168.10.110"
               />
             </SettingsRow>
             <SettingsRow label="Port" hint="Default: 29999">
@@ -151,6 +172,7 @@ const SystemSettingsPage = () => {
               <StatusBadge connected={robotConnected} />
             </SettingsRow>
             <div className="settings-actions">
+              {feedbackMsg && <span className="settings-feedback-msg">{feedbackMsg}</span>}
               <button
                 id="btn-test-connection"
                 className={`settings-btn settings-btn--secondary ${robotLoading ? 'loading' : ''}`}
@@ -159,20 +181,113 @@ const SystemSettingsPage = () => {
               >
                 {robotLoading ? (
                   <><span className="settings-spinner" /> Testing…</>
-                ) : '🔌 Test Connection'}
+                ) : 'Test Connection'}
               </button>
               <button
                 id="btn-save-robot"
                 className={`settings-btn settings-btn--primary ${savedSection === 'robot' ? 'saved' : ''}`}
                 onClick={handleSaveRobot}
               >
-                {savedSection === 'robot' ? '✓ Saved' : 'Save'}
+                {savedSection === 'robot' ? 'Saved' : 'Save'}
+              </button>
+            </div>
+          </Section>
+
+          {/* ── Home Position Configuration ────────── */}
+          <Section title="Home Position Configuration">
+            <SettingsRow
+              label="Home Pose (Base Frame)"
+              hint="Coordinates for robot home position (mm / deg)"
+            />
+
+            <div className="settings-coord-grid">
+              <div className="settings-coord-field">
+                <label className="settings-coord-label" htmlFor="home-x">X</label>
+                <input
+                  id="home-x"
+                  className="settings-coord-input"
+                  type="number"
+                  step="0.1"
+                  value={homeX}
+                  onChange={(e) => setHomeX(e.target.value)}
+                  placeholder="0.0"
+                />
+              </div>
+              <div className="settings-coord-field">
+                <label className="settings-coord-label" htmlFor="home-y">Y</label>
+                <input
+                  id="home-y"
+                  className="settings-coord-input"
+                  type="number"
+                  step="0.1"
+                  value={homeY}
+                  onChange={(e) => setHomeY(e.target.value)}
+                  placeholder="0.0"
+                />
+              </div>
+              <div className="settings-coord-field">
+                <label className="settings-coord-label" htmlFor="home-z">Z</label>
+                <input
+                  id="home-z"
+                  className="settings-coord-input"
+                  type="number"
+                  step="0.1"
+                  value={homeZ}
+                  onChange={(e) => setHomeZ(e.target.value)}
+                  placeholder="0.0"
+                />
+              </div>
+              <div className="settings-coord-field">
+                <label className="settings-coord-label" htmlFor="home-rx">Rx</label>
+                <input
+                  id="home-rx"
+                  className="settings-coord-input"
+                  type="number"
+                  step="0.1"
+                  value={homeRx}
+                  onChange={(e) => setHomeRx(e.target.value)}
+                  placeholder="0.0"
+                />
+              </div>
+              <div className="settings-coord-field">
+                <label className="settings-coord-label" htmlFor="home-ry">Ry</label>
+                <input
+                  id="home-ry"
+                  className="settings-coord-input"
+                  type="number"
+                  step="0.1"
+                  value={homeRy}
+                  onChange={(e) => setHomeRy(e.target.value)}
+                  placeholder="0.0"
+                />
+              </div>
+              <div className="settings-coord-field">
+                <label className="settings-coord-label" htmlFor="home-rz">Rz</label>
+                <input
+                  id="home-rz"
+                  className="settings-coord-input"
+                  type="number"
+                  step="0.1"
+                  value={homeRz}
+                  onChange={(e) => setHomeRz(e.target.value)}
+                  placeholder="0.0"
+                />
+              </div>
+            </div>
+
+            <div className="settings-actions">
+              <button
+                id="btn-save-home"
+                className={`settings-btn settings-btn--primary ${savedSection === 'home' ? 'saved' : ''}`}
+                onClick={handleSaveHome}
+              >
+                {savedSection === 'home' ? 'Saved' : 'Save'}
               </button>
             </div>
           </Section>
 
           {/* ── Camera Configuration ─────────────────────────── */}
-          <Section icon="📷" title="Camera Configuration">
+          <Section title="Camera Configuration">
             <SettingsRow label="Camera 0 (Main)" hint="USB /dev/video index">
               <Toggle id="toggle-cam0" checked={cam0Enabled} onChange={(e) => setCam0Enabled(e.target.checked)} />
               <input
@@ -227,84 +342,12 @@ const SystemSettingsPage = () => {
                 className={`settings-btn settings-btn--primary ${savedSection === 'camera' ? 'saved' : ''}`}
                 onClick={handleSaveCamera}
               >
-                {savedSection === 'camera' ? '✓ Saved' : 'Save'}
+                {savedSection === 'camera' ? 'Saved' : 'Save'}
               </button>
             </div>
           </Section>
 
-          {/* ── Security ─────────────────────────────────────── */}
-          <Section icon="🔐" title="Security">
-            <SettingsRow label="Current Password">
-              <input
-                id="setting-current-pw"
-                className="settings-input"
-                type="password"
-                value={currentPw}
-                onChange={(e) => setCurrentPw(e.target.value)}
-                placeholder="••••••••"
-              />
-            </SettingsRow>
-            <SettingsRow label="New Password">
-              <input
-                id="setting-new-pw"
-                className="settings-input"
-                type="password"
-                value={newPw}
-                onChange={(e) => setNewPw(e.target.value)}
-                placeholder="••••••••"
-              />
-            </SettingsRow>
-            <SettingsRow label="Confirm Password">
-              <input
-                id="setting-confirm-pw"
-                className="settings-input"
-                type="password"
-                value={confirmPw}
-                onChange={(e) => setConfirmPw(e.target.value)}
-                placeholder="••••••••"
-              />
-            </SettingsRow>
-            <div className="settings-actions">
-              <button
-                id="btn-save-password"
-                className={`settings-btn settings-btn--primary ${savedSection === 'security' ? 'saved' : ''}`}
-                onClick={handleSavePassword}
-              >
-                {savedSection === 'security' ? '✓ Saved' : 'Change Password'}
-              </button>
-            </div>
-          </Section>
-
-          {/* ── Network ──────────────────────────────────────── */}
-          <Section icon="🌐" title="Network">
-            <SettingsRow label="Allowed Origins (CORS)" hint="Comma-separated URLs">
-              <input
-                id="setting-allowed-origins"
-                className="settings-input settings-input--wide"
-                type="text"
-                value={allowedOrigins}
-                onChange={(e) => setAllowedOrigins(e.target.value)}
-                placeholder="http://localhost:5173,http://192.168.1.x"
-              />
-            </SettingsRow>
-            <SettingsRow label="Auto Reconnect" hint="Reconnect robot on disconnect">
-              <Toggle
-                id="toggle-auto-reconnect"
-                checked={autoReconnect}
-                onChange={(e) => setAutoReconnect(e.target.checked)}
-              />
-            </SettingsRow>
-            <div className="settings-actions">
-              <button
-                id="btn-save-network"
-                className={`settings-btn settings-btn--primary ${savedSection === 'network' ? 'saved' : ''}`}
-                onClick={handleSaveNetwork}
-              >
-                {savedSection === 'network' ? '✓ Saved' : 'Save'}
-              </button>
-            </div>
-          </Section>
-
+          </div>
         </div>
       </div>
     </div>
