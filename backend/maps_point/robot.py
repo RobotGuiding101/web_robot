@@ -44,11 +44,13 @@ def _reply_error_code(reply):
 
 
 class Robot:
-    def __init__(self, ip: str):
-        self.ip        = ip
-        self.dashboard = None
-        self.move      = None
-        self.connected = False
+    def __init__(self, ip: str, dashboard_port: int = 29999, move_port: int = 30003):
+        self.ip             = ip
+        self.dashboard_port = int(dashboard_port)
+        self.move_port      = int(move_port)
+        self.dashboard      = None
+        self.move           = None
+        self.connected      = False
         # Which Tool/User frame absolute moves (movl/go_home/goto_pixel)
         # resolve in — user-selectable (see set_frame()). user_index=0 here
         # because HOME_X..HOME_RZ in .maps_point.env were re-taught and
@@ -75,10 +77,16 @@ class Robot:
             self.move = None
         self.connected = False
 
-    def connect(self):
+    def connect(self, ip: str = None, dashboard_port: int = None, move_port: int = None):
+        if ip:
+            self.ip = ip
+        if dashboard_port is not None:
+            self.dashboard_port = int(dashboard_port)
+        if move_port is not None:
+            self.move_port = int(move_port)
         self.close()
         try:
-            self.dashboard = DobotApiDashboard(self.ip, 29999)
+            self.dashboard = DobotApiDashboard(self.ip, self.dashboard_port)
             # dobot_api_v3's own send/receive logger — was previously just
             # print()ing, invisible from the web page. Route it into
             # robot_log() instead so the Robot Log panel sees the raw TCP
@@ -88,7 +96,7 @@ class Robot:
                 None if any(k in str(t) for k in
                             ("GetPose", "RobotMode", "GetErrorID"))
                 else robot_log(str(t)))
-            self.move = DobotApiMove(self.ip, 30003)
+            self.move = DobotApiMove(self.ip, self.move_port)
             # DobotApiMove (port 30003, MovL/RelMovLTool/ServoP) shares the
             # same base class's log() — same swap. ServoP specifically IS
             # filtered (unlike other move commands) because servo_stream()
@@ -99,7 +107,7 @@ class Robot:
             self.move.log = lambda t: (
                 None if "ServoP" in str(t) else robot_log(str(t)))
             self.connected = True
-            log(f"  [Robot] connected  {self.ip}")
+            log(f"  [Robot] connected  {self.ip} (dash:{self.dashboard_port}, move:{self.move_port})")
         except Exception as e:
             log(f"  [Robot] FAILED  {e}")
             self.close()
