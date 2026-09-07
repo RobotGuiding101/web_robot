@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 
 const NAV_ITEMS = [
@@ -8,7 +8,6 @@ const NAV_ITEMS = [
   { img: 'assets/images/3d-cube.png' ,label: 'Dobot', path: '/dobot' },
   { img: 'assets/images/settings.png' ,label: 'Calibrate', path: '/calibration' },
   { img: 'assets/images/settings.png' ,label: 'Settings', path: '/settings' },
-
 ]
 
 const NavItem = ({ item, isActive, onClick }) => (
@@ -26,10 +25,40 @@ const NavItem = ({ item, isActive, onClick }) => (
   </div>
 )
 
+const authHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('access_token') || ''}`,
+})
+
 const Sidebar = () => {
   const navigate = useNavigate()
   const location = useLocation()
   const [speed, setSpeed] = useState(50)
+
+  /* Load speed from DB on mount */
+  useEffect(() => {
+    fetch('/api/settings', { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data && data.sidebar_speed) setSpeed(Number(data.sidebar_speed))
+      })
+      .catch(() => {})
+  }, [])
+
+  /* Debounced save to DB */
+  const saveSpeed = useCallback((val) => {
+    fetch('/api/settings', {
+      method: 'PUT',
+      headers: authHeaders(),
+      body: JSON.stringify({ settings: [{ key: 'sidebar_speed', value: String(val) }] }),
+    }).catch(() => {})
+  }, [])
+
+  const handleSpeedChange = (e) => {
+    const val = Number(e.target.value)
+    setSpeed(val)
+    saveSpeed(val)
+  }
 
   return (
     <>
@@ -57,7 +86,7 @@ const Sidebar = () => {
             min="0"
             max="100"
             value={speed}
-            onChange={(e) => setSpeed(Number(e.target.value))}
+            onChange={handleSpeedChange}
           />
           <span>SPEED</span>
         </div>
