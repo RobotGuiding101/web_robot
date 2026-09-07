@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
@@ -101,9 +101,115 @@ const MENU_ITEMS = [
 const DashboardPage = () => {
   const navigate = useNavigate()
 
+  // ── Relay state ─────────────────────────────────────────────────────
+  const [relayState, setRelayState] = useState('off')
+  const [relayLoading, setRelayLoading] = useState(false)
+  const [relayHistory, setRelayHistory] = useState([])
+  const [pingResult, setPingResult] = useState(null)
+
+  const authHeaders = () => ({
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${localStorage.getItem('access_token') || ''}`,
+  })
+
+  // Load relay state + history
+  const loadRelayState = useCallback(async () => {
+    try {
+      const [stateRes, histRes] = await Promise.all([
+        fetch('/api/devices/relay/state', { headers: authHeaders() }),
+        fetch('/api/devices/relay/history', { headers: authHeaders() }),
+      ])
+      if (stateRes.ok) {
+        const data = await stateRes.json()
+        setRelayState(data.state)
+      }
+      if (histRes.ok) {
+        const data = await histRes.json()
+        setRelayHistory(data.history || [])
+      }
+    } catch { /* ignore */ }
+  }, [])
+
+  useEffect(() => { loadRelayState() }, [loadRelayState])
+
+  const handleRelayToggle = async () => {
+    if (relayLoading) return
+    setRelayLoading(true)
+    setPingResult(null)
+    try {
+      const res = await fetch('/api/devices/relay/toggle', {
+        method: 'POST',
+        headers: authHeaders(),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setRelayState(data.state)
+        // If turned ON, start polling ping every 3s
+        if (data.state === 'on') {
+          startPingPoll()
+        }
+        loadRelayState()
+      }
+    } catch { /* ignore */ }
+    finally { setRelayLoading(false) }
+  }
+
+  // Auto-ping poll after relay ON
+  const pingPollRef = useRef(null)
+
+  const startPingPoll = () => {
+    clearPingPoll()
+    let attempts = 0
+    const maxAttempts = 25
+    const interval = 3000
+
+    const check = async () => {
+      attempts++
+      try {
+        const res = await fetch('/api/devices/ping')
+        if (res.ok) {
+          const data = await res.json()
+          setPingResult({
+            ...data,
+            attempts,
+            total_wait_s: Math.round(attempts * 3),
+          })
+          if (data.reachable) {
+            clearPingPoll()
+            return
+          }
+        }
+      } catch { /* ignore */ }
+      if (attempts < maxAttempts) {
+        pingPollRef.current = setTimeout(check, interval)
+      } else {
+        setPingResult({ reachable: false, avg_ms: null, attempts, total_wait_s: attempts * 3 })
+      }
+    }
+
+    // Wait 10s for robot to boot before first ping
+    pingPollRef.current = setTimeout(check, 10000)
+  }
+
+  const clearPingPoll = () => {
+    if (pingPollRef.current) {
+      clearTimeout(pingPollRef.current)
+      pingPollRef.current = null
+    }
+  }
+
+  useEffect(() => () => clearPingPoll(), [])
+
   const handleEmergency = () => {
     fetch('/api/robot/emergency-stop', { method: 'POST' }).catch(() => { })
     alert('EMERGENCY STOP!')
+  }
+
+  const formatTime = (iso) => {
+    try {
+      const d = new Date(iso)
+      return d.toLocaleString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit', day: '2-digit', month: 'short' })
+    } catch { return iso }
   }
 
   return (
@@ -115,12 +221,51 @@ const DashboardPage = () => {
 
           {/* ── Hero Header ── */}
           <div className="dashboard-hero">
-            <div className="dashboard-hero-icon">
-              <IconRobot size={48} color="#1a8fe3" />
+            <div className="dashboard-hero-left">
+              <div className="dashboard-hero-icon">
+                <IconRobot size={48} color="#1a8fe3" />
+              </div>
+              <div className="dashboard-hero-text">
+                <h1 className="dashboard-hero-title">Robot Arm Control System</h1>
+                <p className="dashboard-hero-sub">Dobot CR5 · Select a module to get started</p>
+              </div>
             </div>
-            <div className="dashboard-hero-text">
-              <h1 className="dashboard-hero-title">Robot Arm Control System</h1>
-              <p className="dashboard-hero-sub">Dobot CR5 · Select a module to get started</p>
+
+            {/* Relay toggle in hero */}
+            <div className="dashboard-hero-device">
+              <div className="hero-device-row">
+                <span className="hero-device-name">Relay V1</span>
+                <button
+                  className={`relay-toggle ${relayState === 'on' ? 'relay-toggle--on' : ''} ${relayLoading ? 'relay-toggle--waiting' : ''}`}
+                  onClick={handleRelayToggle}
+                  disabled={relayLoading}
+                  title={relayState === 'on' ? 'Click to turn OFF' : 'Click to turn ON'}
+                >
+                  <span className="relay-toggle-thumb" />
+                </button>
+                <span className="hero-device-status" style={{ color: relayState === 'on' ? '#22c55e' : '#888' }}>
+                  {relayLoading && relayState !== 'on'
+                    ? '⏳ Starting...'
+                    : relayState === 'on' ? '● ON' : '○ OFF'
+                  }
+                </span>
+              </div>
+              {pingResult && (
+                <span className={`hero-ping-status ${pingResult.reachable ? 'hero-ping--ok' : 'hero-ping--fail'}`}>
+                  {pingResult.reachable
+                    ? `✓ Online (${pingResult.avg_ms?.toFixed(0) || '?'}ms)`
+                    : `✗ Offline`
+                  }
+                  {pingResult.attempts > 1 && (
+                    <span className="hero-ping-detail"> · {pingResult.attempts} checks · {pingResult.total_wait_s}s</span>
+                  )}
+                </span>
+              )}
+              {relayHistory.length > 0 && (
+                <span className="hero-device-last">
+                  Last: {formatTime(relayHistory[0].time)}
+                </span>
+              )}
             </div>
           </div>
 

@@ -3121,3 +3121,90 @@ body {
     width: 100%;
   }
 }
+/* -- Dashboard Hero Device ----------------------------------------- */
+.dashboard-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.dashboard-hero-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.dashboard-hero-device {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.hero-device-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.hero-device-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #555;
+}
+.hero-device-status {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.hero-device-last {
+  font-size: 11px;
+  color: #aaa;
+}
+.hero-ping-status {
+  font-size: 11px;
+  font-weight: 600;
+  margin-left: 6px;
+}
+.hero-ping--ok { color: #22c55e; }
+.hero-ping--fail { color: #ef4444; }
+.hero-ping-detail { font-weight: 400; color: #999; }
+.relay-toggle--waiting {
+  animation: pulse 1.5s ease-in-out infinite;
+  opacity: 0.7;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
+/* -- Relay Toggle Switch ------------------------------------------- */
+.relay-toggle {
+  position: relative;
+  width: 52px;
+  height: 28px;
+  border-radius: 14px;
+  border: none;
+  background: #d1d5db;
+  cursor: pointer;
+  transition: background 0.25s ease;
+  padding: 0;
+}
+.relay-toggle--on {
+  background: #22c55e;
+}
+.relay-toggle:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.relay-toggle-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  transition: transform 0.25s ease;
+}
+.relay-toggle--on .relay-toggle-thumb {
+  transform: translateX(24px);
+}

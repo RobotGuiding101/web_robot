@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libusb-1.0-0 \
     libgl1 \
     libglib2.0-0 \
+    iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
 # ติดตั้ง Python dependencies ก่อน (cache layer)
