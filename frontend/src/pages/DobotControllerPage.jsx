@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
 
-const STEP_VALUES = [0.1, 1, 5, 10]
+const STEP_VALUES = [0.1, 1, 5, 10, 20]
 const CARTESIAN_AXES = ['X', 'Y', 'Z', 'RX', 'RY', 'RZ']
 const JOINT_AXES = ['J1', 'J2', 'J3', 'J4', 'J5', 'J6']
 const LOG_MAX = 200
@@ -110,10 +110,10 @@ const LogPanel = ({ title, channel, accentClass }) => {
         <span className="log-panel-title">{title}</span>
         <div className="log-panel-actions">
           {paused
-            ? <button className="log-btn log-btn--resume" onClick={handleResume}>▶ Resume</button>
-            : <button className="log-btn log-btn--pause" onClick={() => setPaused(true)}>⏸ Pause</button>
+            ? <button className="log-btn log-btn--resume" onClick={handleResume}>Resume</button>
+            : <button className="log-btn log-btn--pause" onClick={() => setPaused(true)}>Pause</button>
           }
-          <button className="log-btn log-btn--clear" onClick={handleClear}>✕ Clear</button>
+          <button className="log-btn log-btn--clear" onClick={handleClear}>Clear</button>
         </div>
       </div>
       <div className="log-panel-body" id={`log-${channel}`}>
@@ -130,7 +130,7 @@ const LogPanel = ({ title, channel, accentClass }) => {
       </div>
       {paused && pendingRef.current.length > 0 && (
         <div className="log-paused-banner">
-          ⏸ Paused — {pendingRef.current.length} new line{pendingRef.current.length > 1 ? 's' : ''} waiting
+          Paused — {pendingRef.current.length} new line{pendingRef.current.length > 1 ? 's' : ''} waiting
         </div>
       )}
     </div>
@@ -150,12 +150,17 @@ const DobotControllerPage = () => {
   const [joints, setJoints] = useState({ J1: 0, J2: 0, J3: 0, J4: 0, J5: 0, J6: 0 })
   const [lastMoved, setLastMoved] = useState(null)
 
-  // ── Init ──────────────────────────────────────────────────────────────────
+  // ── Action statuses ───────────────────────────────────────────────────────
   const [initLoading, setInitLoading] = useState(false)
   const [initStatus, setInitStatus] = useState(null) // 'ok' | 'error' | null
+  const [homeLoading, setHomeLoading] = useState(false)
+  const [homeStatus, setHomeStatus] = useState(null)
+  const [errorStatus, setErrorStatus] = useState(null)
 
   // ── Stable cache-buster: สร้างครั้งเดียวตอน mount ไม่โหลดซ้ำทุก re-render ──
   const viewerKey = useRef(Date.now())
+  const viewerBoxRef = useRef(null)
+  const [isViewerFullscreen, setIsViewerFullscreen] = useState(false)
 
   // ── 3D viewer sync — receive TCP updates from 3D viewer's IK drag ───────
   // NOTE: Disabled tcpUpdate listener. The 3D model is now driven by real
@@ -222,6 +227,40 @@ const DobotControllerPage = () => {
     alert('EMERGENCY STOP!')
   }
 
+  // Track native fullscreen changes (e.g. user presses Escape)
+  useEffect(() => {
+    const onFsChange = () => setIsViewerFullscreen(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', onFsChange)
+    return () => document.removeEventListener('fullscreenchange', onFsChange)
+  }, [])
+
+  const handleViewerFullscreen = useCallback(async () => {
+    const el = viewerBoxRef.current
+    if (!el) return
+    if (!document.fullscreenElement) {
+      try { await el.requestFullscreen() } catch { /* ignore */ }
+    } else {
+      try { await document.exitFullscreen() } catch { /* ignore */ }
+    }
+  }, [])
+
+  const handleClearError = async () => {
+    try {
+      const res = await fetch('/api/map/error', { method: 'POST' })
+      const data = await res.json()
+      if (data.ok) {
+        setErrorStatus('ok')
+        setLastMoved('Clear Error')
+      } else {
+        setErrorStatus('error')
+      }
+    } catch {
+      setErrorStatus('error')
+    } finally {
+      setTimeout(() => setErrorStatus(null), 3000)
+    }
+  }
+
   const handleInit = async () => {
     if (initLoading) return
     setInitLoading(true); setInitStatus(null)
@@ -231,11 +270,28 @@ const DobotControllerPage = () => {
       const res = await fetch('/api/map/init', { method: 'POST' })
       if (!res.ok) throw new Error()
       setInitStatus('ok')
-      setLastMoved('Init (Home)')
+      setLastMoved('Init')
     } catch { setInitStatus('error') }
     finally {
       setInitLoading(false)
       setTimeout(() => setInitStatus(null), 3000)
+    }
+  }
+
+  const handleGoHome = async () => {
+    if (homeLoading) return
+    setHomeLoading(true); setHomeStatus(null)
+    try {
+      const res = await fetch('/api/map/home', { method: 'POST' })
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error || 'Home move failed')
+      setHomeStatus('ok')
+      setLastMoved('Home')
+    } catch {
+      setHomeStatus('error')
+    } finally {
+      setHomeLoading(false)
+      setTimeout(() => setHomeStatus(null), 3000)
     }
   }
 
@@ -276,7 +332,7 @@ const DobotControllerPage = () => {
 
             {/* Left — 3D Viewer (top) + Robot Log (bottom) */}
             <div className="dobot-left-col">
-              <div className="dobot-3d-box">
+              <div ref={viewerBoxRef} className="dobot-3d-box">
                 <iframe
                   src={`/robot-viewer.html?v=${viewerKey.current}`}
                   title="Robot Arm 3D Viewer"
@@ -285,8 +341,8 @@ const DobotControllerPage = () => {
                 />
                 <button
                   className="dobot-fullscreen-btn"
-                  title="Fullscreen"
-                  onClick={() => window.open('/robot-viewer.html', '_blank')}
+                  title={isViewerFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+                  onClick={handleViewerFullscreen}
                 >⛶</button>
               </div>
               <div className="dobot-left-log">
@@ -307,16 +363,36 @@ const DobotControllerPage = () => {
                     <span className="ctrl-last-action">Last: <strong>{lastMoved}</strong></span>
                   )}
                   <button
-                    id="btn-init-home"
+                    id="btn-clear-error"
+                    className={`init-btn init-btn--secondary${errorStatus === 'ok' ? ' init-btn--ok' : ''}${errorStatus === 'error' ? ' init-btn--error' : ''}`}
+                    onClick={handleClearError}
+                    title="Clear robot errors and reset alarms (/error)"
+                  >
+                    {errorStatus === 'ok' ? 'Cleared' : errorStatus === 'error' ? 'Error' : 'Clear Error'}
+                  </button>
+                  {/* <button
+                    id="btn-init-robot"
                     className={`init-btn${initLoading ? ' init-btn--loading' : ''}${initStatus === 'ok' ? ' init-btn--ok' : ''}${initStatus === 'error' ? ' init-btn--error' : ''}`}
                     onClick={handleInit}
                     disabled={initLoading}
-                    title="Send robot to Home position"
+                    title="Connect and initialize / enable robot motors (/init)"
                   >
-                    {initLoading ? <><span className="init-btn-spinner" /> Homing…</>
-                      : initStatus === 'ok' ? <>✓ Homed</>
-                        : initStatus === 'error' ? <>✗ Error</>
-                          : <>⌂ Init</>}
+                    {initLoading ? <><span className="init-btn-spinner" /> Initing…</>
+                      : initStatus === 'ok' ? <>Ready</>
+                        : initStatus === 'error' ? <>Error</>
+                          : <>Init</>}
+                  </button> */}
+                  <button
+                    id="btn-go-home"
+                    className={`init-btn${homeLoading ? ' init-btn--loading' : ''}${homeStatus === 'ok' ? ' init-btn--ok' : ''}${homeStatus === 'error' ? ' init-btn--error' : ''}`}
+                    onClick={handleGoHome}
+                    disabled={homeLoading}
+                    title="Send robot to configured Home position (/home)"
+                  >
+                    {homeLoading ? <><span className="init-btn-spinner" /> Homing…</>
+                      : homeStatus === 'ok' ? <>Homed</>
+                        : homeStatus === 'error' ? <>Error</>
+                          : <>Home</>}
                   </button>
                 </div>
               </div>

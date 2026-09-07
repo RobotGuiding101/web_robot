@@ -19,9 +19,8 @@ const TOOLS = {
 
 const TOOL_META = [
   { id: TOOLS.SELECT, label: 'Select',  icon: '↖' },
-  { id: TOOLS.PEN,    label: 'Pen',     icon: '✏️' },
+  { id: TOOLS.PEN,    label: 'Pen',     icon: '✎' },
   { id: TOOLS.LINE,   label: 'Line',    icon: '╱' },
-
 ]
 
 const PRESET_COLORS = [
@@ -392,7 +391,7 @@ const DrawingModePage = () => {
   // ── Emergency Stop ────────────────────────────────────────────────────────
   const handleEmergency = () => {
     fetch('/api/map/error', { method: 'POST' }).catch(() => {})
-    setStatus('🛑 EMERGENCY STOP sent')
+    setStatus('EMERGENCY STOP sent')
     alert('EMERGENCY STOP!')
   }
 

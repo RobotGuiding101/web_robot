@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
 
@@ -7,6 +7,7 @@ const CameraViewPage = () => {
   const [snapshot, setSnapshot] = useState(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const streamRef = useRef(null)
+  const cameraBoxRef = useRef(null)
 
   // Poll robot/camera status
   useEffect(() => {
@@ -49,6 +50,23 @@ const CameraViewPage = () => {
     } catch { /* ignore */ }
   }
 
+  // Track native fullscreen changes (e.g. user presses Escape)
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', onFsChange)
+    return () => document.removeEventListener('fullscreenchange', onFsChange)
+  }, [])
+
+  const handleFullscreen = useCallback(async () => {
+    const el = cameraBoxRef.current
+    if (!el) return
+    if (!document.fullscreenElement) {
+      try { await el.requestFullscreen() } catch { /* ignore */ }
+    } else {
+      try { await document.exitFullscreen() } catch { /* ignore */ }
+    }
+  }, [])
+
   return (
     <div className="app-layout">
       <Sidebar />
@@ -58,6 +76,7 @@ const CameraViewPage = () => {
           <div className="camera-layout">
             {/* Main Camera Feed */}
             <div
+              ref={cameraBoxRef}
               className="placeholder-box"
               style={{
                 position: 'relative',
@@ -84,7 +103,7 @@ const CameraViewPage = () => {
                 />
               ) : (
                 <div style={{ textAlign: 'center', color: '#888' }}>
-                  <div style={{ fontSize: '48px', marginBottom: '12px' }}>📷</div>
+                  <div style={{ fontSize: '48px', marginBottom: '12px' }}></div>
                   <div style={{ fontSize: '14px', marginBottom: '16px' }}>
                     {status.connected ? 'Camera not started' : 'Robot not connected'}
                   </div>
@@ -158,10 +177,10 @@ const CameraViewPage = () => {
                   }}
                   title="Take Snapshot"
                 >
-                  📸 Snapshot
+                  Snapshot
                 </button>
                 <button
-                  onClick={() => setIsFullscreen(!isFullscreen)}
+                  onClick={handleFullscreen}
                   style={{
                     background: 'rgba(0,0,0,0.6)',
                     color: '#fff',
@@ -171,7 +190,7 @@ const CameraViewPage = () => {
                     cursor: 'pointer',
                     fontSize: '16px',
                   }}
-                  title="Fullscreen"
+                  title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
                 >
                   ⛶
                 </button>
