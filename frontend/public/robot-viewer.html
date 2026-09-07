@@ -142,6 +142,31 @@
         const axesHelper = new THREE.AxesHelper(0.4);
         scene.add(axesHelper);
 
+        // ===== Camera Feed Ground Plane =====
+        const camImg = new Image();
+        camImg.crossOrigin = 'anonymous';
+        camImg.src = '/api/map/video_feed';
+
+        const camTexture = new THREE.Texture(camImg);
+        camTexture.minFilter = THREE.LinearFilter;
+        camTexture.magFilter = THREE.LinearFilter;
+
+        const groundGeo = new THREE.PlaneGeometry(3, 3);
+        const groundMat = new THREE.MeshBasicMaterial({
+            map: camTexture,
+            transparent: true,
+            opacity: 0.85,
+            side: THREE.DoubleSide,
+        });
+        const groundPlane = new THREE.Mesh(groundGeo, groundMat);
+        groundPlane.rotation.x = -Math.PI / 2;
+        groundPlane.position.y = 0.001;
+        groundPlane.renderOrder = -1;
+        scene.add(groundPlane);
+
+        let camTextureDirty = false;
+        camImg.onload = () => { camTextureDirty = true; };
+
         // ===== 2. Robot Hierarchy =====
         const robotBase = new THREE.Group();
         const link1 = new THREE.Group();
@@ -380,6 +405,11 @@
                 solveIK(targetMesh.position);
                 // Keep ring facing camera
                 ring.lookAt(camera.position);
+            }
+
+            // Update camera feed texture
+            if (camTextureDirty) {
+                camTexture.needsUpdate = true;
             }
 
             // Read TCP position (metres → mm) and send to parent React app ~10x/sec
