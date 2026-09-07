@@ -51,7 +51,6 @@ const LogPanel = ({ title, channel, accentClass }) => {
   }, [lines, paused])
 
   useEffect(() => {
-    let ws = null
     let dead = false
 
     const addLine = (entry) => {
@@ -62,7 +61,6 @@ const LogPanel = ({ title, channel, accentClass }) => {
       })
     }
 
-    // Use /api/map/robot_logs instead of /api/robot/log/robot (which doesn't exist)
     fetch('/api/map/robot_logs')
       .then((r) => r.json())
       .then((data) => {
@@ -72,7 +70,6 @@ const LogPanel = ({ title, channel, accentClass }) => {
       })
       .catch(() => { })
 
-    // Poll for new logs periodically (backend doesn't have WebSocket for logs)
     const pollInterval = setInterval(() => {
       if (dead || pausedRef.current) return
       fetch('/api/map/robot_logs')
@@ -158,18 +155,21 @@ const DobotControllerPage = () => {
   const [homeStatus, setHomeStatus] = useState(null)
   const [errorStatus, setErrorStatus] = useState(null)
 
-  // ── Stable cache-buster: สร้างครั้งเดียวตอน mount ไม่โหลดซ้ำทุก re-render ──
+  // ── Stable cache-buster ──
   const viewerKey = useRef(Date.now())
   const viewerBoxRef = useRef(null)
   const [isViewerFullscreen, setIsViewerFullscreen] = useState(false)
 
-  // ── 3D viewer sync — receive TCP updates from 3D viewer's IK drag ───────
-  // NOTE: Disabled tcpUpdate listener. The 3D model is now driven by real
-  // robot data from /api/map/status polling → setJoints postMessage.
-  // The viewer's IK simulation was overwriting real robot positions.
-  // If IK drag is needed later, re-enable with a flag to avoid feedback loops.
+  // ── Auto-connect + init robot on mount ─────────────────────────────────
   useEffect(() => {
-    // Intentionally empty — real robot data drives the 3D model
+    const autoInit = async () => {
+      try {
+        await fetch('/api/map/connect', { method: 'POST' })
+        await fetch('/api/map/camstart', { method: 'POST' })
+        await fetch('/api/map/init', { method: 'POST' })
+      } catch { /* ignore */ }
+    }
+    autoInit()
   }, [])
 
   // ── Load speed from DB settings ───────────────────────────────────────
@@ -195,7 +195,6 @@ const DobotControllerPage = () => {
         const data = await res.json()
         if (dead) return
 
-        // Update position from real robot (pose: [x, y, z, rx, ry, rz])
         if (Array.isArray(data.pose) && data.pose.length === 6) {
           setPos({
             X: +data.pose[0].toFixed(2),
@@ -207,7 +206,6 @@ const DobotControllerPage = () => {
           })
         }
 
-        // Update joint angles from real robot (angles: [j1..j6])
         if (Array.isArray(data.angles) && data.angles.length === 6) {
           setJoints({
             J1: +data.angles[0].toFixed(2),
@@ -230,7 +228,6 @@ const DobotControllerPage = () => {
   useEffect(() => {
     const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
     if (!iframe || !iframe.contentWindow) return
-    // robot-viewer.html expects joints as [j1..j6] in degrees
     const jArr = [joints.J1, joints.J2, joints.J3, joints.J4, joints.J5, joints.J6]
     iframe.contentWindow.postMessage({ type: 'setJoints', joints: jArr }, '*')
   }, [joints])
@@ -241,7 +238,7 @@ const DobotControllerPage = () => {
     alert('EMERGENCY STOP!')
   }
 
-  // Track native fullscreen changes (e.g. user presses Escape)
+  // Track native fullscreen changes
   useEffect(() => {
     const onFsChange = () => setIsViewerFullscreen(!!document.fullscreenElement)
     document.addEventListener('fullscreenchange', onFsChange)
@@ -279,7 +276,6 @@ const DobotControllerPage = () => {
     if (initLoading) return
     setInitLoading(true); setInitStatus(null)
     try {
-      // First connect, then init
       await fetch('/api/map/connect', { method: 'POST' })
       const res = await fetch('/api/map/init', { method: 'POST' })
       if (!res.ok) throw new Error()
@@ -335,7 +331,7 @@ const DobotControllerPage = () => {
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="app-layout">
-      <Sidebar />
+      <Sidebar onSpeedChange={setSpeed} />
       <div className="main-content">
         <TopBar title="Dobot Controller" onEmergency={handleEmergency} />
 
@@ -384,7 +380,7 @@ const DobotControllerPage = () => {
                   >
                     {errorStatus === 'ok' ? 'Cleared' : errorStatus === 'error' ? 'Error' : 'Clear Error'}
                   </button>
-                  {/* <button
+                  <button
                     id="btn-init-robot"
                     className={`init-btn${initLoading ? ' init-btn--loading' : ''}${initStatus === 'ok' ? ' init-btn--ok' : ''}${initStatus === 'error' ? ' init-btn--error' : ''}`}
                     onClick={handleInit}
@@ -395,7 +391,7 @@ const DobotControllerPage = () => {
                       : initStatus === 'ok' ? <>Ready</>
                         : initStatus === 'error' ? <>Error</>
                           : <>Init</>}
-                  </button> */}
+                  </button>
                   <button
                     id="btn-go-home"
                     className={`init-btn${homeLoading ? ' init-btn--loading' : ''}${homeStatus === 'ok' ? ' init-btn--ok' : ''}${homeStatus === 'error' ? ' init-btn--error' : ''}`}
