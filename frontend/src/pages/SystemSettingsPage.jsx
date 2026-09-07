@@ -2,14 +2,17 @@ import React, { useState, useEffect } from 'react'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
 
-/* ── helpers ─────────────────────────────────────────────────────────────── */
+/* ── helper: toggle-switch ─────────────────────── */
 const Toggle = ({ id, checked, onChange }) => (
   <label className="settings-toggle" htmlFor={id}>
     <input id={id} type="checkbox" checked={checked} onChange={onChange} />
-    <span className="settings-toggle-track"><span className="settings-toggle-thumb" /></span>
+    <span className="settings-toggle-track">
+      <span className="settings-toggle-thumb" />
+    </span>
   </label>
 )
 
+/* ── helper: settings row ──────────────────────── */
 const SettingsRow = ({ label, hint, children }) => (
   <div className="settings-row">
     <div className="settings-row-label">
@@ -20,6 +23,7 @@ const SettingsRow = ({ label, hint, children }) => (
   </div>
 )
 
+/* ── helper: section card ──────────────────────── */
 const Section = ({ icon, title, children }) => (
   <div className="settings-section">
     <div className="settings-section-header">
@@ -30,6 +34,7 @@ const Section = ({ icon, title, children }) => (
   </div>
 )
 
+/* ── StatusBadge ──────────────────────────────── */
 const StatusBadge = ({ connected }) => (
   <span className={`settings-status-badge ${connected ? 'connected' : 'disconnected'}`}>
     <span className="settings-status-dot" />
@@ -37,71 +42,101 @@ const StatusBadge = ({ connected }) => (
   </span>
 )
 
-/* ── API helpers ─────────────────────────────────────────────────────────── */
-const authHeaders = () => ({
-  'Content-Type': 'application/json',
-  'Authorization': `Bearer ${localStorage.getItem('access_token') || ''}`,
-})
-
-/* ══════════════════════════════════════════════════════════════════════════ */
+/* ════════════════════════════════════════════════
+   SystemSettingsPage
+   ════════════════════════════════════════════════ */
 const SystemSettingsPage = () => {
-  const [settings, setSettings] = useState({})
+  /* Robot connection */
+  const [robotIp, setRobotIp] = useState(() => localStorage.getItem('robot_ip') || '192.168.10.110')
+  const [robotDashboardPort, setRobotDashboardPort] = useState(() => localStorage.getItem('robot_dashboard_port') || '29999')
+  const [robotMovePort, setRobotMovePort] = useState(() => localStorage.getItem('robot_move_port') || '30003')
+  const [savedRobotIp, setSavedRobotIp] = useState(() => localStorage.getItem('robot_ip') || '192.168.10.110')
   const [robotConnected, setRobotConnected] = useState(false)
   const [robotLoading, setRobotLoading] = useState(false)
-  const [savedSection, setSavedSection] = useState(null)
+
+  /* Camera */
+  const [cam0Index, setCam0Index] = useState('0')
+  const [cam1Index, setCam1Index] = useState('1')
+  const [cam0Enabled, setCam0Enabled] = useState(true)
+  const [cam1Enabled, setCam1Enabled] = useState(true)
+
+  /* Home / Init Position */
+  const [homeX, setHomeX] = useState(() => localStorage.getItem('home_x') || '0.0')
+  const [homeY, setHomeY] = useState(() => localStorage.getItem('home_y') || '0.0')
+  const [homeZ, setHomeZ] = useState(() => localStorage.getItem('home_z') || '0.0')
   const [feedbackMsg, setFeedbackMsg] = useState(null)
 
-  const showSaved = (section) => { setSavedSection(section); setTimeout(() => setSavedSection(null), 2000) }
-  const showFeedback = (msg) => { setFeedbackMsg(msg); setTimeout(() => setFeedbackMsg(null), 3000) }
+  /* Save states */
+  const [savedSection, setSavedSection] = useState(null)
 
-  /* ── Load settings from DB ──────────────────────────────────────── */
-  useEffect(() => {
-    fetch('/api/settings', { headers: authHeaders() })
-      .then(r => r.ok ? r.json() : Promise.reject())
-      .then(data => setSettings(data))
-      .catch(() => {})
-  }, [])
-
-  useEffect(() => {
-    fetch('/api/map/status')
-      .then(r => r.json())
-      .then(d => { if (d.connected !== undefined) setRobotConnected(d.connected) })
-      .catch(() => {})
-  }, [])
-
-  /* ── Update a single setting locally ────────────────────────────── */
-  const update = (key, value) => setSettings(prev => ({ ...prev, [key]: value }))
-
-  /* ── Save all settings to DB ────────────────────────────────────── */
-  const handleSave = async (section) => {
-    const entries = Object.entries(settings).map(([key, value]) => ({ key, value: String(value) }))
-    try {
-      const res = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: authHeaders(),
-        body: JSON.stringify({ settings: entries }),
-      })
-      if (res.ok) showSaved(section)
-      else showFeedback('Save failed')
-    } catch {
-      showFeedback('Network error')
-    }
+  const showSaved = (section) => {
+    setSavedSection(section)
+    setTimeout(() => setSavedSection(null), 2000)
   }
 
-  /* ── Robot connect test ─────────────────────────────────────────── */
+  const showFeedback = (msg) => {
+    setFeedbackMsg(msg)
+    setTimeout(() => setFeedbackMsg(null), 3000)
+  }
+
+  useEffect(() => {
+    // Check robot connection status
+    fetch('/api/map/status')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.connected !== undefined) {
+          setRobotConnected(data.connected)
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  /* ── Robot connect test ── */
   const handleTestConnection = async () => {
     setRobotLoading(true)
     try {
-      const res = await fetch('/api/map/connect', { method: 'POST' })
+      const res = await fetch('/api/map/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ip: robotIp,
+          dashboard_port: parseInt(robotDashboardPort, 10) || 29999,
+          move_port: parseInt(robotMovePort, 10) || 30003,
+        }),
+      })
       const data = await res.json()
       setRobotConnected(!!data.ok)
-      showFeedback(data.ok ? 'Robot connected' : 'Connection failed')
+      if (data.ok) {
+        showFeedback('Robot connected')
+      } else {
+        showFeedback('Robot connection failed')
+      }
     } catch {
       setRobotConnected(false)
       showFeedback('Network error')
     } finally {
       setRobotLoading(false)
     }
+  }
+
+  const handleSaveRobot = () => {
+    localStorage.setItem('robot_ip', robotIp)
+    localStorage.setItem('robot_dashboard_port', robotDashboardPort)
+    localStorage.setItem('robot_move_port', robotMovePort)
+    setSavedRobotIp(robotIp)
+    showSaved('robot')
+  }
+
+  const handleSaveCamera = () => {
+    showSaved('camera')
+  }
+
+  /* ── Home Handlers (local save only) ── */
+  const handleSaveHome = () => {
+    localStorage.setItem('home_x', homeX)
+    localStorage.setItem('home_y', homeY)
+    localStorage.setItem('home_z', homeZ)
+    showSaved('home')
   }
 
   const handleEmergency = () => {
@@ -113,104 +148,162 @@ const SystemSettingsPage = () => {
     <div className="app-layout">
       <Sidebar />
       <div className="main-content">
-        <TopBar title="System Settings" ip={settings.robot_ip || ''} onEmergency={handleEmergency} />
+        <TopBar title="System Settings" ip={savedRobotIp} onEmergency={handleEmergency} />
         <div className="page-content">
           <div className="settings-page">
 
             {/* ── Robot Connection ─────────────────────────────── */}
             <Section title="Robot Connection">
-              <SettingsRow label="Robot IP Address" hint="Dobot CR5 Dashboard Port">
+            <SettingsRow label="Robot IP Address" hint="Dobot CR5 Dashboard Port">
+              <input
+                id="setting-robot-ip"
+                className="settings-input"
+                type="text"
+                value={robotIp}
+                onChange={(e) => setRobotIp(e.target.value)}
+                placeholder="192.168.10.110"
+              />
+            </SettingsRow>
+            <SettingsRow label="Ports" hint="Dashboard (29999) & Move (30003)">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 600, color: '#5c6f82' }}>Dashboard</span>
                 <input
-                  className="settings-input"
-                  type="text"
-                  value={settings.robot_ip || ''}
-                  onChange={(e) => update('robot_ip', e.target.value)}
-                  placeholder="192.168.10.110"
-                />
-              </SettingsRow>
-              <SettingsRow label="Speed %" hint="Movement speed factor">
-                <input
+                  id="setting-robot-dashboard-port"
                   className="settings-input settings-input--sm"
                   type="number"
-                  min="1" max="100"
-                  value={settings.move_speed || '10'}
-                  onChange={(e) => update('move_speed', e.target.value)}
+                  value={robotDashboardPort}
+                  onChange={(e) => setRobotDashboardPort(e.target.value)}
+                  placeholder="29999"
                 />
-              </SettingsRow>
-              <SettingsRow label="Status">
-                <StatusBadge connected={robotConnected} />
-              </SettingsRow>
-              <div className="settings-actions">
-                {feedbackMsg && <span className="settings-feedback-msg">{feedbackMsg}</span>}
-                <button
-                  className={`settings-btn settings-btn--secondary ${robotLoading ? 'loading' : ''}`}
-                  onClick={handleTestConnection}
-                  disabled={robotLoading}
-                >
-                  {robotLoading ? 'Testing...' : 'Test Connection'}
-                </button>
-                <button
-                  className={`settings-btn settings-btn--primary ${savedSection === 'robot' ? 'saved' : ''}`}
-                  onClick={() => handleSave('robot')}
-                >
-                  {savedSection === 'robot' ? 'Saved' : 'Save'}
-                </button>
               </div>
-            </Section>
-
-            {/* ── Home Position ─────────────────────────────── */}
-            <Section title="Home Position">
-              <SettingsRow label="Home Pose (Base Frame)" hint="mm / deg" />
-              <div className="settings-coord-grid">
-                {['home_x', 'home_y', 'home_z', 'home_rx', 'home_ry', 'home_rz'].map((k) => (
-                  <div className="settings-coord-field" key={k}>
-                    <label className="settings-coord-label">{k.replace('home_', '').toUpperCase()}</label>
-                    <input
-                      className="settings-coord-input"
-                      type="number" step="0.1"
-                      value={settings[k] || '0.0'}
-                      onChange={(e) => update(k, e.target.value)}
-                    />
-                  </div>
-                ))}
-              </div>
-              <div className="settings-actions">
-                <button
-                  className={`settings-btn settings-btn--primary ${savedSection === 'home' ? 'saved' : ''}`}
-                  onClick={() => handleSave('home')}
-                >
-                  {savedSection === 'home' ? 'Saved' : 'Save'}
-                </button>
-              </div>
-            </Section>
-
-            {/* ── Camera ────────────────────────────────────── */}
-            <Section title="Camera Configuration">
-              <SettingsRow label="Depth ROI" hint="Region of interest (px)">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 600, color: '#5c6f82' }}>Move</span>
                 <input
+                  id="setting-robot-move-port"
                   className="settings-input settings-input--sm"
-                  type="number" min="5" max="50"
-                  value={settings.depth_roi || '15'}
-                  onChange={(e) => update('depth_roi', e.target.value)}
+                  type="number"
+                  value={robotMovePort}
+                  onChange={(e) => setRobotMovePort(e.target.value)}
+                  placeholder="30003"
                 />
-              </SettingsRow>
-              <SettingsRow label="Min Depth (mm)">
-                <input
-                  className="settings-input settings-input--sm"
-                  type="number" step="10"
-                  value={settings.min_depth_mm || '330'}
-                  onChange={(e) => update('min_depth_mm', e.target.value)}
-                />
-              </SettingsRow>
-              <div className="settings-actions">
-                <button
-                  className={`settings-btn settings-btn--primary ${savedSection === 'camera' ? 'saved' : ''}`}
-                  onClick={() => handleSave('camera')}
-                >
-                  {savedSection === 'camera' ? 'Saved' : 'Save'}
-                </button>
               </div>
-            </Section>
+            </SettingsRow>
+            <SettingsRow label="Status">
+              <StatusBadge connected={robotConnected} />
+            </SettingsRow>
+            <div className="settings-actions">
+              {feedbackMsg && <span className="settings-feedback-msg">{feedbackMsg}</span>}
+              <button
+                id="btn-test-connection"
+                className={`settings-btn settings-btn--secondary ${robotLoading ? 'loading' : ''}`}
+                onClick={handleTestConnection}
+                disabled={robotLoading}
+              >
+                {robotLoading ? (
+                  <><span className="settings-spinner" /> Testing…</>
+                ) : 'Test Connection'}
+              </button>
+              <button
+                id="btn-save-robot"
+                className={`settings-btn settings-btn--primary ${savedSection === 'robot' ? 'saved' : ''}`}
+                onClick={handleSaveRobot}
+              >
+                {savedSection === 'robot' ? 'Saved' : 'Save'}
+              </button>
+            </div>
+          </Section>
+
+          {/* ── Home Position Configuration ────────── */}
+          <Section title="Home Position Configuration">
+            <SettingsRow
+              label="Home Pose (Base Frame)"
+              hint="Coordinates for robot home position (mm / deg)"
+            />
+
+            <div className="settings-coord-grid">
+              <div className="settings-coord-field">
+                <label className="settings-coord-label" htmlFor="home-x">X</label>
+                <input
+                  id="home-x"
+                  className="settings-coord-input"
+                  type="number"
+                  step="0.1"
+                  value={homeX}
+                  onChange={(e) => setHomeX(e.target.value)}
+                  placeholder="0.0"
+                />
+              </div>
+              <div className="settings-coord-field">
+                <label className="settings-coord-label" htmlFor="home-y">Y</label>
+                <input
+                  id="home-y"
+                  className="settings-coord-input"
+                  type="number"
+                  step="0.1"
+                  value={homeY}
+                  onChange={(e) => setHomeY(e.target.value)}
+                  placeholder="0.0"
+                />
+              </div>
+              <div className="settings-coord-field">
+                <label className="settings-coord-label" htmlFor="home-z">Z</label>
+                <input
+                  id="home-z"
+                  className="settings-coord-input"
+                  type="number"
+                  step="0.1"
+                  value={homeZ}
+                  onChange={(e) => setHomeZ(e.target.value)}
+                  placeholder="0.0"
+                />
+              </div>
+            </div>
+
+            <div className="settings-actions">
+              <button
+                id="btn-save-home"
+                className={`settings-btn settings-btn--primary ${savedSection === 'home' ? 'saved' : ''}`}
+                onClick={handleSaveHome}
+              >
+                {savedSection === 'home' ? 'Saved' : 'Save'}
+              </button>
+            </div>
+          </Section>
+
+          {/* ── Camera Configuration ─────────────────────────── */}
+          <Section title="Camera Configuration">
+            <SettingsRow label="Camera 0 (Main)" hint="USB /dev/video index">
+              <Toggle id="toggle-cam0" checked={cam0Enabled} onChange={(e) => setCam0Enabled(e.target.checked)} />
+              <input
+                id="setting-cam0-index"
+                className="settings-input settings-input--sm"
+                type="number"
+                value={cam0Index}
+                onChange={(e) => setCam0Index(e.target.value)}
+                disabled={!cam0Enabled}
+              />
+            </SettingsRow>
+            <SettingsRow label="Camera 1 (Secondary)" hint="USB /dev/video index">
+              <Toggle id="toggle-cam1" checked={cam1Enabled} onChange={(e) => setCam1Enabled(e.target.checked)} />
+              <input
+                id="setting-cam1-index"
+                className="settings-input settings-input--sm"
+                type="number"
+                value={cam1Index}
+                onChange={(e) => setCam1Index(e.target.value)}
+                disabled={!cam1Enabled}
+              />
+            </SettingsRow>
+            <div className="settings-actions">
+              <button
+                id="btn-save-camera"
+                className={`settings-btn settings-btn--primary ${savedSection === 'camera' ? 'saved' : ''}`}
+                onClick={handleSaveCamera}
+              >
+                {savedSection === 'camera' ? 'Saved' : 'Save'}
+              </button>
+            </div>
+          </Section>
 
           </div>
         </div>
