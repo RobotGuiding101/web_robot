@@ -54,11 +54,13 @@ class GotoBody(BaseModel):
 class JogBody(BaseModel):
     axis: str            # x/y/z/rx/ry/rz
     amount: float = 0.0
+    speed: int = 10      # SpeedFactor 1-100 (percent)
 
 
 class JogJointBody(BaseModel):
     joint: int
     amount: float = 0.0
+    speed: int = 10      # SpeedFactor 1-100 (percent)
 
 
 class FrameBody(BaseModel):
@@ -233,6 +235,9 @@ def api_jog(body: JogBody):
         return {"ok": False, "error": "axis must be x/y/z/rx/ry/rz"}
     if not robot.connected:
         return {"ok": False, "error": "not connected"}
+    # Apply speed (1-100%) before jog
+    speed = max(1, min(100, body.speed))
+    robot.dashboard.SpeedFactor(speed)
     threading.Thread(target=_safe_call, args=(robot.jog_cartesian,),
                      kwargs={f"d{body.axis}": body.amount}, daemon=True).start()
     return {"ok": True}
@@ -244,6 +249,9 @@ def api_jog_joint(body: JogJointBody):
         return {"ok": False, "error": "joint must be 1-6"}
     if not robot.connected:
         return {"ok": False, "error": "not connected"}
+    # Apply speed (1-100%) before jog
+    speed = max(1, min(100, body.speed))
+    robot.dashboard.SpeedFactor(speed)
     threading.Thread(target=_safe_call, args=(robot.jog_joint,),
                      kwargs={f"j{body.joint}": body.amount}, daemon=True).start()
     return {"ok": True}
