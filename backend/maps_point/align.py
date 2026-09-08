@@ -142,6 +142,7 @@ class AppState:
         self.last_center_depth = None
         self.last_roll_deg    = None   # phase-3 Rz correction target, see do_align
         self.heatmap_mode = False   # main.py's MJPEG generator reads this
+        self.camera_mode = "rgb"    # "rgb" or "gray"
         self.status = "idle"
 
         # ── draw: N×M grid plane calibration + freehand path replay ────────
