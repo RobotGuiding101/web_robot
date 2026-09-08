@@ -124,6 +124,7 @@ const SystemSettingsPage = () => {
     localStorage.setItem('robot_dashboard_port', robotDashboardPort)
     localStorage.setItem('robot_move_port', robotMovePort)
     setSavedRobotIp(robotIp)
+    window.dispatchEvent(new Event('robot_ip_changed'))
     showSaved('robot')
   }
 
@@ -148,7 +149,7 @@ const SystemSettingsPage = () => {
     <div className="app-layout">
       <Sidebar />
       <div className="main-content">
-        <TopBar title="System Settings" ip={savedRobotIp} onEmergency={handleEmergency} />
+        <TopBar title="System Settings" onEmergency={handleEmergency} />
         <div className="page-content">
           <div className="settings-page">
 
