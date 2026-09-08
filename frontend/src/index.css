@@ -2756,6 +2756,10 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 280px;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
 .calib-log-card {
@@ -2929,7 +2933,7 @@ body {
 .calib-camera-box {
   flex: 1;
   position: relative;
-  background: #0a1628;
+  background: #090d14;
   min-height: 220px;
   display: flex;
   align-items: center;
@@ -3066,6 +3070,11 @@ body {
 
 .calib-log-line.warn {
   color: #b45309;
+}
+
+.calib-log-line.server {
+  color: #4a7fa5;
+  opacity: 0.85;
 }
 
 .calib-clear-btn {
