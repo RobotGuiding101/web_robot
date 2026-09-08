@@ -354,18 +354,20 @@ const DrawingModePage = () => {
     setIsSending(true)
     setStatus('Sending to robot…')
     try {
-      // Use /api/map/draw with strokes format
+      // Normalize pixel coords to [0,1] for backend grid_pose()
+      const cw = fc.getWidth()
+      const ch = fc.getHeight()
+
       const strokes = pathData.map((obj) => {
-        // Convert fabric objects to stroke points
         const points = []
         if (obj.type === 'path' && obj.path) {
           obj.path.forEach((cmd) => {
             if (cmd[0] === 'M' || cmd[0] === 'L') {
-              points.push([cmd[1], cmd[2]])
+              points.push([cmd[1] / cw, cmd[2] / ch])
             }
           })
         } else if (obj.type === 'line') {
-          points.push([obj.x1, obj.y1], [obj.x2, obj.y2])
+          points.push([obj.x1 / cw, obj.y1 / ch], [obj.x2 / cw, obj.y2 / ch])
         }
         return { tool: 'pen', points }
       }).filter(s => s.points.length > 0)
@@ -375,12 +377,17 @@ const DrawingModePage = () => {
         return
       }
 
-      await fetch('/api/map/draw', {
+      const res = await fetch('/api/map/draw', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ strokes }),
       })
-      setStatus(`✓ Sent ${strokes.length} stroke(s)`)
+      const data = await res.json()
+      if (data.ok) {
+        setStatus(`✓ Sent ${strokes.length} stroke(s)`)
+      } else {
+        setStatus(`✗ ${data.error || 'Draw failed'}`)
+      }
     } catch {
       setStatus('✗ Failed — robot offline?')
     } finally {
