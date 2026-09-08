@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
 
-const STEP_VALUES = [0.1, 1, 5, 10, 20]
+const STEP_VALUES = [0.1, 1, 5, 10, 20, 50]
 const CARTESIAN_AXES = ['X', 'Y', 'Z', 'RX', 'RY', 'RZ']
 const JOINT_AXES = ['J1', 'J2', 'J3', 'J4', 'J5', 'J6']
 const LOG_MAX = 200
