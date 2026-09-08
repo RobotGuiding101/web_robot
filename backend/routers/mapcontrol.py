@@ -86,6 +86,10 @@ class DrawBody(BaseModel):
     strokes: list = []
 
 
+class CameraModeBody(BaseModel):
+    mode: str  # "rgb" or "gray"
+
+
 # ── helpers (mirror maps_point/main.py) ──────────────────────────────────────
 def _safe_call(fn, *args, **kwargs):
     """Run a Robot method as a thread target with RobotMoveError caught
@@ -123,7 +127,7 @@ def _grid_fully_marked() -> bool:
                for i in range(state.grid_rows) for j in range(state.grid_cols))
 
 
-def _mjpeg_generator():
+def _mjpeg_generator(mode: Optional[str] = None):
     while True:
         if not cam._running:
             time.sleep(0.2)
@@ -137,13 +141,18 @@ def _mjpeg_generator():
             time.sleep(0.02)
             continue
 
-        if state.heatmap_mode and df:
+        effective_mode = (mode or getattr(state, "camera_mode", "rgb")).lower()
+
+        if (effective_mode == "depth" or state.heatmap_mode) and df:
             raw = np.asanyarray(df.get_data()).astype(np.float32)
             vmax = raw[raw > 0].max() if raw.any() else 1.0
             norm = np.clip(raw / vmax * 255, 0, 255).astype(np.uint8)
             frame = cv2.applyColorMap(norm, cv2.COLORMAP_JET)
         else:
             frame = np.asanyarray(cf.get_data()).copy()
+            if effective_mode == "gray":
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                frame = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
         frame = draw_overlay(frame, state)
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
@@ -154,8 +163,8 @@ def _mjpeg_generator():
 
 # ── video stream ─────────────────────────────────────────────────────────────
 @router.get("/video_feed")
-def video_feed():
-    return StreamingResponse(_mjpeg_generator(),
+def video_feed(mode: Optional[str] = None):
+    return StreamingResponse(_mjpeg_generator(mode=mode),
                              media_type="multipart/x-mixed-replace; boundary=frame")
 
 
@@ -226,6 +235,29 @@ def api_reset_points():
 def api_heatmap_toggle():
     state.heatmap_mode = not state.heatmap_mode
     return {"ok": True, "heatmap_mode": state.heatmap_mode}
+
+
+@router.get("/camera_mode")
+def api_get_camera_mode():
+    return {"mode": getattr(state, "camera_mode", "rgb")}
+
+
+@router.post("/camera_mode")
+def api_set_camera_mode(body: CameraModeBody):
+    m = body.mode.lower()
+    if m not in ("rgb", "gray", "depth"):
+        return {"ok": False, "error": f"Invalid mode: {body.mode}. Expected 'rgb', 'gray', or 'depth'"}
+    state.camera_mode = m
+    return {"ok": True, "mode": state.camera_mode}
+
+
+@router.post("/camera_mode/toggle")
+def api_toggle_camera_mode():
+    modes = ["rgb", "gray", "depth"]
+    current = getattr(state, "camera_mode", "rgb")
+    next_idx = (modes.index(current) + 1) % len(modes) if current in modes else 0
+    state.camera_mode = modes[next_idx]
+    return {"ok": True, "mode": state.camera_mode}
 
 
 # ── jog ──────────────────────────────────────────────────────────────────────
@@ -361,6 +393,7 @@ def api_status():
         "last_roll_deg": state.last_roll_deg,
         "last_center_depth": state.last_center_depth,
         "heatmap_mode": state.heatmap_mode,
+        "camera_mode": getattr(state, "camera_mode", "rgb"),
         "grid_rows": state.grid_rows,
         "grid_cols": state.grid_cols,
         "grid_points": state.grid_points,

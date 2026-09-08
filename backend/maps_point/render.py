@@ -34,7 +34,10 @@ def draw_overlay(frame, state):
     cv2.rectangle(frame, (0, h - 24), (w, h), (28, 28, 28), -1)
     cv2.putText(frame, txt, (6, h - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 220, 200), 1, cv2.LINE_AA)
 
-    if state.heatmap_mode:
-        cv2.putText(frame, "DEPTH HEATMAP", (w - 150, 20),
+    if getattr(state, "camera_mode", "rgb") == "depth" or state.heatmap_mode:
+        cv2.putText(frame, "DEPTH", (w - 80, 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (80, 80, 255), 1, cv2.LINE_AA)
+    elif getattr(state, "camera_mode", "rgb") == "gray":
+        cv2.putText(frame, "GRAYSCALE", (w - 110, 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1, cv2.LINE_AA)
     return frame
