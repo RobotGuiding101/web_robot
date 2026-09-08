@@ -1,6 +1,24 @@
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 
-const TopBar = ({ title, ip = '192.168.1.100', onEmergency }) => {
+const TopBar = ({ title, onEmergency }) => {
+  const [ip, setIp] = useState(
+    () => localStorage.getItem('robot_ip') || '192.168.10.110'
+  )
+
+  useEffect(() => {
+    const onIpChange = () => {
+      setIp(localStorage.getItem('robot_ip') || '192.168.10.110')
+    }
+    window.addEventListener('robot_ip_changed', onIpChange)
+    window.addEventListener('storage', (e) => {
+      if (e.key === 'robot_ip') onIpChange()
+    })
+    return () => {
+      window.removeEventListener('robot_ip_changed', onIpChange)
+      window.removeEventListener('storage', onIpChange)
+    }
+  }, [])
+
   return (
     <div className="topbar">
       <span className="page-title">{title}</span>
