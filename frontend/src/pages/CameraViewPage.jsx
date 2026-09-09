@@ -187,8 +187,8 @@ const CameraViewPage = () => {
                         cameraMode === 'rgb'
                           ? 'rgba(37, 99, 235, 0.8)'
                           : cameraMode === 'depth'
-                          ? 'rgba(220, 38, 38, 0.8)'
-                          : 'rgba(75, 85, 99, 0.8)',
+                            ? 'rgba(220, 38, 38, 0.8)'
+                            : 'rgba(75, 85, 99, 0.8)',
                       borderRadius: '20px',
                       padding: '5px 12px',
                       fontSize: '11px',
@@ -319,25 +319,67 @@ const CameraViewPage = () => {
                 }}
               />
 
-              {/* ช่องขวาล่าง (Camera Status) */}
+              {/* ช่องขวาล่าง - D-pad + O-pad */}
               <div
-                className="card"
+                className="carddd"
                 style={{
                   flex: 1,
-                  minHeight: '120px',
+                  minHeight: '250px',
                   borderRadius: '12px',
                   padding: '16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '40px',
                 }}
               >
-                <div style={{ fontSize: '13px', fontWeight: '600', marginBottom: '12px' }}>
-                  Camera Status
+                {/* o-pad ด้านซ้าย */}
+                <nav className="o-pad">
+                  <a
+                    className="up"
+                    href="#"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      console.log('UP')
+                    }}
+                  />
+                  <a
+                    className="right"
+                    href="#"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      console.log('RIGHT')
+                    }}
+                  />
+                  <a
+                    className="down"
+                    href="#"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      console.log('DOWN')
+                    }}
+                  />
+                  <a
+                    className="left"
+                    href="#"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      console.log('LEFT')
+                    }}
+                  />
+                </nav>
+
+                {/* ด้านขวา */}
+                <div className="ud-pad">
+                  <button className="ud-btn up" onClick={() => console.log("UP")}>
+                    <span></span>
+                  </button>
+
+                  <button className="ud-btn down" onClick={() => console.log("DOWN")}>
+                    <span></span>
+                  </button>
                 </div>
-                <div style={{ fontSize: '12px', color: '#aaa', lineHeight: '2' }}>
-                  <div>Connected: <strong style={{ color: status.connected ? '#4ade80' : '#ef4444' }}>{status.connected ? 'Yes' : 'No'}</strong></div>
-                  <div>Camera: <strong style={{ color: status.camera_running ? '#4ade80' : '#ef4444' }}>{status.camera_running ? 'Running' : 'Stopped'}</strong></div>
-                  <div>Mode: <strong style={{ color: cameraMode === 'rgb' ? '#60a5fa' : cameraMode === 'depth' ? '#f87171' : '#9ca3af' }}>{cameraMode.toUpperCase()}</strong></div>
-                  <div>Robot Mode: <strong style={{ color: '#60a5fa' }}>{status.robot_mode_label || '?'}</strong></div>
-                </div>
+
               </div>
             </div>
           </div>

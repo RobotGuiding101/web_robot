@@ -284,6 +284,22 @@ body {
   min-height: 44px;
   box-shadow: 0 2px 8px rgba(74, 114, 160, 0.05);
 }
+.carddd {
+  background-color: #f0f3f8;
+  border: 1.5px solid #cdd6e3;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 18px;
+  text-align: center;
+  color: #1a2f45;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+  min-height: 44px;
+  box-shadow: 0 2px 8px rgba(74, 114, 160, 0.05);
+}
 
 .card:hover {
   background-color: #e2f0fd;
@@ -3245,4 +3261,304 @@ body {
 
 .relay-toggle--on .relay-toggle-thumb {
   transform: translateX(24px);
+}
+
+.o-pad {
+  position: relative;
+  background: #ddd;
+  width: 200px;
+  height: 200px;
+  border-radius: 50%;
+  overflow: hidden;
+}
+
+.o-pad::after {
+  content: '';
+  position: absolute;
+  z-index: 2;
+  width: 20%;
+  height: 20%;
+  top: 50%;
+  left: 50%;
+  background: #ddd;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  display: none;
+  transition: all .25s;
+  cursor: pointer;
+}
+
+.o-pad:hover::after {
+  width: 30%;
+  height: 30%;
+}
+
+.o-pad a {
+  display: block;
+  position: absolute;
+  -webkit-tap-highlight-color: rgba(255, 255, 255, 0);
+  width: 50%;
+  height: 50%;
+  text-align: center;
+  transform: rotate(45deg);
+  border: 1px solid rgba(0, 0, 0, .2);
+}
+
+.o-pad a::before {
+  content: '';
+  position: absolute;
+  width: 60%;
+  height: 60%;
+  top: 50%;
+  left: 50%;
+  background: rgba(255, 255, 255, .1);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  transition: all .25s;
+  cursor: pointer;
+  display: none;
+}
+
+.o-pad a::after {
+  content: '';
+  position: absolute;
+  width: 0;
+  height: 0;
+  border-radius: 5px;
+  border-style: solid;
+  transform: translate(-50%, -50%) rotate(-45deg);
+  transition: all .25s;
+}
+
+/* UP */
+.o-pad a.up {
+  bottom: 50%;
+  left: 50%;
+  transform: translate(-50%, -20%) rotate(45deg);
+  border-top-left-radius: 50%;
+  z-index: 1;
+}
+
+.o-pad a.up:hover {
+  background: linear-gradient(
+    315deg,
+    rgba(255,255,255,0) 15%,
+    rgba(255,255,255,.4) 100%
+  );
+}
+
+.o-pad a.up::before {
+  left: 57%;
+  top: 57%;
+}
+
+.o-pad a.up::after {
+  left: 53%;
+  top: 53%;
+  border-width: 0 13px 19px 13px;
+  border-color: transparent transparent #aaa transparent;
+}
+
+.o-pad a.up:active::after {
+  border-bottom-color: #333;
+}
+
+/* DOWN */
+.o-pad a.down {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, 20%) rotate(45deg);
+  border-bottom-right-radius: 50%;
+  z-index: 1;
+}
+
+.o-pad a.down:hover {
+  background: linear-gradient(
+    135deg,
+    rgba(255,255,255,0) 15%,
+    rgba(255,255,255,.4) 100%
+  );
+}
+
+.o-pad a.down::before {
+  left: 43%;
+  top: 43%;
+}
+
+.o-pad a.down::after {
+  left: 47%;
+  top: 47%;
+  border-width: 19px 13px 0 13px;
+  border-color: #aaa transparent transparent transparent;
+}
+
+.o-pad a.down:active::after {
+  border-top-color: #333;
+}
+
+/* LEFT */
+.o-pad a.left {
+  top: 50%;
+  right: 50%;
+  transform: translate(-20%, -50%) rotate(45deg);
+  border-bottom-left-radius: 50%;
+  border: none;
+}
+
+.o-pad a.left:hover {
+  background: linear-gradient(
+    225deg,
+    rgba(255,255,255,0) 15%,
+    rgba(255,255,255,.4) 100%
+  );
+}
+
+.o-pad a.left::before {
+  left: 57%;
+  top: 43%;
+}
+
+.o-pad a.left::after {
+  left: 53%;
+  top: 47%;
+  border-width: 13px 19px 13px 0;
+  border-color: transparent #aaa transparent transparent;
+}
+
+.o-pad a.left:active::after {
+  border-right-color: #333;
+}
+
+/* RIGHT */
+.o-pad a.right {
+  top: 50%;
+  left: 50%;
+  transform: translate(20%, -50%) rotate(45deg);
+  border-top-right-radius: 50%;
+  border: none;
+}
+
+.o-pad a.right:hover {
+  background: linear-gradient(
+    45deg,
+    rgba(255,255,255,0) 15%,
+    rgba(255,255,255,.4) 100%
+  );
+}
+
+.o-pad a.right::before {
+  left: 43%;
+  top: 57%;
+}
+
+.o-pad a.right::after {
+  left: 47%;
+  top: 53%;
+  border-width: 13px 0 13px 19px;
+  border-color: transparent transparent transparent #aaa;
+}
+
+.o-pad a.right:active::after {
+  border-left-color: #333;
+}
+
+/* Hover animation ของลูกศร */
+.o-pad a:hover::after {
+  left: 50%;
+  top: 50%;
+}
+
+.ud-pad {
+  position: relative;
+  width: 120px;
+  height: 200px;
+  background: #ddd;
+  border-radius: 60px;
+  overflow: hidden;
+}
+
+/* ปุ่ม */
+.ud-btn {
+  position: absolute;
+  left: 50%;
+  width: 100%;
+  height: 50%;
+  transform: translateX(-50%);
+  border: none;
+  background: #ddd;
+  cursor: pointer;
+  transition: all 0.25s;
+}
+
+/* UP */
+.ud-btn.up {
+  top: 0;
+  border-radius: 60px 60px 20px 20px;
+}
+
+.ud-btn.up:hover {
+  background: linear-gradient(
+    315deg,
+    rgba(255,255,255,0) 15%,
+    rgba(255,255,255,.4) 100%
+  );
+}
+
+/* DOWN */
+.ud-btn.down {
+  bottom: 0;
+  border-radius: 20px 20px 60px 60px;
+}
+
+.ud-btn.down:hover {
+  background: linear-gradient(
+    135deg,
+    rgba(255,255,255,0) 15%,
+    rgba(255,255,255,.4) 100%
+  );
+}
+
+/* ลูกศร */
+.ud-btn span {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  transform: translate(-50%, -50%);
+  transition: all 0.25s;
+}
+
+/* ลูกศร UP */
+.ud-btn.up span {
+  border-left: 12px solid transparent;
+  border-right: 12px solid transparent;
+  border-bottom: 18px solid #aaa;
+}
+
+.ud-btn.up:hover span {
+  border-bottom-color: #999;
+  transform: translate(-50%, -60%);
+}
+
+.ud-btn.up:active span {
+  border-bottom-color: #333;
+  transform: translate(-50%, -50%);
+}
+
+/* ลูกศร DOWN */
+.ud-btn.down span {
+  border-left: 12px solid transparent;
+  border-right: 12px solid transparent;
+  border-top: 18px solid #aaa;
+}
+
+.ud-btn.down:hover span {
+  border-top-color: #999;
+  transform: translate(-50%, -40%);
+}
+
+.ud-btn.down:active span {
+  border-top-color: #333;
+  transform: translate(-50%, -50%);
 }
