@@ -1,8 +1,9 @@
 import os
+import threading
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
-load_dotenv()  # Load .env BEFORE importing database (which reads DATABASE_URL)
+load_dotenv()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,9 +15,20 @@ from routers import devices as devices_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create all tables on startup (idempotent)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    
+    def _auto_start_camera():
+        try:
+            from routers.mapcontrol import cam, robot
+            if not cam._running:
+                if not robot.connected:
+                    robot.connect()
+                cam.start()
+        except Exception as e:
+            print(f"[AutoStart] Camera failed: {e}")
+    
+    threading.Thread(target=_auto_start_camera, daemon=True).start()
     yield
 
 

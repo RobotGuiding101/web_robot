@@ -9,7 +9,7 @@ const LOG_MAX = 200
 const STATUS_POLL_MS = 1000
 
 // ── Jog Button Group ──────────────────────────────────────────────────────────
-const JogGroup = ({ axes, onMove }) => (
+const JogGroup = ({ axes, onMove, disabled }) => (
   <div className="jog-panel">
     {axes.map((axis) => (
       <div key={axis} className="jog-row">
@@ -17,7 +17,8 @@ const JogGroup = ({ axes, onMove }) => (
           id={`jog-${axis}-minus`}
           className="jog-pill jog-pill--minus"
           onClick={() => onMove(axis, '-')}
-          title={`Decrease ${axis}`}
+          disabled={disabled}
+          title={disabled ? 'Robot not connected' : `Decrease ${axis}`}
         >
           <span className="jog-axis-badge">{axis}</span>
           <span className="jog-sign">-</span>
@@ -26,7 +27,8 @@ const JogGroup = ({ axes, onMove }) => (
           id={`jog-${axis}-plus`}
           className="jog-pill jog-pill--plus"
           onClick={() => onMove(axis, '+')}
-          title={`Increase ${axis}`}
+          disabled={disabled}
+          title={disabled ? 'Robot not connected' : `Increase ${axis}`}
         >
           <span className="jog-axis-badge">{axis}</span>
           <span className="jog-sign">+</span>
@@ -155,10 +157,15 @@ const DobotControllerPage = () => {
   const [homeStatus, setHomeStatus] = useState(null)
   const [errorStatus, setErrorStatus] = useState(null)
 
+  const [connected, setConnected] = useState(false)
+  const [jogError, setJogError] = useState(null)
+  const [viewerReady, setViewerReady] = useState(false)
+
   // ── Stable cache-buster ──
   const viewerKey = useRef(Date.now())
   const viewerBoxRef = useRef(null)
   const [isViewerFullscreen, setIsViewerFullscreen] = useState(false)
+  const jogGuardRef = useRef(0)
 
   // ── Auto-connect + init robot on mount ─────────────────────────────────
   useEffect(() => {
@@ -186,51 +193,54 @@ const DobotControllerPage = () => {
   }, [])
 
   // ── Poll real robot status from /api/map/status ──────────────────────────
+  const fetchStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/map/status')
+      if (!res.ok) return
+      const data = await res.json()
+
+      setConnected(!!data.connected)
+
+      const guarded = Date.now() < jogGuardRef.current
+
+      if (!guarded && Array.isArray(data.pose) && data.pose.length === 6) {
+        setPos({
+          X: +data.pose[0].toFixed(2),
+          Y: +data.pose[1].toFixed(2),
+          Z: +data.pose[2].toFixed(2),
+          RX: +data.pose[3].toFixed(2),
+          RY: +data.pose[4].toFixed(2),
+          RZ: +data.pose[5].toFixed(2),
+        })
+      }
+
+      if (!guarded && Array.isArray(data.angles) && data.angles.length === 6) {
+        setJoints({
+          J1: +data.angles[0].toFixed(2),
+          J2: +data.angles[1].toFixed(2),
+          J3: +data.angles[2].toFixed(2),
+          J4: +data.angles[3].toFixed(2),
+          J5: +data.angles[4].toFixed(2),
+          J6: +data.angles[5].toFixed(2),
+        })
+      }
+    } catch { /* ignore */ }
+  }, [])
+
   useEffect(() => {
-    let dead = false
-    const fetchStatus = async () => {
-      try {
-        const res = await fetch('/api/map/status')
-        if (!res.ok || dead) return
-        const data = await res.json()
-        if (dead) return
-
-        if (Array.isArray(data.pose) && data.pose.length === 6) {
-          setPos({
-            X: +data.pose[0].toFixed(2),
-            Y: +data.pose[1].toFixed(2),
-            Z: +data.pose[2].toFixed(2),
-            RX: +data.pose[3].toFixed(2),
-            RY: +data.pose[4].toFixed(2),
-            RZ: +data.pose[5].toFixed(2),
-          })
-        }
-
-        if (Array.isArray(data.angles) && data.angles.length === 6) {
-          setJoints({
-            J1: +data.angles[0].toFixed(2),
-            J2: +data.angles[1].toFixed(2),
-            J3: +data.angles[2].toFixed(2),
-            J4: +data.angles[3].toFixed(2),
-            J5: +data.angles[4].toFixed(2),
-            J6: +data.angles[5].toFixed(2),
-          })
-        }
-      } catch { /* ignore */ }
-    }
-
     fetchStatus()
     const interval = setInterval(fetchStatus, STATUS_POLL_MS)
-    return () => { dead = true; clearInterval(interval) }
-  }, [])
+    return () => clearInterval(interval)
+  }, [fetchStatus])
 
   // ── Sync real robot joints → 3D model iframe ─────────────────────────────
   useEffect(() => {
+    if (!viewerReady) return
     const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
     if (!iframe || !iframe.contentWindow) return
     const jArr = [joints.J1, joints.J2, joints.J3, joints.J4, joints.J5, joints.J6]
     iframe.contentWindow.postMessage({ type: 'setJoints', joints: jArr }, '*')
-  }, [joints])
+  }, [joints, viewerReady])
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleEmergency = () => {
@@ -305,27 +315,41 @@ const DobotControllerPage = () => {
     }
   }
 
-  const handleMove = (axis, direction) => {
+  const handleMove = async (axis, direction) => {
+    if (!connected) return
     const delta = direction === '+' ? stepValue : -stepValue
     setLastMoved(`${axis}${direction}`)
+    setJogError(null)
+    jogGuardRef.current = Date.now() + 700
 
-    // Send jog command to real robot via /api/map (with speed)
-    if (axis.startsWith('J')) {
-      const jointNum = parseInt(axis.replace('J', ''))
-      fetch('/api/map/jog_joint', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ joint: jointNum, amount: delta, speed }),
-      }).catch(() => { })
+    const isJoint = axis.startsWith('J')
+    const url = isJoint ? '/api/map/jog_joint' : '/api/map/jog'
+    const body = isJoint
+      ? { joint: parseInt(axis.replace('J', '')), amount: delta, speed }
+      : { axis: axis.toLowerCase(), amount: delta, speed }
+
+    if (isJoint) {
       setJoints((prev) => ({ ...prev, [axis]: +(prev[axis] + delta).toFixed(2) }))
     } else {
-      fetch('/api/map/jog', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ axis: axis.toLowerCase(), amount: delta, speed }),
-      }).catch(() => { })
       setPos((prev) => ({ ...prev, [axis]: +(prev[axis] + delta).toFixed(2) }))
     }
+
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || (data && data.ok === false)) {
+        setJogError((data && data.error) || 'Jog rejected')
+        setTimeout(() => setJogError(null), 3000)
+      }
+    } catch {
+      setJogError('Jog request failed')
+      setTimeout(() => setJogError(null), 3000)
+    }
+    setTimeout(fetchStatus, 800)
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -348,6 +372,7 @@ const DobotControllerPage = () => {
                   title="Robot Arm 3D Viewer"
                   style={{ width: '100%', height: '100%', border: 'none', display: 'block', borderRadius: '14px' }}
                   allow="accelerometer"
+                  onLoad={() => setViewerReady(true)}
                 />
                 <button
                   className="dobot-fullscreen-btn"
@@ -369,9 +394,27 @@ const DobotControllerPage = () => {
                   <span className="ctrl-box-title">Control Panel</span>
                 </div>
                 <div className="ctrl-box-header-right">
+                  {jogError && (
+                    <span style={{ color: '#ef4444', fontSize: '12px', fontWeight: 600 }}>{jogError}</span>
+                  )}
                   {lastMoved && (
                     <span className="ctrl-last-action">Last: <strong>{lastMoved}</strong></span>
                   )}
+                  <span
+                    style={{
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.4px',
+                      padding: '4px 10px',
+                      borderRadius: '12px',
+                      background: connected ? 'rgba(74, 222, 128, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                      color: connected ? '#4ade80' : '#ef4444',
+                      border: `1px solid ${connected ? 'rgba(74, 222, 128, 0.4)' : 'rgba(239, 68, 68, 0.4)'}`,
+                    }}
+                  >
+                    {connected ? 'Connected' : 'Disconnected'}
+                  </span>
                   <button
                     id="btn-clear-error"
                     className={`init-btn init-btn--secondary${errorStatus === 'ok' ? ' init-btn--ok' : ''}${errorStatus === 'error' ? ' init-btn--error' : ''}`}
@@ -457,14 +500,14 @@ const DobotControllerPage = () => {
               </div>
 
               {/* ── Jog Panels ── */}
-              <div className="jog-dual">
+                <div className="jog-dual">
                 <div className="jog-box">
                   <div className="jog-box-header"><span className="jog-box-title">Cartesian</span></div>
-                  <JogGroup axes={CARTESIAN_AXES} onMove={handleMove} />
+                  <JogGroup axes={CARTESIAN_AXES} onMove={handleMove} disabled={!connected} />
                 </div>
                 <div className="jog-box">
                   <div className="jog-box-header"><span className="jog-box-title">Joint</span></div>
-                  <JogGroup axes={JOINT_AXES} onMove={handleMove} />
+                  <JogGroup axes={JOINT_AXES} onMove={handleMove} disabled={!connected} />
                 </div>
               </div>
 

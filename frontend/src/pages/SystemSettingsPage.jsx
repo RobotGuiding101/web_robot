@@ -2,16 +2,6 @@ import React, { useState, useEffect } from 'react'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
 
-/* ── helper: toggle-switch ─────────────────────── */
-const Toggle = ({ id, checked, onChange }) => (
-  <label className="settings-toggle" htmlFor={id}>
-    <input id={id} type="checkbox" checked={checked} onChange={onChange} />
-    <span className="settings-toggle-track">
-      <span className="settings-toggle-thumb" />
-    </span>
-  </label>
-)
-
 /* ── helper: settings row ──────────────────────── */
 const SettingsRow = ({ label, hint, children }) => (
   <div className="settings-row">
@@ -55,10 +45,11 @@ const SystemSettingsPage = () => {
   const [robotLoading, setRobotLoading] = useState(false)
 
   /* Camera */
-  const [cam0Index, setCam0Index] = useState('0')
-  const [cam1Index, setCam1Index] = useState('1')
-  const [cam0Enabled, setCam0Enabled] = useState(true)
-  const [cam1Enabled, setCam1Enabled] = useState(true)
+  const [camDevices, setCamDevices] = useState([])
+  const [camSelected, setCamSelected] = useState('')
+  const [camRunning, setCamRunning] = useState(false)
+  const [camBusy, setCamBusy] = useState(false)
+  const [camMsg, setCamMsg] = useState(null)
 
   /* Home / Init Position */
   const [homeX, setHomeX] = useState(() => localStorage.getItem('home_x') || '0.0')
@@ -90,6 +81,58 @@ const SystemSettingsPage = () => {
       })
       .catch(() => {})
   }, [])
+
+  useEffect(() => {
+    fetch('/api/camera/devices')
+      .then((r) => r.json())
+      .then((d) => {
+        setCamDevices(Array.isArray(d.devices) ? d.devices : [])
+        setCamSelected(d.selected || '')
+        setCamRunning(!!d.running)
+      })
+      .catch(() => {})
+  }, [])
+
+  /* ── Camera device scan / select ── */
+  const handleScanCameras = async () => {
+    setCamBusy(true)
+    setCamMsg(null)
+    try {
+      const res = await fetch('/api/camera/scan', { method: 'POST' })
+      const data = await res.json()
+      setCamDevices(Array.isArray(data.devices) ? data.devices : [])
+      setCamSelected(data.selected || '')
+      setCamRunning(!!data.running)
+      const n = data.devices ? data.devices.length : 0
+      setCamMsg(n > 0 ? `พบ ${n} กล้อง` : 'ไม่พบกล้อง')
+    } catch {
+      setCamMsg('สแกนไม่สำเร็จ')
+    } finally {
+      setCamBusy(false)
+      setTimeout(() => setCamMsg(null), 4000)
+    }
+  }
+
+  const handleSelectCamera = async (serial) => {
+    setCamBusy(true)
+    setCamMsg(null)
+    try {
+      const res = await fetch('/api/camera/select', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serial }),
+      })
+      const data = await res.json()
+      setCamSelected(data.selected || serial)
+      setCamRunning(!!data.running)
+      setCamMsg(data.ok ? 'สลับกล้องแล้ว' : 'เปิดกล้องไม่สำเร็จ')
+    } catch {
+      setCamMsg('สลับกล้องไม่สำเร็จ')
+    } finally {
+      setCamBusy(false)
+      setTimeout(() => setCamMsg(null), 4000)
+    }
+  }
 
   /* ── Robot connect test ── */
   const handleTestConnection = async () => {
@@ -128,11 +171,6 @@ const SystemSettingsPage = () => {
     showSaved('robot')
   }
 
-  const handleSaveCamera = () => {
-    showSaved('camera')
-  }
-
-  /* ── Home Handlers (local save only) ── */
   const handleSaveHome = () => {
     localStorage.setItem('home_x', homeX)
     localStorage.setItem('home_y', homeY)
@@ -273,35 +311,36 @@ const SystemSettingsPage = () => {
 
           {/* ── Camera Configuration ─────────────────────────── */}
           <Section title="Camera Configuration">
-            <SettingsRow label="Camera 0 (Main)" hint="USB /dev/video index">
-              <Toggle id="toggle-cam0" checked={cam0Enabled} onChange={(e) => setCam0Enabled(e.target.checked)} />
-              <input
-                id="setting-cam0-index"
-                className="settings-input settings-input--sm"
-                type="number"
-                value={cam0Index}
-                onChange={(e) => setCam0Index(e.target.value)}
-                disabled={!cam0Enabled}
-              />
+            <SettingsRow label="RealSense Device" hint="เลือกกล้องที่จะใช้ (ตาม Serial Number)">
+              <select
+                id="setting-camera-select"
+                className="settings-input"
+                value={camSelected}
+                onChange={(e) => handleSelectCamera(e.target.value)}
+                disabled={camBusy || camDevices.length === 0}
+              >
+                {camDevices.length === 0 && (
+                  <option value="">— ยังไม่พบกล้อง กด Scan Cameras —</option>
+                )}
+                {camDevices.map((d) => (
+                  <option key={d.serial} value={d.serial}>
+                    {(d.name || 'RealSense')} · {d.serial}{d.usb ? ` · ${d.usb}` : ''}
+                  </option>
+                ))}
+              </select>
             </SettingsRow>
-            <SettingsRow label="Camera 1 (Secondary)" hint="USB /dev/video index">
-              <Toggle id="toggle-cam1" checked={cam1Enabled} onChange={(e) => setCam1Enabled(e.target.checked)} />
-              <input
-                id="setting-cam1-index"
-                className="settings-input settings-input--sm"
-                type="number"
-                value={cam1Index}
-                onChange={(e) => setCam1Index(e.target.value)}
-                disabled={!cam1Enabled}
-              />
+            <SettingsRow label="Status">
+              <StatusBadge connected={camRunning} />
+              {camMsg && <span className="settings-feedback-msg">{camMsg}</span>}
             </SettingsRow>
             <div className="settings-actions">
               <button
-                id="btn-save-camera"
-                className={`settings-btn settings-btn--primary ${savedSection === 'camera' ? 'saved' : ''}`}
-                onClick={handleSaveCamera}
+                id="btn-scan-cameras"
+                className={`settings-btn settings-btn--secondary ${camBusy ? 'loading' : ''}`}
+                onClick={handleScanCameras}
+                disabled={camBusy}
               >
-                {savedSection === 'camera' ? 'Saved' : 'Save'}
+                {camBusy ? <><span className="settings-spinner" /> Working…</> : 'Scan Cameras'}
               </button>
             </div>
           </Section>

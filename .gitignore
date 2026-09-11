@@ -1,0 +1,16 @@
+STRUCTURE.md
+
+# Pi5 connection info (contains credentials)
+PI5.md
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Tooling / editor
+.omo/
+.vscode/
+
+# Node
+node_modules/
+dist/

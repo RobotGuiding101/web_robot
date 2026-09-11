@@ -46,6 +46,7 @@ function getCanvasPathData(fc) {
 // ─── Main Component ───────────────────────────────────────────────────────────
 const DrawingModePage = () => {
   const canvasElRef   = useRef(null)
+  const dmViewportRef = useRef(null)
   const fabricRef     = useRef(null)
   const isDrawingRef  = useRef(false)
   const tempObjRef    = useRef(null)
@@ -419,6 +420,20 @@ const DrawingModePage = () => {
     return () => window.removeEventListener('keydown', onKey)
   }, [undo, redo, deleteSelected])
 
+  useEffect(() => {
+    const dock = document.getElementById('camera-stream-dock')
+    const el = document.getElementById('global-camera-stream')
+    const vp = dmViewportRef.current
+    if (el && vp) {
+      el.classList.add('dm-camera-bg')
+      vp.insertBefore(el, vp.firstChild)
+    }
+    return () => {
+      if (el) el.classList.remove('dm-camera-bg')
+      if (el && dock) dock.appendChild(el)
+    }
+  }, [])
+
   return (
     <div className="app-layout">
       <Sidebar />
@@ -429,15 +444,7 @@ const DrawingModePage = () => {
           <div className="dm-ipad-shell">
 
             {/* ── Camera + Canvas overlay (fills all remaining space) ── */}
-            <div className="dm-viewport">
-
-              {/* Camera feed — MJPEG stream from backend (use /api/map/video_feed) */}
-              <img
-                src="/api/map/video_feed"
-                alt="Camera 1"
-                className="dm-camera-bg"
-                onError={(e) => { e.currentTarget.style.display = 'none' }}
-              />
+            <div className="dm-viewport" ref={dmViewportRef}>
 
               {/* Fallback label when camera is offline */}
               <div className="dm-camera-offline">

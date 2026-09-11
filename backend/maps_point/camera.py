@@ -5,6 +5,12 @@ using depth alone (no color image, no per-point optical flow) — see its
 own docstring. Replaced the earlier cv2.fillPoly + LK-point-tracking
 approach on 2026-07-28 after that let a tracked corner drift onto the
 background with nothing to geometrically check it against.
+
+Architecture: Single Capture Thread pattern
+- ONE dedicated thread runs the capture loop (pipe.wait_for_frames())
+- Shared buffers (_color_buf, _depth_buf, _accel_buf) are written by capture thread
+- Multiple consumers can read from buffers safely via thread-safe getters
+- No race conditions: only capture thread accesses hardware directly
 """
 import threading
 from time import sleep, time as _time
@@ -22,6 +28,40 @@ except ImportError:
     HAS_RS = False
 
 
+def list_devices(retries=3, delay=0.8):
+    for attempt in range(retries):
+        out = _list_devices_rs()
+        if out:
+            return out
+        if attempt < retries - 1:
+            sleep(delay)
+    return []
+
+
+def _list_devices_rs():
+    if not HAS_RS:
+        return []
+    out = []
+    try:
+        ctx = rs.context()
+        for d in ctx.query_devices():
+            row = {}
+            for key, name in ((rs.camera_info.serial_number, "serial"),
+                              (rs.camera_info.name, "name"),
+                              (rs.camera_info.product_line, "product"),
+                              (rs.camera_info.firmware_version, "firmware"),
+                              (rs.camera_info.usb_type_descriptor, "usb")):
+                try:
+                    row[name] = d.get_info(key)
+                except Exception:
+                    row[name] = None
+            if row.get("serial"):
+                out.append(row)
+    except Exception as e:
+        log(f"  [Cam] list_devices failed: {e}")
+    return out
+
+
 class Camera:
     def __init__(self):
         self.pipe       = None
@@ -29,70 +69,67 @@ class Camera:
         self.w = 848; self.h = 480
         self._running   = False
         self._align     = None
+        self.serial     = CAM_SERIAL
+        
+        # ── Shared buffers (written by capture thread, read by anyone) ──
         self._depth_buf: list = []
         self._depth_lock = threading.Lock()
-        # latest COLOR frame, written only by get_frames() (called by the
-        # MJPEG generator loop) — see get_latest_color()'s docstring for
-        # why this exists: pyrealsense2's pipeline isn't safe to pull from
-        # concurrently, so anything that needs a color frame (the align
-        # point tracker) must read this instead of calling get_frames()
-        # itself from a second thread.
         self._color_buf  = None
         self._color_lock = threading.Lock()
-        # latest accelerometer sample (gravity vector, m/s^2, in the D455's
-        # own IMU axes) — an independent, physically-grounded check of how
-        # the camera is actually oriented, separate from both the vision
-        # PCA plane fit AND the robot controller's own reported Rx/Ry/Rz
-        # (added 2026-07-27g at the user's suggestion, to help diagnose
-        # "which way is it really tilting" questions that pixel-drift
-        # analysis alone couldn't answer confidently). No IMU-to-optical-
-        # frame extrinsic calibration is applied here — this is the raw
-        # 3-axis reading, not a derived "tilt from vertical" angle; don't
-        # invent a precise interpretation of it that isn't verified.
         self._accel_buf  = None
         self._accel_lock = threading.Lock()
         self._has_imu     = False
+        
+        # ── Capture thread control ──
+        self._capture_thread = None
+        self._capture_stop_event = threading.Event()
+        self._frame_count = 0
 
-    def start(self) -> bool:
+    def start(self, retries=3, retry_delay=1.0) -> bool:
         if not HAS_RS:
             log("  pyrealsense2 not installed"); return False
+        if self._running:
+            log("  [Cam] already running, stopping first")
+            self.stop()
+        if self._capture_thread and self._capture_thread.is_alive():
+            log("  [Cam] capture thread still running, stopping it")
+            self._capture_stop_event.set()
+            self._capture_thread.join(timeout=2.0)
         cfg = rs.config()
-        if CAM_SERIAL:
-            cfg.enable_device(CAM_SERIAL)
+        if self.serial:
+            cfg.enable_device(self.serial)
         cfg.enable_stream(rs.stream.depth, self.w, self.h, rs.format.z16, 30)
         cfg.enable_stream(rs.stream.color, self.w, self.h, rs.format.bgr8, 30)
-        # D455 has an onboard IMU (accel) separate from the depth/color
-        # sensors. enable_stream() itself won't raise for a stream the
-        # device doesn't have — the failure only shows up at pipe.start()
-        # — so try WITH accel first and fall back to depth+color only if
-        # that fails, rather than let an optional IMU take down the whole
-        # camera.
         imu_cfg = rs.config()
-        if CAM_SERIAL:
-            imu_cfg.enable_device(CAM_SERIAL)
+        if self.serial:
+            imu_cfg.enable_device(self.serial)
         imu_cfg.enable_stream(rs.stream.depth, self.w, self.h, rs.format.z16, 30)
         imu_cfg.enable_stream(rs.stream.color, self.w, self.h, rs.format.bgr8, 30)
         imu_cfg.enable_stream(rs.stream.accel)
-        try:
-            self.pipe   = rs.pipeline()
-            prof        = self.pipe.start(imu_cfg)
-            self._has_imu = True
-        except Exception as e:
-            log(f"  [Cam] accel stream unavailable, continuing without it  {e}")
-            self._has_imu = False
-            # Clean up the failed pipeline before retrying — without this
-            # the old pipeline still holds the device lock, causing the
-            # retry to hit "Device or resource busy" (errno=16).
+        
+        for attempt in range(retries):
             try:
-                self.pipe.stop()
-            except Exception:
-                pass
-            self.pipe = None
-            try:
-                self.pipe = rs.pipeline()
-                prof      = self.pipe.start(cfg)
-            except Exception as e2:
-                log(f"  [Cam] FAILED  {e2}"); return False
+                self.pipe   = rs.pipeline()
+                prof        = self.pipe.start(imu_cfg)
+                self._has_imu = True
+                break
+            except Exception as e:
+                log(f"  [Cam] attempt {attempt+1}/{retries} failed: {e}")
+                self._has_imu = False
+                if self.pipe:
+                    try:
+                        self.pipe.stop()
+                    except Exception:
+                        pass
+                    self.pipe = None
+                if attempt < retries - 1:
+                    sleep(retry_delay)
+                    continue
+                try:
+                    self.pipe = rs.pipeline()
+                    prof      = self.pipe.start(cfg)
+                except Exception as e2:
+                    log(f"  [Cam] FAILED  {e2}"); return False
         try:
             self._align = rs.align(rs.stream.color)
             ci          = prof.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
@@ -101,6 +138,9 @@ class Camera:
             self._running = True
             for _ in range(30):
                 self.pipe.wait_for_frames()
+            if self._running:
+                self._start_capture_thread()
+                sleep(0.2)  # Give capture thread time to initialize
             log(f"  [Cam] started  fx={ci.fx:.1f}  fy={ci.fy:.1f}  cx={ci.ppx:.1f}  cy={ci.ppy:.1f}"
                 f"  imu={self._has_imu}")
             return True
@@ -108,40 +148,56 @@ class Camera:
             log(f"  [Cam] FAILED  {e}"); return False
 
     def stop(self):
+        if self._capture_thread and self._capture_thread.is_alive():
+            self._capture_stop_event.set()
+            self._capture_thread.join(timeout=2.0)
         if self.pipe and self._running:
             self.pipe.stop()
             self._running = False
+            self.pipe = None
 
-    def get_frames(self):
-        """The ONLY method that calls pipe.wait_for_frames() — must only
-        ever be called from a single thread (the MJPEG generator loop in
-        main.py). Calling this concurrently from a second thread (e.g. the
-        align point tracker used to call it directly) races against the
-        RealSense pipeline and was causing the tracker to see stale/
-        skipped frames — exactly what caused the "points don't track in
-        real time, runs away" divergence seen on hardware 2026-07-25.
-        Anything else that needs a frame reads get_latest_color() or the
-        _depth_buf (via sample_depth/sample_plane_region_grow) instead."""
-        frameset = self.pipe.wait_for_frames()
-        if self._has_imu:
-            accel_f = frameset.first_or_default(rs.stream.accel)
-            if accel_f:
-                v = accel_f.as_motion_frame().get_motion_data()
-                with self._accel_lock:
-                    self._accel_buf = (v.x, v.y, v.z)
-        frames = self._align.process(frameset)
-        df = frames.get_depth_frame()
-        cf = frames.get_color_frame()
-        if df:
-            arr = np.asarray(df.get_data()).copy()
-            with self._depth_lock:
-                self._depth_buf.append(arr)
-                if len(self._depth_buf) > DEPTH_N_FRAMES:
-                    self._depth_buf.pop(0)
-        if cf:
-            with self._color_lock:
-                self._color_buf = np.asanyarray(cf.get_data()).copy()
-        return df, cf
+    def set_serial(self, serial: str):
+        self.serial = (serial or "").strip()
+
+    def _start_capture_thread(self):
+        self._capture_stop_event.clear()
+        self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self._capture_thread.start()
+
+    def _capture_loop(self):
+        while not self._capture_stop_event.is_set():
+            try:
+                if not self._running or self.pipe is None:
+                    sleep(0.1)
+                    continue
+                frameset = self.pipe.wait_for_frames()
+                if self._has_imu:
+                    accel_f = frameset.first_or_default(rs.stream.accel)
+                    if accel_f:
+                        v = accel_f.as_motion_frame().get_motion_data()
+                        with self._accel_lock:
+                            self._accel_buf = (v.x, v.y, v.z)
+                frames = self._align.process(frameset)
+                df = frames.get_depth_frame()
+                cf = frames.get_color_frame()
+                if df:
+                    arr = np.asarray(df.get_data()).copy()
+                    with self._depth_lock:
+                        self._depth_buf.append(arr)
+                        if len(self._depth_buf) > DEPTH_N_FRAMES:
+                            self._depth_buf.pop(0)
+                if cf:
+                    with self._color_lock:
+                        self._color_buf = np.asanyarray(cf.get_data()).copy()
+                self._frame_count += 1
+            except Exception as e:
+                if self._capture_stop_event.is_set():
+                    break
+                if "before start" in str(e):
+                    log(f"  [Cam] capture thread: pipeline not started, stopping")
+                    break
+                log(f"  [Cam] capture error: {e}")
+                sleep(0.01)
 
     def get_latest_accel(self):
         """Most recent accelerometer sample (ax,ay,az in m/s^2, D455 IMU
@@ -151,14 +207,38 @@ class Camera:
         with self._accel_lock:
             return self._accel_buf
 
+    def get_latest_frame(self):
+        """Get latest color and depth frames from shared buffers.
+        
+        Returns (color_frame, depth_frame) as numpy arrays, or (None, None)
+        if no frames available yet. Thread-safe — reads from buffers
+        written by capture thread.
+        """
+        with self._color_lock:
+            color = self._color_buf.copy() if self._color_buf is not None else None
+        with self._depth_lock:
+            depth = self._depth_buf[-1].copy() if self._depth_buf else None
+        return color, depth
+
+    def get_latest_frames_ref(self):
+        """Zero-copy variant of get_latest_frame() for read-only consumers
+        that encode/consume the frame immediately. The capture thread only
+        ever REPLACES buffer references (never mutates in place), so the
+        returned arrays are stable snapshots — callers must not mutate them.
+        """
+        with self._color_lock:
+            color = self._color_buf
+        with self._depth_lock:
+            depth = self._depth_buf[-1] if self._depth_buf else None
+        return color, depth
+
     def get_latest_color(self, max_wait: float = 2.0):
-        """Most recent color frame, written by get_frames() — does NOT
-        call pipe.wait_for_frames() itself, so it's safe to call from any
-        thread (used by align.py's point tracker). Waits briefly for the
-        MJPEG generator loop to have produced at least one frame; returns
-        None if it times out (camera not running, or nobody has
-        /video_feed open to drive frame capture — caller must abort, not
-        guess)."""
+        """Most recent color frame, written by capture thread.
+        
+        Does NOT call pipe.wait_for_frames() itself, so it's safe to call
+        from any thread. Waits briefly for the capture thread to have
+        produced at least one frame; returns None if it times out.
+        """
         deadline = _time() + max_wait
         while _time() < deadline:
             with self._color_lock:
@@ -168,21 +248,17 @@ class Camera:
         return None
 
     def _wait_depth_buf(self, min_frames: int = 3) -> list:
-        """Block briefly for the MJPEG generator's rolling buffer to fill
-        (that loop plays the role pick_45degree.py's view_loop played).
-        Falls back to direct capture when nobody has /video_feed open."""
-        for _ in range(15):
+        """Wait for the capture thread's rolling buffer to fill.
+        
+        No longer falls back to direct capture — the capture thread
+        runs continuously when camera is started.
+        """
+        for _ in range(30):
             with self._depth_lock:
                 buf = list(self._depth_buf)
             if len(buf) >= min_frames:
                 return buf
             sleep(0.03)
-        for _ in range(5):
-            self.get_frames()
-            with self._depth_lock:
-                buf = list(self._depth_buf)
-            if len(buf) >= min_frames:
-                return buf
         return buf
 
     def sample_depth(self, u: int, v: int) -> float:

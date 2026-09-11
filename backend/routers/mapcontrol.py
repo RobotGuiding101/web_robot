@@ -127,45 +127,84 @@ def _grid_fully_marked() -> bool:
                for i in range(state.grid_rows) for j in range(state.grid_cols))
 
 
+STREAM_FPS = 25
+STREAM_W = 640
+STREAM_H = 360
+STREAM_JPEG_QUALITY = 70
+
+
+def _colorize_depth(df):
+    vmax = int(df.max())
+    if vmax <= 0:
+        vmax = 1
+    norm = cv2.convertScaleAbs(df, alpha=255.0 / vmax)
+    return cv2.applyColorMap(norm, cv2.COLORMAP_JET)
+
+
 def _mjpeg_generator(mode: Optional[str] = None):
+    """MJPEG generator — reads from shared buffers, NOT from hardware directly.
+    
+    Multiple clients can run this generator simultaneously without conflict.
+    The capture thread in Camera class handles hardware access. Work is
+    deduplicated by the camera frame counter and rate-limited to STREAM_FPS
+    so an idle viewer cannot spin the JPEG encoder at 100% CPU.
+    """
+    interval = 1.0 / STREAM_FPS
+    last_count = -1
     while True:
+        loop_start = time.time()
         if not cam._running:
             time.sleep(0.2)
             continue
-        try:
-            df, cf = cam.get_frames()
-        except Exception:
-            time.sleep(0.05)
-            continue
-        if not cf:
+
+        cf, df = cam.get_latest_frames_ref()
+        if cf is None:
             time.sleep(0.02)
             continue
 
+        count = cam._frame_count
+        if count == last_count:
+            time.sleep(0.004)
+            continue
+        last_count = count
+
         effective_mode = (mode or getattr(state, "camera_mode", "rgb")).lower()
 
-        if (effective_mode == "depth" or state.heatmap_mode) and df:
-            raw = np.asanyarray(df.get_data()).astype(np.float32)
-            vmax = raw[raw > 0].max() if raw.any() else 1.0
-            norm = np.clip(raw / vmax * 255, 0, 255).astype(np.uint8)
-            frame = cv2.applyColorMap(norm, cv2.COLORMAP_JET)
+        if (effective_mode == "depth" or state.heatmap_mode) and df is not None:
+            frame = _colorize_depth(df)
+        elif effective_mode == "gray":
+            frame = cv2.cvtColor(cf, cv2.COLOR_BGR2GRAY)
+            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
         else:
-            frame = np.asanyarray(cf.get_data()).copy()
-            if effective_mode == "gray":
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                frame = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+            frame = cf.copy()
 
         frame = draw_overlay(frame, state)
-        ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+        if frame.shape[1] != STREAM_W or frame.shape[0] != STREAM_H:
+            frame = cv2.resize(frame, (STREAM_W, STREAM_H), interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), STREAM_JPEG_QUALITY])
         if not ok:
             continue
         yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n")
 
+        dt = time.time() - loop_start
+        if dt < interval:
+            time.sleep(interval - dt)
+
 
 # ── video stream ─────────────────────────────────────────────────────────────
+_STREAM_HEADERS = {
+    "X-Accel-Buffering": "no",
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
+
 @router.get("/video_feed")
 def video_feed(mode: Optional[str] = None):
     return StreamingResponse(_mjpeg_generator(mode=mode),
-                             media_type="multipart/x-mixed-replace; boundary=frame")
+                             media_type="multipart/x-mixed-replace; boundary=frame",
+                             headers=_STREAM_HEADERS)
 
 
 # ── robot / camera lifecycle ─────────────────────────────────────────────────
