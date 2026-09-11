@@ -31,6 +31,21 @@ const CameraViewPage = () => {
     return () => { dead = true; clearInterval(interval) }
   }, [])
 
+  useEffect(() => {
+    const autoStart = async () => {
+      try {
+        const statusRes = await fetch('/api/map/status')
+        if (!statusRes.ok) return
+        const statusData = await statusRes.json()
+        if (!statusData.camera_running) {
+          await fetch('/api/map/connect', { method: 'POST' })
+          await fetch('/api/map/camstart', { method: 'POST' })
+        }
+      } catch { /* ignore */ }
+    }
+    autoStart()
+  }, [])
+
   const handleEmergency = () => {
     fetch('/api/map/error', { method: 'POST' }).catch(() => { })
     alert('EMERGENCY STOP!')
@@ -63,6 +78,29 @@ const CameraViewPage = () => {
       await fetch('/api/map/camstart', { method: 'POST' })
     } catch { /* ignore */ }
   }
+
+  // Move the persistent global stream img into camera box on mount, back to dock on unmount
+  useEffect(() => {
+    const dock = document.getElementById('camera-stream-dock')
+    const img = document.getElementById('global-camera-stream')
+    const box = cameraBoxRef.current
+    if (img && box) {
+      box.appendChild(img)
+      img.style.display = 'block'
+      img.style.width = '100%'
+      img.style.height = '100%'
+      img.style.objectFit = 'contain'
+    }
+    return () => {
+      if (img && dock) {
+        dock.appendChild(img)
+        img.style.display = 'none'
+        img.style.width = ''
+        img.style.height = ''
+        img.style.objectFit = ''
+      }
+    }
+  }, [])
 
   // Track native fullscreen changes (e.g. user presses Escape)
   useEffect(() => {
@@ -105,19 +143,7 @@ const CameraViewPage = () => {
                 boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
               }}
             >
-              {status.camera_running ? (
-                <img
-                  ref={streamRef}
-                  src="/api/map/video_feed"
-                  alt="RealSense D455 Camera Stream"
-                  style={{
-                    width: '100%',
-                    height: '100%',
-                    objectFit: 'contain',
-                    display: 'block',
-                  }}
-                />
-              ) : (
+              {status.camera_running ? null : (
                 <div style={{ textAlign: 'center', color: '#888' }}>
                   <div style={{ fontSize: '48px', marginBottom: '12px' }}></div>
                   <div style={{ fontSize: '13px', marginBottom: '20px', color: '#777' }}>
