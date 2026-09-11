@@ -64,6 +64,11 @@ const DrawingModePage = () => {
   const [objectCount, setObjectCount] = useState(0)
   const [isSending,   setIsSending]   = useState(false)
 
+  // 3D Robot Model Floating Viewer
+  const viewerKey = useRef(Date.now())
+  const [is3DMinimized, setIs3DMinimized] = useState(false)
+  const [is3DExpanded, setIs3DExpanded]   = useState(false)
+
   // Refs for latest state values (avoid stale closures)
   const strokeColorRef = useRef(strokeColor)
   const fillColorRef   = useRef(fillColor)
@@ -451,6 +456,78 @@ const DrawingModePage = () => {
                 }
               }}>
                 <canvas ref={canvasElRef} id="drawing-canvas" />
+              </div>
+
+              {/* ── Floating 3D Robot Arm Model (Top-Right) ── */}
+              <div
+                className={`dm-3d-floating${is3DMinimized ? ' dm-3d-floating--minimized' : ''}${is3DExpanded ? ' dm-3d-floating--expanded' : ''}`}
+              >
+                {is3DMinimized ? (
+                  <button
+                    className="dm-3d-minimized-btn"
+                    onClick={() => setIs3DMinimized(false)}
+                    title="Show 3D Robot Model"
+                  >
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+                      <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+                      <line x1="12" y1="22.08" x2="12" y2="12" />
+                    </svg>
+                  </button>
+                ) : (
+                  <>
+                    {/* Header bar */}
+                    <div className="dm-3d-header">
+                      <div className="dm-3d-title-wrap">
+                        <span className="dm-3d-title-dot" />
+                        <span className="dm-3d-title-text">3D Robot Arm</span>
+                      </div>
+                      <div className="dm-3d-actions">
+                        <button
+                          className="dm-3d-btn"
+                          onClick={() => setIs3DExpanded(!is3DExpanded)}
+                          title={is3DExpanded ? 'Compact size' : 'Expand size'}
+                        >
+                          {is3DExpanded ? (
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="4 14 10 14 10 20" />
+                              <polyline points="20 10 14 10 14 4" />
+                              <line x1="14" y1="10" x2="21" y2="3" />
+                              <line x1="3" y1="21" x2="10" y2="14" />
+                            </svg>
+                          ) : (
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="15 3 21 3 21 9" />
+                              <polyline points="9 21 3 21 3 15" />
+                              <line x1="21" y1="3" x2="14" y2="10" />
+                              <line x1="3" y1="21" x2="10" y2="14" />
+                            </svg>
+                          )}
+                        </button>
+                        <button
+                          className="dm-3d-btn dm-3d-btn--close"
+                          onClick={() => setIs3DMinimized(true)}
+                          title="Minimize"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18" />
+                            <line x1="6" y1="6" x2="18" y2="18" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 3D Model iframe */}
+                    <div className="dm-3d-frame-wrap">
+                      <iframe
+                        src={`/robot-viewer.html?v=${viewerKey.current}`}
+                        title="Robot Arm 3D Viewer"
+                        className="dm-3d-frame"
+                        allow="accelerometer"
+                      />
+                    </div>
+                  </>
+                )}
               </div>
             </div>
 
