@@ -10,6 +10,10 @@ import SystemSettingsPage from './pages/SystemSettingsPage'
 function App() {
   return (
     <BrowserRouter>
+      {/* Persistent camera stream — NEVER unmounts, MJPEG connection stays alive */}
+      <div id="camera-stream-dock" style={{ display: 'none' }}>
+        <img id="global-camera-stream" src="/api/map/video_feed" alt="" />
+      </div>
       <Routes>
         <Route path="/" element={<Navigate to="/login" replace />} />
         <Route path="/login" element={<LoginPage />} />
