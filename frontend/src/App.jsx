@@ -6,13 +6,13 @@ import CameraViewPage from './pages/CameraViewPage'
 import DrawingModePage from './pages/DrawingModePage'
 import DobotControllerPage from './pages/DobotControllerPage'
 import SystemSettingsPage from './pages/SystemSettingsPage'
+import CameraStream from './components/CameraStream'
 
 function App() {
   return (
     <BrowserRouter>
-      {/* Persistent camera stream — NEVER unmounts, MJPEG connection stays alive */}
       <div id="camera-stream-dock" style={{ display: 'none' }}>
-        <img id="global-camera-stream" src="/api/map/video_feed" alt="" />
+        <CameraStream id="global-camera-stream" />
       </div>
       <Routes>
         <Route path="/" element={<Navigate to="/login" replace />} />

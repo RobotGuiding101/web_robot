@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
+import { setStreamMode } from '../components/CameraStream'
 
 const CameraViewPage = () => {
   const [status, setStatus] = useState({ connected: false, camera_running: false })
@@ -48,6 +49,7 @@ const CameraViewPage = () => {
         const data = await res.json()
         if (data.ok) {
           setCameraMode(data.mode)
+          setStreamMode(data.mode)
         }
       }
     } catch { /* ignore */ }
@@ -56,26 +58,13 @@ const CameraViewPage = () => {
     }
   }
 
-  // Move the persistent global stream img into camera box on mount, back to dock on unmount
   useEffect(() => {
     const dock = document.getElementById('camera-stream-dock')
-    const img = document.getElementById('global-camera-stream')
+    const el = document.getElementById('global-camera-stream')
     const box = cameraBoxRef.current
-    if (img && box) {
-      box.appendChild(img)
-      img.style.display = 'block'
-      img.style.width = '100%'
-      img.style.height = '100%'
-      img.style.objectFit = 'contain'
-    }
+    if (el && box) box.appendChild(el)
     return () => {
-      if (img && dock) {
-        dock.appendChild(img)
-        img.style.display = 'none'
-        img.style.width = ''
-        img.style.height = ''
-        img.style.objectFit = ''
-      }
+      if (el && dock) dock.appendChild(el)
     }
   }, [])
 

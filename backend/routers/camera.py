@@ -5,7 +5,8 @@ from pydantic import BaseModel
 import cv2
 import numpy as np
 
-from routers.mapcontrol import cam, state, _mjpeg_generator
+from routers.mapcontrol import cam, state, _mjpeg_generator, _STREAM_HEADERS
+from maps_point.camera import list_devices
 from maps_point.render import draw_overlay
 
 router = APIRouter()
@@ -13,6 +14,10 @@ router = APIRouter()
 
 class CameraModeBody(BaseModel):
     mode: str  # "rgb", "gray", or "depth"
+
+
+class CameraSelectBody(BaseModel):
+    serial: str = ""
 
 
 @router.get("/mode")
@@ -41,12 +46,52 @@ def toggle_camera_mode():
     return {"ok": True, "mode": state.camera_mode}
 
 
+@router.get("/devices")
+def get_camera_devices():
+    """Cached RealSense device list plus the currently selected serial."""
+    return {
+        "devices": getattr(state, "camera_devices", []),
+        "selected": cam.serial,
+        "running": cam._running,
+    }
+
+
+@router.post("/scan")
+def scan_camera_devices():
+    """Enumerate RealSense devices. Listed serials are librealsense's own
+    serial numbers (the USB iSerial differs, so it must not be used for
+    enable_device()). Falls back to stopping the pipeline and retrying if
+    enumeration fails while it is running."""
+    devices = list_devices()
+    if not devices and cam._running:
+        cam.stop()
+        devices = list_devices()
+        cam.start()
+    state.camera_devices = devices
+    return {
+        "ok": True,
+        "devices": devices,
+        "selected": cam.serial,
+        "running": cam._running,
+    }
+
+
+@router.post("/select")
+def select_camera(body: CameraSelectBody):
+    """Switch to a specific RealSense by serial. Empty string = first device."""
+    cam.stop()
+    cam.set_serial(body.serial)
+    ok = cam.start()
+    return {"ok": ok, "selected": cam.serial, "running": cam._running}
+
+
 @router.get("/stream")
 def camera_stream(mode: Optional[str] = None):
     """Stream MJPEG video feed (supports optional ?mode=rgb or ?mode=gray)."""
     return StreamingResponse(
         _mjpeg_generator(mode=mode),
-        media_type="multipart/x-mixed-replace; boundary=frame"
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers=_STREAM_HEADERS,
     )
 
 

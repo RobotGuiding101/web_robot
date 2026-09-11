@@ -1224,6 +1224,15 @@ body {
   background: #cdd6e3;
 }
 
+.jog-pill:disabled,
+.jog-pill:disabled:hover {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+  background: #f0f3f8;
+}
+
 .jog-pill--minus {
   border-left: 3.5px solid #ef4444;
 }
