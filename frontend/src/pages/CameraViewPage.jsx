@@ -7,7 +7,6 @@ const CameraViewPage = () => {
   const [cameraMode, setCameraMode] = useState('rgb')
   const [modeLoading, setModeLoading] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
-  const streamRef = useRef(null)
   const cameraBoxRef = useRef(null)
 
   // Poll robot/camera status
@@ -29,21 +28,6 @@ const CameraViewPage = () => {
     fetchStatus()
     const interval = setInterval(fetchStatus, 2000)
     return () => { dead = true; clearInterval(interval) }
-  }, [])
-
-  useEffect(() => {
-    const autoStart = async () => {
-      try {
-        const statusRes = await fetch('/api/map/status')
-        if (!statusRes.ok) return
-        const statusData = await statusRes.json()
-        if (!statusData.camera_running) {
-          await fetch('/api/map/connect', { method: 'POST' })
-          await fetch('/api/map/camstart', { method: 'POST' })
-        }
-      } catch { /* ignore */ }
-    }
-    autoStart()
   }, [])
 
   const handleEmergency = () => {
@@ -70,13 +54,6 @@ const CameraViewPage = () => {
     finally {
       setModeLoading(false)
     }
-  }
-
-  const handleStartCamera = async () => {
-    try {
-      await fetch('/api/map/connect', { method: 'POST' })
-      await fetch('/api/map/camstart', { method: 'POST' })
-    } catch { /* ignore */ }
   }
 
   // Move the persistent global stream img into camera box on mount, back to dock on unmount
@@ -143,31 +120,6 @@ const CameraViewPage = () => {
                 boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
               }}
             >
-              {status.camera_running ? null : (
-                <div style={{ textAlign: 'center', color: '#888' }}>
-                  <div style={{ fontSize: '48px', marginBottom: '12px' }}></div>
-                  <div style={{ fontSize: '13px', marginBottom: '20px', color: '#777' }}>
-                    {status.connected ? 'Camera not started' : 'Robot not connected'}
-                  </div>
-                  <button
-                    onClick={handleStartCamera}
-                    style={{
-                      background: '#1a8fe3',
-                      color: '#fff',
-                      border: 'none',
-                      borderRadius: '8px',
-                      padding: '10px 24px',
-                      cursor: 'pointer',
-                      fontSize: '14px',
-                      fontWeight: '600',
-                      boxShadow: '0 4px 12px rgba(26, 143, 227, 0.35)',
-                    }}
-                  >
-                    Start Camera
-                  </button>
-                </div>
-              )}
-
               {/* Status indicator & Active Mode Tag (Top-Left) */}
               <div
                 style={{
@@ -199,36 +151,34 @@ const CameraViewPage = () => {
                       width: '8px',
                       height: '8px',
                       borderRadius: '50%',
-                      background: status.camera_running ? '#4ade80' : '#ef4444',
-                      boxShadow: status.camera_running ? '0 0 8px #4ade80' : 'none',
+                      background: status.camera_running ? '#4ade80' : '#22c55e',
+                      boxShadow: '0 0 8px #4ade80',
                     }}
                   />
-                  {status.camera_running ? 'LIVE' : 'OFFLINE'}
+                  LIVE
                 </div>
 
-                {status.camera_running && (
-                  <div
-                    style={{
-                      background:
-                        cameraMode === 'rgb'
-                          ? 'rgba(37, 99, 235, 0.8)'
-                          : cameraMode === 'depth'
-                            ? 'rgba(220, 38, 38, 0.8)'
-                            : 'rgba(75, 85, 99, 0.8)',
-                      borderRadius: '20px',
-                      padding: '5px 12px',
-                      fontSize: '11px',
-                      fontWeight: '700',
-                      color: '#fff',
-                      backdropFilter: 'blur(8px)',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.6px',
-                      border: '1px solid rgba(255, 255, 255, 0.15)',
-                    }}
-                  >
-                    {cameraMode}
-                  </div>
-                )}
+                <div
+                  style={{
+                    background:
+                      cameraMode === 'rgb'
+                        ? 'rgba(37, 99, 235, 0.8)'
+                        : cameraMode === 'depth'
+                          ? 'rgba(220, 38, 38, 0.8)'
+                          : 'rgba(75, 85, 99, 0.8)',
+                    borderRadius: '20px',
+                    padding: '5px 12px',
+                    fontSize: '11px',
+                    fontWeight: '700',
+                    color: '#fff',
+                    backdropFilter: 'blur(8px)',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.6px',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                  }}
+                >
+                  {cameraMode}
+                </div>
               </div>
 
               {/* Controls inside camera (Top-Right) */}
@@ -257,7 +207,7 @@ const CameraViewPage = () => {
                 >
                   <button
                     onClick={() => handleModeChange('rgb')}
-                    disabled={!status.camera_running || modeLoading}
+                    disabled={modeLoading}
                     style={{
                       background: cameraMode === 'rgb' ? '#2563eb' : 'transparent',
                       color: cameraMode === 'rgb' ? '#fff' : '#aaa',
@@ -266,7 +216,7 @@ const CameraViewPage = () => {
                       padding: '6px 14px',
                       fontSize: '13px',
                       fontWeight: cameraMode === 'rgb' ? '700' : '500',
-                      cursor: status.camera_running ? 'pointer' : 'not-allowed',
+                      cursor: modeLoading ? 'not-allowed' : 'pointer',
                       transition: 'all 0.18s ease',
                     }}
                     title="Switch to RGB Color"
@@ -275,7 +225,7 @@ const CameraViewPage = () => {
                   </button>
                   <button
                     onClick={() => handleModeChange('gray')}
-                    disabled={!status.camera_running || modeLoading}
+                    disabled={modeLoading}
                     style={{
                       background: cameraMode === 'gray' ? '#4b5563' : 'transparent',
                       color: cameraMode === 'gray' ? '#fff' : '#aaa',
@@ -284,7 +234,7 @@ const CameraViewPage = () => {
                       padding: '6px 14px',
                       fontSize: '13px',
                       fontWeight: cameraMode === 'gray' ? '700' : '500',
-                      cursor: status.camera_running ? 'pointer' : 'not-allowed',
+                      cursor: modeLoading ? 'not-allowed' : 'pointer',
                       transition: 'all 0.18s ease',
                     }}
                     title="Switch to Grayscale"
@@ -293,7 +243,7 @@ const CameraViewPage = () => {
                   </button>
                   <button
                     onClick={() => handleModeChange('depth')}
-                    disabled={!status.camera_running || modeLoading}
+                    disabled={modeLoading}
                     style={{
                       background: cameraMode === 'depth' ? '#dc2626' : 'transparent',
                       color: cameraMode === 'depth' ? '#fff' : '#aaa',
@@ -302,7 +252,7 @@ const CameraViewPage = () => {
                       padding: '6px 14px',
                       fontSize: '13px',
                       fontWeight: cameraMode === 'depth' ? '700' : '500',
-                      cursor: status.camera_running ? 'pointer' : 'not-allowed',
+                      cursor: modeLoading ? 'not-allowed' : 'pointer',
                       transition: 'all 0.18s ease',
                     }}
                     title="Switch to Depth Heatmap"
