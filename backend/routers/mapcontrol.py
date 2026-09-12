@@ -599,8 +599,11 @@ def _run_cli_command(raw: str) -> str:
         if not args:
             return (f"tool={robot.tool_index}  "
                     f"user={'(unset)' if robot.user_index is None else robot.user_index}")
-        tool_index = None if args[0] == "-" else int(args[0])
-        user_index = None if len(args) < 2 or args[1] == "-" else int(args[1])
+        try:
+            tool_index = None if args[0] == "-" else int(args[0])
+            user_index = None if len(args) < 2 or args[1] == "-" else int(args[1])
+        except ValueError:
+            return "usage: frame <tool_index> [user_index]  (- = leave unchanged, user -1 = unset)"
         robot.set_frame(tool_index=tool_index, user_index=user_index)
         return (f"tool={robot.tool_index}  "
                 f"user={'(unset)' if robot.user_index is None else robot.user_index}")
