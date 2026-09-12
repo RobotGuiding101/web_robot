@@ -143,13 +143,71 @@
         scene.add(axesHelper);
 
         // ===== Camera Feed Ground Plane =====
-        const camImg = new Image();
-        camImg.crossOrigin = 'anonymous';
-        camImg.src = '/api/map/video_feed';
-
-        const camTexture = new THREE.Texture(camImg);
+        const camCanvas = document.createElement('canvas');
+        camCanvas.width = 640;
+        camCanvas.height = 360;
+        const camCtx = camCanvas.getContext('2d');
+        const camTexture = new THREE.CanvasTexture(camCanvas);
         camTexture.minFilter = THREE.LinearFilter;
         camTexture.magFilter = THREE.LinearFilter;
+
+        function findSeq(buf, seq, from) {
+            const n = seq.length;
+            for (let i = from; i <= buf.length - n; i++) {
+                let ok = true;
+                for (let j = 0; j < n; j++) { if (buf[i + j] !== seq[j]) { ok = false; break; } }
+                if (ok) return i;
+            }
+            return -1;
+        }
+
+        function catBuf(a, b) {
+            if (a.length === 0) return b;
+            const out = new Uint8Array(a.length + b.length);
+            out.set(a, 0); out.set(b, a.length);
+            return out;
+        }
+
+        function drawJpeg(jpeg) {
+            createImageBitmap(new Blob([jpeg], { type: 'image/jpeg' })).then((bmp) => {
+                if (camCanvas.width !== bmp.width || camCanvas.height !== bmp.height) {
+                    camCanvas.width = bmp.width; camCanvas.height = bmp.height;
+                }
+                camCtx.drawImage(bmp, 0, 0);
+                bmp.close();
+                camTexture.needsUpdate = true;
+            }).catch(() => {});
+        }
+
+        function readCamStream() {
+            const token = localStorage.getItem('access_token') || '';
+            if (!token) { setTimeout(readCamStream, 2000); return; }
+            fetch('/api/map/video_feed?_t=' + Date.now(), {
+                headers: { Authorization: 'Bearer ' + token },
+                cache: 'no-store',
+            }).then((res) => {
+                if (!res.ok || !res.body) throw new Error('stream ' + res.status);
+                const reader = res.body.getReader();
+                let buf = new Uint8Array(0);
+                const pump = () => reader.read().then(({ value, done }) => {
+                    if (done) return;
+                    buf = catBuf(buf, value);
+                    let pos = 0;
+                    for (;;) {
+                        const soi = findSeq(buf, [0xff, 0xd8], pos);
+                        if (soi < 0) { pos = Math.max(0, buf.length - 1); break; }
+                        const eoi = findSeq(buf, [0xff, 0xd9], soi + 2);
+                        if (eoi < 0) { pos = soi; break; }
+                        drawJpeg(buf.slice(soi, eoi + 2));
+                        pos = eoi + 2;
+                    }
+                    buf = buf.slice(pos);
+                    return pump();
+                });
+                return pump();
+            }).catch(() => { setTimeout(readCamStream, 1000); });
+        }
+        readCamStream();
 
         const groundGeo = new THREE.PlaneGeometry(3, 3);
         const groundMat = new THREE.MeshBasicMaterial({
@@ -163,9 +221,6 @@
         groundPlane.position.y = 0.001;
         groundPlane.renderOrder = -1;
         scene.add(groundPlane);
-
-        let camTextureDirty = false;
-        camImg.onload = () => { camTextureDirty = true; };
 
         // ===== 2. Robot Hierarchy =====
         const robotBase = new THREE.Group();
@@ -405,11 +460,6 @@
                 solveIK(targetMesh.position);
                 // Keep ring facing camera
                 ring.lookAt(camera.position);
-            }
-
-            // Update camera feed texture
-            if (camTextureDirty) {
-                camTexture.needsUpdate = true;
             }
 
             // Read TCP position (metres → mm) and send to parent React app ~10x/sec
