@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { apiFetch } from '../lib/api'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
 import { setStreamMode } from '../components/CameraStream'
@@ -15,7 +16,7 @@ const CameraViewPage = () => {
     let dead = false
     const fetchStatus = async () => {
       try {
-        const res = await fetch('/api/map/status')
+        const res = await apiFetch('/api/map/status')
         if (!res.ok || dead) return
         const data = await res.json()
         if (!dead) {
@@ -32,7 +33,7 @@ const CameraViewPage = () => {
   }, [])
 
   const handleEmergency = () => {
-    fetch('/api/map/error', { method: 'POST' }).catch(() => { })
+    apiFetch('/api/map/error', { method: 'POST' }).catch(() => { })
     alert('EMERGENCY STOP!')
   }
 
@@ -40,7 +41,7 @@ const CameraViewPage = () => {
     if (cameraMode === newMode || modeLoading) return
     setModeLoading(true)
     try {
-      const res = await fetch('/api/camera/mode', {
+      const res = await apiFetch('/api/camera/mode', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode: newMode }),

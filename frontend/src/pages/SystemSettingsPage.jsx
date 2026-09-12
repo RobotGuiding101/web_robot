@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { apiFetch } from '../lib/api'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
 
@@ -72,7 +73,7 @@ const SystemSettingsPage = () => {
 
   useEffect(() => {
     // Check robot connection status
-    fetch('/api/map/status')
+    apiFetch('/api/map/status')
       .then((res) => res.json())
       .then((data) => {
         if (data.connected !== undefined) {
@@ -83,7 +84,7 @@ const SystemSettingsPage = () => {
   }, [])
 
   useEffect(() => {
-    fetch('/api/camera/devices')
+    apiFetch('/api/camera/devices')
       .then((r) => r.json())
       .then((d) => {
         setCamDevices(Array.isArray(d.devices) ? d.devices : [])
@@ -98,7 +99,7 @@ const SystemSettingsPage = () => {
     setCamBusy(true)
     setCamMsg(null)
     try {
-      const res = await fetch('/api/camera/scan', { method: 'POST' })
+      const res = await apiFetch('/api/camera/scan', { method: 'POST' })
       const data = await res.json()
       setCamDevices(Array.isArray(data.devices) ? data.devices : [])
       setCamSelected(data.selected || '')
@@ -117,7 +118,7 @@ const SystemSettingsPage = () => {
     setCamBusy(true)
     setCamMsg(null)
     try {
-      const res = await fetch('/api/camera/select', {
+      const res = await apiFetch('/api/camera/select', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ serial }),
@@ -138,7 +139,7 @@ const SystemSettingsPage = () => {
   const handleTestConnection = async () => {
     setRobotLoading(true)
     try {
-      const res = await fetch('/api/map/connect', {
+      const res = await apiFetch('/api/map/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -179,7 +180,7 @@ const SystemSettingsPage = () => {
   }
 
   const handleEmergency = () => {
-    fetch('/api/map/error', { method: 'POST' }).catch(() => {})
+    apiFetch('/api/map/error', { method: 'POST' }).catch(() => {})
     alert('EMERGENCY STOP!')
   }
 

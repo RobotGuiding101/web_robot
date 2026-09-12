@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { apiFetch } from '../lib/api'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
 
@@ -63,7 +64,7 @@ const LogPanel = ({ title, channel, accentClass }) => {
       })
     }
 
-    fetch('/api/map/robot_logs')
+    apiFetch('/api/map/robot_logs')
       .then((r) => r.json())
       .then((data) => {
         if (!dead && Array.isArray(data.entries)) {
@@ -74,7 +75,7 @@ const LogPanel = ({ title, channel, accentClass }) => {
 
     const pollInterval = setInterval(() => {
       if (dead || pausedRef.current) return
-      fetch('/api/map/robot_logs')
+      apiFetch('/api/map/robot_logs')
         .then((r) => r.json())
         .then((data) => {
           if (!dead && Array.isArray(data.entries)) {
@@ -171,9 +172,9 @@ const DobotControllerPage = () => {
   useEffect(() => {
     const autoInit = async () => {
       try {
-        await fetch('/api/map/connect', { method: 'POST' })
-        await fetch('/api/map/camstart', { method: 'POST' })
-        await fetch('/api/map/init', { method: 'POST' })
+        await apiFetch('/api/map/connect', { method: 'POST' })
+        await apiFetch('/api/map/camstart', { method: 'POST' })
+        await apiFetch('/api/map/init', { method: 'POST' })
       } catch { /* ignore */ }
     }
     autoInit()
@@ -182,7 +183,7 @@ const DobotControllerPage = () => {
   // ── Load speed from DB settings ───────────────────────────────────────
   useEffect(() => {
     const token = localStorage.getItem('access_token') || ''
-    fetch('/api/settings', {
+    apiFetch('/api/settings', {
       headers: { 'Authorization': `Bearer ${token}` },
     })
       .then(r => r.ok ? r.json() : null)
@@ -195,7 +196,7 @@ const DobotControllerPage = () => {
   // ── Poll real robot status from /api/map/status ──────────────────────────
   const fetchStatus = useCallback(async () => {
     try {
-      const res = await fetch('/api/map/status')
+      const res = await apiFetch('/api/map/status')
       if (!res.ok) return
       const data = await res.json()
 
@@ -244,7 +245,7 @@ const DobotControllerPage = () => {
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleEmergency = () => {
-    fetch('/api/map/error', { method: 'POST' }).catch(() => { })
+    apiFetch('/api/map/error', { method: 'POST' }).catch(() => { })
     alert('EMERGENCY STOP!')
   }
 
@@ -267,7 +268,7 @@ const DobotControllerPage = () => {
 
   const handleClearError = async () => {
     try {
-      const res = await fetch('/api/map/error', { method: 'POST' })
+      const res = await apiFetch('/api/map/error', { method: 'POST' })
       const data = await res.json()
       if (data.ok) {
         setErrorStatus('ok')
@@ -286,8 +287,8 @@ const DobotControllerPage = () => {
     if (initLoading) return
     setInitLoading(true); setInitStatus(null)
     try {
-      await fetch('/api/map/connect', { method: 'POST' })
-      const res = await fetch('/api/map/init', { method: 'POST' })
+      await apiFetch('/api/map/connect', { method: 'POST' })
+      const res = await apiFetch('/api/map/init', { method: 'POST' })
       if (!res.ok) throw new Error()
       setInitStatus('ok')
       setLastMoved('Init')
@@ -302,7 +303,7 @@ const DobotControllerPage = () => {
     if (homeLoading) return
     setHomeLoading(true); setHomeStatus(null)
     try {
-      const res = await fetch('/api/map/home', { method: 'POST' })
+      const res = await apiFetch('/api/map/home', { method: 'POST' })
       const data = await res.json()
       if (!data.ok) throw new Error(data.error || 'Home move failed')
       setHomeStatus('ok')

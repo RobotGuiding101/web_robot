@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { apiFetch } from '../lib/api'
 import { useNavigate } from 'react-router-dom'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
@@ -116,8 +117,8 @@ const DashboardPage = () => {
   const loadRelayState = useCallback(async () => {
     try {
       const [stateRes, histRes] = await Promise.all([
-        fetch('/api/devices/relay/state', { headers: authHeaders() }),
-        fetch('/api/devices/relay/history', { headers: authHeaders() }),
+        apiFetch('/api/devices/relay/state', { headers: authHeaders() }),
+        apiFetch('/api/devices/relay/history', { headers: authHeaders() }),
       ])
       if (stateRes.ok) {
         const data = await stateRes.json()
@@ -137,7 +138,7 @@ const DashboardPage = () => {
     setRelayLoading(true)
     setPingResult(null)
     try {
-      const res = await fetch('/api/devices/relay/toggle', {
+      const res = await apiFetch('/api/devices/relay/toggle', {
         method: 'POST',
         headers: authHeaders(),
       })
@@ -166,7 +167,7 @@ const DashboardPage = () => {
     const check = async () => {
       attempts++
       try {
-        const res = await fetch('/api/devices/ping')
+        const res = await apiFetch('/api/devices/ping')
         if (res.ok) {
           const data = await res.json()
           setPingResult({
@@ -201,7 +202,7 @@ const DashboardPage = () => {
   useEffect(() => () => clearPingPoll(), [])
 
   const handleEmergency = () => {
-    fetch('/api/robot/emergency-stop', { method: 'POST' }).catch(() => { })
+    apiFetch('/api/robot/emergency-stop', { method: 'POST' }).catch(() => { })
     alert('EMERGENCY STOP!')
   }
 
