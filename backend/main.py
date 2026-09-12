@@ -5,11 +5,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from jose import JWTError, jwt
 from database import engine, Base
 from routers import auth, robot, camera, mapcontrol
-from routers.auth import get_current_user
+from routers.auth import get_current_user, SECRET_KEY, ALGORITHM
 from routers import settings as settings_router
 from routers import devices as devices_router
 
@@ -35,8 +37,28 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Robot Arm API", version="0.2.0", lifespan=lifespan)
 
+OPEN_PREFIXES = ("/api/auth/",)
+
+
+@app.middleware("http")
+async def require_bearer_token(request: Request, call_next):
+    path = request.url.path
+    if (path.startswith("/api/")
+            and not path.startswith(OPEN_PREFIXES)
+            and request.method != "OPTIONS"):
+        header = request.headers.get("authorization", "")
+        if not header.startswith("Bearer "):
+            return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+        try:
+            jwt.decode(header.split(" ", 1)[1], SECRET_KEY, algorithms=[ALGORITHM])
+        except JWTError:
+            return JSONResponse({"detail": "Invalid token"}, status_code=401)
+    return await call_next(request)
+
+
 # ---------------------------------------------------------------------------
 # CORS — อ่านจาก env ALLOWED_ORIGINS (คั่นด้วยคอมม่า)
+# ต้อง add หลัง auth middleware เพื่อให้ CORS เป็นชั้นนอกสุด (401 ยังมี CORS header)
 # ---------------------------------------------------------------------------
 origins_raw = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173")
 allowed_origins = [o.strip() for o in origins_raw.split(",")]
