@@ -14,3 +14,10 @@ __pycache__/
 # Node
 node_modules/
 dist/
+
+# Env files — เก็บเฉพาะ *.example (ห้าม commit ค่าจริง/ความลับ)
+.env
+.env.*
+!.env.example
+.maps_point.env
+!.maps_point.env.example
