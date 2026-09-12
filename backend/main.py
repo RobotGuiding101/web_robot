@@ -1,5 +1,6 @@
 import os
 import threading
+import time
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
@@ -22,15 +23,32 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     
     def _auto_start_camera():
-        try:
-            from routers.mapcontrol import cam, robot
-            if not cam._running:
+        from routers.mapcontrol import cam, robot
+        time.sleep(2.0)
+        for attempt in range(1, 4):
+            if cam._running:
+                print(f"[AutoStart] camera already running (attempt {attempt})", flush=True)
+                break
+            try:
+                if cam.start():
+                    print(f"[AutoStart] camera started (attempt {attempt})", flush=True)
+                    break
+                print(f"[AutoStart] camera start returned False (attempt {attempt}/3)", flush=True)
+            except Exception as e:
+                print(f"[AutoStart] camera failed (attempt {attempt}/3): {e}", flush=True)
+            if attempt < 3:
+                time.sleep(5.0)
+
+        def _connect_robot():
+            try:
                 if not robot.connected:
                     robot.connect()
-                cam.start()
-        except Exception as e:
-            print(f"[AutoStart] Camera failed: {e}")
-    
+                print(f"[AutoStart] robot connected={robot.connected}", flush=True)
+            except Exception as e:
+                print(f"[AutoStart] robot connect failed: {e}", flush=True)
+
+        threading.Thread(target=_connect_robot, daemon=True).start()
+
     threading.Thread(target=_auto_start_camera, daemon=True).start()
     yield
 
