@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
+import { apiFetch } from '../lib/api'
 import {
   Canvas,
   PencilBrush,
@@ -383,7 +384,7 @@ const DrawingModePage = () => {
         return
       }
 
-      const res = await fetch('/api/map/draw', {
+      const res = await apiFetch('/api/map/draw', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ strokes }),
@@ -403,7 +404,7 @@ const DrawingModePage = () => {
 
   // ── Emergency Stop ────────────────────────────────────────────────────────
   const handleEmergency = () => {
-    fetch('/api/map/error', { method: 'POST' }).catch(() => {})
+    apiFetch('/api/map/error', { method: 'POST' }).catch(() => {})
     setStatus('EMERGENCY STOP sent')
     alert('EMERGENCY STOP!')
   }

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
+import { apiFetch } from '../lib/api'
 import { useNavigate, useLocation } from 'react-router-dom'
 
 const NAV_ITEMS = [
@@ -36,7 +37,7 @@ const Sidebar = () => {
 
   /* Load speed from DB on mount */
   useEffect(() => {
-    fetch('/api/settings', { headers: authHeaders() })
+    apiFetch('/api/settings', { headers: authHeaders() })
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (data && data.sidebar_speed) setSpeed(Number(data.sidebar_speed))
@@ -46,7 +47,7 @@ const Sidebar = () => {
 
   /* Debounced save to DB */
   const saveSpeed = useCallback((val) => {
-    fetch('/api/settings', {
+    apiFetch('/api/settings', {
       method: 'PUT',
       headers: authHeaders(),
       body: JSON.stringify({ settings: [{ key: 'sidebar_speed', value: String(val) }] }),

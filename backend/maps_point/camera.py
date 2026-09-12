@@ -145,7 +145,18 @@ class Camera:
                 f"  imu={self._has_imu}")
             return True
         except Exception as e:
-            log(f"  [Cam] FAILED  {e}"); return False
+            self._running = False
+            self._capture_stop_event.set()
+            if self._capture_thread and self._capture_thread.is_alive():
+                self._capture_thread.join(timeout=1.0)
+            if self.pipe:
+                try:
+                    self.pipe.stop()
+                except Exception:
+                    pass
+                self.pipe = None
+            log(f"  [Cam] FAILED  {e}")
+            return False
 
     def stop(self):
         if self._capture_thread and self._capture_thread.is_alive():

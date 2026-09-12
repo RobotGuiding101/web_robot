@@ -1,4 +1,6 @@
 """routers/devices.py — Blynk relay control + state logging + ping check."""
+import asyncio
+import os
 import urllib.request
 import subprocess
 from fastapi import APIRouter, Depends
@@ -11,13 +13,15 @@ from routers.auth import get_current_user
 
 router = APIRouter(prefix="/api/devices", tags=["Devices"])
 
-BLYNK_TOKEN = "1Z8SYSXKFIwjJoPWKtlbm8hPYThkxISw"
+BLYNK_TOKEN = os.environ.get("BLYNK_TOKEN", "")
 BLYNK_BASE = "https://blynk.cloud/external/api/update"
 ROBOT_IP = "192.168.10.110"
 
 
 def _blynk_set(pin: str, value: int):
-    """Send value to Blynk virtual pin."""
+    """Blocking Blynk call — always invoke through a thread executor."""
+    if not BLYNK_TOKEN:
+        return False
     url = f"{BLYNK_BASE}?token={BLYNK_TOKEN}&{pin}={value}"
     try:
         req = urllib.request.Request(url)
@@ -64,7 +68,7 @@ async def toggle_relay(
     new_state = "on" if current_state == "off" else "off"
     blynk_value = 1 if new_state == "on" else 0
 
-    ok = _blynk_set("V1", blynk_value)
+    ok = await asyncio.get_running_loop().run_in_executor(None, _blynk_set, "V1", blynk_value)
 
     log = DeviceLog(user_id=user.id, device="relay_v1", state=new_state)
     db.add(log)
@@ -108,7 +112,6 @@ async def get_relay_history(
 @router.get("/ping")
 async def ping_robot():
     """Quick ping check for robot at 192.168.10.110."""
-    import asyncio
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(None, _ping_host, ROBOT_IP)
     return result

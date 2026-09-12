@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { apiFetch } from '../lib/api'
 
 const SOI = [0xff, 0xd8]
 const EOI = [0xff, 0xd9]
@@ -84,11 +85,15 @@ const CameraStream = ({ id }) => {
     }
 
     async function readLoop() {
+      if (!localStorage.getItem('access_token')) {
+        if (!stopped) reconnectTimer = setTimeout(readLoop, 2000)
+        return
+      }
       controller = new AbortController()
       const signal = controller.signal
       lastFrameAt = performance.now()
       try {
-        const res = await fetch(buildUrl(), { signal, cache: 'no-store' })
+        const res = await apiFetch(buildUrl(), { signal, cache: 'no-store' })
         if (!res.ok || !res.body) throw new Error('stream unavailable')
         const reader = res.body.getReader()
         let buf = new Uint8Array(0)
