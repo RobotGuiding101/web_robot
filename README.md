@@ -241,12 +241,18 @@ const apiUrl = import.meta.env.VITE_API_URL
 
 | Variable | Default | คำอธิบาย |
 |---|---|---|
-| `HOST` | `0.0.0.0` | Host ที่ bind |
+| `HOST` | `0.0.0.0` | Host ที่ bind (uvicorn อ่านจาก compose command) |
 | `PORT` | `8000` | Port ของ server |
 | `ALLOWED_ORIGINS` | `http://localhost:5173` | CORS Origins (คั่นด้วยคอมม่า) |
-| `ROBOT_IP` | `192.168.1.6` | IP ของตัวควบคุม Dobot |
+| `DATABASE_URL` | `postgresql+asyncpg://robot:robot123@localhost:5432/robot_settings` | PostgreSQL DSN |
+| `ROBOT_IP` | `192.168.10.110` | IP ของตัวควบคุม Dobot |
 | `ROBOT_PORT` | `29999` | Port ของ Dobot |
-| `SECRET_KEY` | `change-me-in-production` | JWT Secret Key |
+| `JWT_SECRET` | `robot-arm-secret-change-me` | JWT Secret Key (auth.py อ่านตัวนี้) |
+| `BLYNK_TOKEN` | — | Token ของ Blynk (relay) |
+
+> **ค่าของ robot / camera / align / draw** (เช่น `ROBOT_IP` default, `DEPTH_CAM_SERIAL`, `HOME_*`, `MOVE_SPEED`, `ALIGN_*`, `DRAW_*`) โหลดจาก `backend/.maps_point.env` โดย `maps_point/config.py` (`override=True`)
+
+> ⚠️ **docker compose `env_file` ฝัง env ตั้งแต่ตอนสร้าง container** — แก้ `.env` แล้ว `docker restart` **ไม่พอ** ต้อง `docker compose up -d --force-recreate backend` ไม่งั้นค่าเก่ายังค้าง (เช่น `ROBOT_IP` เก่าทำให้ต่อหุ่นไม่ได้ + ค้างที่ SYN-SENT)
 
 ---
 
