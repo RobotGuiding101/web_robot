@@ -75,7 +75,11 @@ class UserResponse(BaseModel):
 
 # ── routes ───────────────────────────────────────────────────────────────────
 @router.post("/register", response_model=TokenResponse)
-async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
+async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db),
+                   _current: User = Depends(get_current_user)):
+    """Create an account. Requires an existing logged-in user — public
+    self-registration is intentionally disabled (any account can control the
+    robot, so an open register endpoint would defeat the API auth)."""
     if len(body.username) < 2:
         raise HTTPException(400, "Username must be at least 2 characters")
     if len(body.password) < 4:

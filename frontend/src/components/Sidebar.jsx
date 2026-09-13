@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { apiFetch } from '../lib/api'
+import { apiFetch, clearToken } from '../lib/api'
 import { useNavigate, useLocation } from 'react-router-dom'
 
 const NAV_ITEMS = [
@@ -29,6 +29,15 @@ const authHeaders = () => ({
   'Content-Type': 'application/json',
   'Authorization': `Bearer ${localStorage.getItem('access_token') || ''}`,
 })
+
+const LogoutIcon = ({ size = 18 }) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor"
+       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+    <polyline points="16 17 21 12 16 7" />
+    <line x1="21" y1="12" x2="9" y2="12" />
+  </svg>
+)
 
 const Sidebar = () => {
   const navigate = useNavigate()
@@ -60,6 +69,12 @@ const Sidebar = () => {
     saveSpeed(val)
   }
 
+  const handleLogout = useCallback(() => {
+    clearToken()
+    localStorage.removeItem('username')
+    navigate('/login', { replace: true })
+  }, [navigate])
+
   return (
     <>
       {/* ── Sidebar: Tablet / Desktop ── */}
@@ -90,6 +105,11 @@ const Sidebar = () => {
           />
           <span>SPEED</span>
         </div>
+
+        <button className="logout-btn" onClick={handleLogout} title="Logout" aria-label="Logout">
+          <LogoutIcon size={18} />
+          <span>LOGOUT</span>
+        </button>
       </div>
 
       {/* ── Bottom Nav: Mobile only (shown via CSS) ── */}
@@ -109,6 +129,15 @@ const Sidebar = () => {
             <span className="label">{item.label}</span>
           </div>
         ))}
+        <div
+          className="nav-item"
+          onClick={handleLogout}
+          role="button"
+          aria-label="Logout"
+        >
+          <LogoutIcon size={20} />
+          <span className="label">Logout</span>
+        </div>
       </nav>
     </>
   )
