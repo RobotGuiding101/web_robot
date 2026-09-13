@@ -2,6 +2,7 @@ from typing import Optional
 from fastapi import APIRouter, Response, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+import threading
 import cv2
 import numpy as np
 
@@ -10,6 +11,8 @@ from maps_point.camera import list_devices
 from maps_point.render import draw_overlay
 
 router = APIRouter()
+
+SCAN_TIMEOUT_S = 6.0
 
 
 class CameraModeBody(BaseModel):
@@ -58,19 +61,40 @@ def get_camera_devices():
 
 @router.post("/scan")
 def scan_camera_devices():
-    """Enumerate RealSense devices. Listed serials are librealsense's own
-    serial numbers (the USB iSerial differs, so it must not be used for
-    enable_device()). Falls back to stopping the pipeline and retrying if
-    enumeration fails while it is running."""
-    devices = list_devices()
-    if not devices and cam._running:
-        cam.stop()
-        devices = list_devices()
-        cam.start()
-    state.camera_devices = devices
+    """Enumerate RealSense devices WITHOUT touching the running pipeline.
+
+    librealsense deadlocks when a second rs.context() enumerates while a
+    pipeline is streaming, and that stuck worker then wedges the whole
+    threadpool (the 2026-09-13 hang). So: never stop/start the pipeline here
+    and always bound the enumeration with a timeout, falling back to the
+    cached list."""
+    result: dict = {}
+
+    def _enumerate():
+        try:
+            result["devices"] = list_devices()
+        except Exception as e:
+            result["error"] = str(e)
+
+    worker = threading.Thread(target=_enumerate, daemon=True)
+    worker.start()
+    worker.join(SCAN_TIMEOUT_S)
+
+    if worker.is_alive():
+        return {
+            "ok": False,
+            "error": "scan timed out (camera busy) — showing cached list",
+            "devices": getattr(state, "camera_devices", []),
+            "selected": cam.serial,
+            "running": cam._running,
+        }
+
+    devices = result.get("devices") or []
+    if devices:
+        state.camera_devices = devices
     return {
         "ok": True,
-        "devices": devices,
+        "devices": getattr(state, "camera_devices", []),
         "selected": cam.serial,
         "running": cam._running,
     }
