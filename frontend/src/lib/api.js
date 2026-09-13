@@ -45,9 +45,18 @@ export async function apiFetch(url, opts = {}) {
     const token = getToken()
     if (token) headers.Authorization = `Bearer ${token}`
   }
-  const res = await fetch(url, { ...opts, headers })
+  const method = String(opts.method || 'GET').toUpperCase()
+  let res = await fetch(url, { ...opts, headers })
+  if (method === 'GET' && res.status >= 500) {
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+    res = await fetch(url, { ...opts, headers })
+  }
   if (res.status === 401 && !String(url).includes('/api/auth/')) {
     redirectToLogin()
+  } else if (res.status >= 500 && typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('api:server-error', {
+      detail: { url: String(url), status: res.status },
+    }))
   }
   return res
 }

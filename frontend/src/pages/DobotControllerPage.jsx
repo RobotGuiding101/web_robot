@@ -164,12 +164,16 @@ const DobotControllerPage = () => {
   const [getCoordinatesEnabled, setGetCoordinatesEnabled] = useState(true)
   const getCoordinatesRef = useRef(true)
   getCoordinatesRef.current = getCoordinatesEnabled
+  const [toolIndex, setToolIndex] = useState(0)
+  const [userIndex, setUserIndex] = useState(0)
+  const [frameMsg, setFrameMsg] = useState(null)
 
   // ── Stable cache-buster ──
   const viewerKey = useRef(Date.now())
   const viewerBoxRef = useRef(null)
   const [isViewerFullscreen, setIsViewerFullscreen] = useState(false)
   const jogGuardRef = useRef(0)
+  const frameDirtyRef = useRef(false)
 
   // ── Auto-connect + init robot on mount ─────────────────────────────────
   useEffect(() => {
@@ -204,6 +208,11 @@ const DobotControllerPage = () => {
       const data = await res.json()
 
       setConnected(!!data.connected)
+
+      if (!frameDirtyRef.current) {
+        if (data.tool_index !== undefined && data.tool_index !== null) setToolIndex(data.tool_index)
+        if (data.user_index !== undefined && data.user_index !== null) setUserIndex(data.user_index)
+      }
 
       if (!getCoordinatesRef.current) return
 
@@ -294,6 +303,29 @@ const DobotControllerPage = () => {
   const handleEmergency = () => {
     apiFetch('/api/map/error', { method: 'POST' }).catch(() => { })
     alert('EMERGENCY STOP!')
+  }
+
+  const handleApplyFrame = async () => {
+    try {
+      const res = await apiFetch('/api/map/frame', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tool_index: Number(toolIndex),
+          user_index: Number(userIndex),
+        }),
+      })
+      const data = await res.json().catch(() => null)
+      if (res.ok && data && data.ok !== false) {
+        setFrameMsg({ kind: 'ok', text: `Tool ${data.tool_index} / User ${data.user_index}` })
+        frameDirtyRef.current = false
+      } else {
+        setFrameMsg({ kind: 'error', text: (data && data.error) || 'Failed' })
+      }
+    } catch {
+      setFrameMsg({ kind: 'error', text: 'Failed' })
+    }
+    setTimeout(() => setFrameMsg(null), 3000)
   }
 
   // Track native fullscreen changes
@@ -556,6 +588,44 @@ const DobotControllerPage = () => {
                       onClick={() => setStepValue(val)}
                     >{val}</button>
                   ))}
+                </div>
+              </div>
+
+              {/* ── Frame (Tool / User) ── */}
+              <div className="step-row">
+                <div className="step-row-label-wrap">
+                  <span className="step-row-label">Frame</span>
+                  <span className="step-row-sub">Tool / User</span>
+                </div>
+                <div className="frame-wrap">
+                  <label className="frame-field">
+                    <span>Tool</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="19"
+                      value={toolIndex}
+                      onChange={(e) => { frameDirtyRef.current = true; setToolIndex(e.target.value) }}
+                      disabled={!connected}
+                    />
+                  </label>
+                  <label className="frame-field">
+                    <span>User</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="9"
+                      value={userIndex}
+                      onChange={(e) => { frameDirtyRef.current = true; setUserIndex(e.target.value) }}
+                      disabled={!connected}
+                    />
+                  </label>
+                  <button className="frame-apply" onClick={handleApplyFrame} disabled={!connected}>
+                    Apply
+                  </button>
+                  {frameMsg && (
+                    <span className={`frame-msg frame-msg--${frameMsg.kind}`}>{frameMsg.text}</span>
+                  )}
                 </div>
               </div>
 

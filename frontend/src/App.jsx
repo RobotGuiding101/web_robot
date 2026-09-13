@@ -8,10 +8,12 @@ import DobotControllerPage from './pages/DobotControllerPage'
 import SystemSettingsPage from './pages/SystemSettingsPage'
 import CameraStream from './components/CameraStream'
 import RequireAuth from './components/RequireAuth'
+import ApiErrorBanner from './components/ApiErrorBanner'
 
 function App() {
   return (
     <BrowserRouter>
+      <ApiErrorBanner />
       <div id="camera-stream-dock" style={{ display: 'none' }}>
         <CameraStream id="global-camera-stream" />
       </div>
