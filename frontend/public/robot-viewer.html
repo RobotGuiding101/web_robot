@@ -58,23 +58,25 @@
             bottom: 12px;
             left: 50%;
             transform: translateX(-50%);
-            background: rgba(255, 255, 255, 0.85);
-            backdrop-filter: blur(6px);
-            color: rgba(50, 50, 50, 0.85);
-            font-family: system-ui, sans-serif;
+            background: rgba(255, 255, 255, 0.88);
+            backdrop-filter: blur(8px);
+            color: rgba(30, 41, 59, 0.9);
+            font-family: system-ui, -apple-system, sans-serif;
             font-size: 11px;
-            padding: 6px 14px;
+            padding: 6px 16px;
             border-radius: 20px;
             border: 1px solid rgba(0, 0, 0, 0.1);
             pointer-events: none;
             white-space: normal;
             text-align: center;
             max-width: 90vw;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            z-index: 20;
         }
 
         #hint span {
-            color: #1a8fe3;
-            font-weight: 600;
+            color: #0284c7;
+            font-weight: 700;
         }
 
         /* Touch: make canvas fill properly on iPad */
@@ -101,6 +103,9 @@
     <div id="loading-overlay">
         <div class="spinner"></div>
         <span>กำลังโหลดโมเดล...</span>
+    </div>
+    <div id="hint">
+        <span>ลากจุดสีส้ม</span> เพื่อขยับตำแหน่งแขนกล (IK)
     </div>
     <div id="canvas-container"></div>
 
@@ -309,22 +314,22 @@
 
         // Orange target sphere (draggable)
         const targetMesh = new THREE.Mesh(
-            new THREE.SphereGeometry(0.03, 20, 20),
-            new THREE.MeshPhongMaterial({ color: 0xff6b35, emissive: 0xff3300, emissiveIntensity: 0.3, shininess: 80 })
+            new THREE.SphereGeometry(0.025, 24, 24),
+            new THREE.MeshPhongMaterial({ color: 0xff6b35, emissive: 0xff3300, emissiveIntensity: 0.35, shininess: 90 })
         );
         // Ring around it for visibility
-        const ringGeo = new THREE.TorusGeometry(0.045, 0.006, 8, 24);
+        const ringGeo = new THREE.TorusGeometry(0.042, 0.005, 12, 32);
         const ringMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
         const ring = new THREE.Mesh(ringGeo, ringMat);
         targetMesh.add(ring);
 
-        // Position sphere at end-effector after first frame
+        // Position sphere at end-effector
         scene.add(targetMesh);
 
-        // TransformControls — translate mode
+        // TransformControls
         const transformControls = new THREE.TransformControls(camera, renderer.domElement);
         transformControls.setMode('translate');
-        transformControls.setSize(0.6);
+        transformControls.setSize(0.65);
         transformControls.attach(targetMesh);
         scene.add(transformControls);
 
@@ -332,92 +337,120 @@
         let ikMode = false;
         transformControls.addEventListener('dragging-changed', (e) => {
             cameraControls.enabled = !e.value;
-            if (e.value) ikMode = true;
-        });
-        transformControls.addEventListener('change', () => {
-            if (transformControls.dragging) ikMode = true;
+            if (e.value) {
+                ikMode = true;
+            } else {
+                syncTargetToTip();
+            }
         });
 
-        // Space → toggle translate / rotate
-        window.addEventListener('keydown', (e) => {
-            if (e.code === 'Space') {
-                transformControls.setMode(
-                    transformControls.getMode() === 'translate' ? 'rotate' : 'translate'
-                );
-                e.preventDefault();
+        transformControls.addEventListener('change', () => {
+            if (transformControls.dragging) {
+                ikMode = true;
+                solveIK(targetMesh.position);
             }
         });
 
         // ===== 5. CCD Inverse Kinematics =====
+        // Matches exact joint hierarchy & rotational axes of Dobot CR5
         const ikJoints = [
-            { seg: link1, axis: 'y', min: deg(-180), max: deg(180) },
-            { seg: link2, axis: 'z', min: deg(-90), max: deg(90) },
-            { seg: link3, axis: 'z', min: deg(-150), max: deg(150) },
-            { seg: link4, axis: 'z', min: deg(-180), max: deg(180) },
-            { seg: link5, axis: 'z', min: deg(-120), max: deg(120) },
-            { seg: link6, axis: 'x', min: deg(-360), max: deg(360) },
+            { seg: link1, axis: 'y', min: deg(-180), max: deg(180), weight: 1.0 },
+            { seg: link2, axis: 'z', min: deg(-90), max: deg(90), weight: 1.0 },
+            { seg: link3, axis: 'z', min: deg(-150), max: deg(150), weight: 1.0 },
+            { seg: link4, axis: 'z', min: deg(-180), max: deg(180), weight: 0.9 },
+            { seg: link5, axis: 'x', min: deg(-180), max: deg(180), weight: 0.8 },
+            { seg: link6, axis: 'y', min: deg(-360), max: deg(360), weight: 0.8 },
         ];
 
+        const _effPos = new THREE.Vector3();
+        const _jointPos = new THREE.Vector3();
+        const _parentQ = new THREE.Quaternion();
+        const _worldAxis = new THREE.Vector3();
+        const _toEff = new THREE.Vector3();
+        const _toTarget = new THREE.Vector3();
+        const _effProj = new THREE.Vector3();
+        const _targetProj = new THREE.Vector3();
+        const _cross = new THREE.Vector3();
+
         function solveIK(targetPos) {
-            const ITERATIONS = 20;
-            const TOLERANCE = 0.004; // metres
-            const DAMPING = 0.5;
-            const target = new THREE.Vector3().copy(targetPos);
-            const effPos = new THREE.Vector3();
+            const ITERATIONS = 25;
+            const TOLERANCE = 0.0015; // 1.5mm tolerance
+            const DAMPING = 0.65;
+            const target = targetPos;
 
             for (let iter = 0; iter < ITERATIONS; iter++) {
-                endEffector.getWorldPosition(effPos);
-                if (effPos.distanceTo(target) < TOLERANCE) break;
+                endEffector.getWorldPosition(_effPos);
+                if (_effPos.distanceTo(target) < TOLERANCE) break;
 
+                // Iterate from wrist down to base (link6 -> link1)
                 for (let i = ikJoints.length - 1; i >= 0; i--) {
-                    const { seg, axis, min, max } = ikJoints[i];
+                    const { seg, axis, min, max, weight } = ikJoints[i];
 
-                    endEffector.getWorldPosition(effPos);
-                    if (effPos.distanceTo(target) < TOLERANCE) break;
+                    endEffector.getWorldPosition(_effPos);
+                    if (_effPos.distanceTo(target) < TOLERANCE) break;
 
-                    const jointPos = new THREE.Vector3();
-                    seg.getWorldPosition(jointPos);
+                    seg.getWorldPosition(_jointPos);
 
-                    const toEff = effPos.clone().sub(jointPos).normalize();
-                    const toTarget = target.clone().sub(jointPos).normalize();
+                    _toEff.subVectors(_effPos, _jointPos);
+                    _toTarget.subVectors(target, _jointPos);
 
-                    const localAxis = axis === 'x' ? new THREE.Vector3(1, 0, 0)
-                        : axis === 'y' ? new THREE.Vector3(0, 1, 0)
-                            : new THREE.Vector3(0, 0, 1);
+                    // Compute world rotation axis for this joint
+                    const localAxis = (axis === 'x') ? new THREE.Vector3(1, 0, 0)
+                        : (axis === 'y') ? new THREE.Vector3(0, 1, 0)
+                        : new THREE.Vector3(0, 0, 1);
 
-                    const parentQ = seg.parent
-                        ? seg.parent.getWorldQuaternion(new THREE.Quaternion())
-                        : new THREE.Quaternion();
-                    const worldAxis = localAxis.applyQuaternion(parentQ).normalize();
+                    if (seg.parent) {
+                        seg.parent.getWorldQuaternion(_parentQ);
+                    } else {
+                        _parentQ.identity();
+                    }
+                    _worldAxis.copy(localAxis).applyQuaternion(_parentQ).normalize();
 
-                    // Project onto plane perpendicular to rotation axis
-                    const effProj = toEff.clone().sub(worldAxis.clone().multiplyScalar(toEff.dot(worldAxis))).normalize();
-                    const targetProj = toTarget.clone().sub(worldAxis.clone().multiplyScalar(toTarget.dot(worldAxis))).normalize();
+                    // Project vectors onto the plane perpendicular to _worldAxis
+                    const effDot = _toEff.dot(_worldAxis);
+                    const targetDot = _toTarget.dot(_worldAxis);
 
-                    const dot = THREE.MathUtils.clamp(effProj.dot(targetProj), -1, 1);
-                    let angle = Math.acos(dot) * DAMPING;
-                    const cross = new THREE.Vector3().crossVectors(effProj, targetProj);
-                    if (cross.dot(worldAxis) < 0) angle = -angle;
+                    _effProj.copy(_toEff).addScaledVector(_worldAxis, -effDot);
+                    _targetProj.copy(_toTarget).addScaledVector(_worldAxis, -targetDot);
 
-                    if (Math.abs(angle) > 0.0005) {
-                        seg.rotation[axis] = THREE.MathUtils.clamp(
-                            seg.rotation[axis] + angle, min, max
-                        );
-                        // Lock other axes
+                    const effLen = _effProj.length();
+                    const targetLen = _targetProj.length();
+                    if (effLen < 0.001 || targetLen < 0.001) continue;
+
+                    _effProj.divideScalar(effLen);
+                    _targetProj.divideScalar(targetLen);
+
+                    const dot = THREE.MathUtils.clamp(_effProj.dot(_targetProj), -1, 1);
+                    let angle = Math.acos(dot) * DAMPING * (weight || 1.0);
+
+                    // Cross product to find rotation direction
+                    _cross.crossVectors(_effProj, _targetProj);
+                    if (_cross.dot(_worldAxis) < 0) {
+                        angle = -angle;
+                    }
+
+                    if (Math.abs(angle) > 0.0001) {
+                        const curAngle = seg.rotation[axis];
+                        const nextAngle = THREE.MathUtils.clamp(curAngle + angle, min, max);
+                        seg.rotation[axis] = nextAngle;
+
+                        // Maintain single-DOF revolute constraint
                         if (axis !== 'x') seg.rotation.x = 0;
                         if (axis !== 'y') seg.rotation.y = 0;
                         if (axis !== 'z') seg.rotation.z = 0;
+
                         seg.updateMatrixWorld(true);
                     }
                 }
             }
         }
 
-        // Sync target sphere to end-effector tip on first load
+        // Sync target sphere to end-effector tip on first load / drag release
         function syncTargetToTip() {
             const p = new THREE.Vector3();
             endEffector.getWorldPosition(p);
             targetMesh.position.copy(p);
+            endEffector.getWorldQuaternion(targetMesh.quaternion);
         }
 
         // ===== 6. Expose joint control to parent React app via postMessage =====
@@ -431,6 +464,7 @@
             link4.rotation.z = deg(j[3]);
             link5.rotation.x = deg(j[4]);
             link6.rotation.y = deg(j[5]);
+            link1.updateMatrixWorld(true);
             ikMode = false;
             syncTargetToTip();
         });
@@ -450,7 +484,7 @@
             requestAnimationFrame(animate);
             cameraControls.update();
 
-            if (firstFrame) {
+            if (firstFrame && loadedCount >= totalModels) {
                 syncTargetToTip();
                 firstFrame = false;
             }
@@ -458,7 +492,6 @@
             // Run IK every frame while dragging
             if (ikMode) {
                 solveIK(targetMesh.position);
-                // Keep ring facing camera
                 ring.lookAt(camera.position);
             }
 
@@ -485,8 +518,8 @@
                     +_rad2deg(link2.rotation.z).toFixed(2),
                     +_rad2deg(link3.rotation.z).toFixed(2),
                     +_rad2deg(link4.rotation.z).toFixed(2),
-                    +_rad2deg(link5.rotation.z).toFixed(2),
-                    +_rad2deg(link6.rotation.x).toFixed(2),
+                    +_rad2deg(link5.rotation.x).toFixed(2),
+                    +_rad2deg(link6.rotation.y).toFixed(2),
                 ];
 
                 window.parent.postMessage({
