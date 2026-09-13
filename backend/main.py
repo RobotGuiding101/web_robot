@@ -23,8 +23,20 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     
     def _auto_start_camera():
-        from routers.mapcontrol import cam, robot
+        from routers.mapcontrol import cam, robot, state
+        from maps_point.camera import list_devices
         time.sleep(2.0)
+
+        # Enumerate BEFORE any pipeline streams — a second rs.context() while
+        # streaming deadlocks librealsense (see routers/camera.py's /scan).
+        try:
+            devices = list_devices()
+            if devices:
+                state.camera_devices = devices
+            print(f"[AutoStart] devices={[d.get('serial') for d in devices]}", flush=True)
+        except Exception as e:
+            print(f"[AutoStart] device list failed: {e}", flush=True)
+
         for attempt in range(1, 4):
             if cam._running:
                 print(f"[AutoStart] camera already running (attempt {attempt})", flush=True)
