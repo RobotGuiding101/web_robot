@@ -161,6 +161,9 @@ const DobotControllerPage = () => {
   const [connected, setConnected] = useState(false)
   const [jogError, setJogError] = useState(null)
   const [viewerReady, setViewerReady] = useState(false)
+  const [getCoordinatesEnabled, setGetCoordinatesEnabled] = useState(true)
+  const getCoordinatesRef = useRef(true)
+  getCoordinatesRef.current = getCoordinatesEnabled
 
   // ── Stable cache-buster ──
   const viewerKey = useRef(Date.now())
@@ -202,6 +205,8 @@ const DobotControllerPage = () => {
 
       setConnected(!!data.connected)
 
+      if (!getCoordinatesRef.current) return
+
       const guarded = Date.now() < jogGuardRef.current
 
       if (!guarded && Array.isArray(data.pose) && data.pose.length === 6) {
@@ -236,12 +241,54 @@ const DobotControllerPage = () => {
 
   // ── Sync real robot joints → 3D model iframe ─────────────────────────────
   useEffect(() => {
-    if (!viewerReady) return
+    if (!viewerReady || !getCoordinatesEnabled) return
     const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
     if (!iframe || !iframe.contentWindow) return
     const jArr = [joints.J1, joints.J2, joints.J3, joints.J4, joints.J5, joints.J6]
     iframe.contentWindow.postMessage({ type: 'setJoints', joints: jArr }, '*')
-  }, [joints, viewerReady])
+  }, [joints, viewerReady, getCoordinatesEnabled])
+
+  // ── Receive 3D viewer TCP / Joint updates when dragging or manual control ─
+  useEffect(() => {
+    const handleMessage = (e) => {
+      if (!e.data || e.data.type !== 'tcpUpdate') return
+      // When get coordinates from real robot is paused, allow 3D viewer drag to update UI coords
+      if (!getCoordinatesRef.current) {
+        if (typeof e.data.x === 'number') {
+          setPos({
+            X: +Number(e.data.x).toFixed(2),
+            Y: +Number(e.data.y).toFixed(2),
+            Z: +Number(e.data.z).toFixed(2),
+            RX: +Number(e.data.rx || 0).toFixed(2),
+            RY: +Number(e.data.ry || 0).toFixed(2),
+            RZ: +Number(e.data.rz || 0).toFixed(2),
+          })
+        }
+        if (Array.isArray(e.data.joints) && e.data.joints.length === 6) {
+          setJoints({
+            J1: +Number(e.data.joints[0]).toFixed(2),
+            J2: +Number(e.data.joints[1]).toFixed(2),
+            J3: +Number(e.data.joints[2]).toFixed(2),
+            J4: +Number(e.data.joints[3]).toFixed(2),
+            J5: +Number(e.data.joints[4]).toFixed(2),
+            J6: +Number(e.data.joints[5]).toFixed(2),
+          })
+        }
+      }
+    }
+    window.addEventListener('message', handleMessage)
+    return () => window.removeEventListener('message', handleMessage)
+  }, [])
+
+  const toggleGetCoordinates = () => {
+    setGetCoordinatesEnabled((prev) => {
+      const next = !prev
+      if (next) {
+        setTimeout(fetchStatus, 50)
+      }
+      return next
+    })
+  }
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleEmergency = () => {
@@ -416,6 +463,18 @@ const DobotControllerPage = () => {
                   >
                     {connected ? 'Connected' : 'Disconnected'}
                   </span>
+                  <button
+                    id="btn-toggle-get-coords"
+                    className={`init-btn ${getCoordinatesEnabled ? 'init-btn--toggle-active' : 'init-btn--toggle-paused'}`}
+                    onClick={toggleGetCoordinates}
+                    title={
+                      getCoordinatesEnabled
+                        ? 'Auto Get Robot Coordinates is ON. Click to pause/cancel so you can freely move the 3D robot arm.'
+                        : 'Auto Get Robot Coordinates is OFF (Paused). 3D robot arm can be moved freely. Click to resume syncing.'
+                    }
+                  >
+                    {getCoordinatesEnabled ? 'Get Pos: ON' : 'Get Pos: OFF'}
+                  </button>
                   <button
                     id="btn-clear-error"
                     className={`init-btn init-btn--secondary${errorStatus === 'ok' ? ' init-btn--ok' : ''}${errorStatus === 'error' ? ' init-btn--error' : ''}`}
