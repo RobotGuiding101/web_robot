@@ -5,7 +5,6 @@ const LoginPage = () => {
   const navigate = useNavigate()
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [isRegister, setIsRegister] = useState(false)
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -16,8 +15,7 @@ const LoginPage = () => {
     const password = e.target.password.value
 
     try {
-      const endpoint = isRegister ? '/api/auth/register' : '/api/auth/login'
-      const res = await fetch(endpoint, {
+      const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
@@ -25,7 +23,7 @@ const LoginPage = () => {
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
-        setError(data.detail || (isRegister ? 'Registration failed' : 'Invalid credentials'))
+        setError(data.detail || 'Invalid credentials')
         return
       }
 
@@ -47,22 +45,16 @@ const LoginPage = () => {
           <img src="assets/images/robot-arm.png" alt="Robot Arm" className="login-icon-img" />
         </div>
         <h1 className="login-title">Robot Arm System</h1>
-        <p className="login-subtitle">
-          {isRegister ? 'Create a new account' : 'Sign in to control the robot arm'}
-        </p>
+        <p className="login-subtitle">Sign in to control the robot arm</p>
 
         <form className="login-form" onSubmit={handleSubmit}>
           <input id="username" name="username" type="text" placeholder="Username" required minLength={2} />
           <input id="password" name="password" type="password" placeholder="Password" required minLength={4} />
           {error && <p className="login-error">{error}</p>}
           <button id="login-submit-btn" type="submit" className="login-btn" disabled={loading}>
-            {loading ? 'Loading...' : isRegister ? 'Register' : 'Sign in'}
+            {loading ? 'Loading...' : 'Sign in'}
           </button>
         </form>
-
-        <p className="login-toggle" onClick={() => { setIsRegister(!isRegister); setError('') }}>
-          {isRegister ? 'Already have an account? Sign in' : "Don't have an account? Register"}
-        </p>
       </div>
     </div>
   )
