@@ -68,6 +68,10 @@ async def toggle_relay(
     new_state = "on" if current_state == "off" else "off"
     blynk_value = 1 if new_state == "on" else 0
 
+    # Performance-critical: release the pooled connection BEFORE the blocking
+    # Blynk call. Holding it across that HTTP request exhausted the 5+10 pool.
+    await db.commit()
+
     ok = await asyncio.get_running_loop().run_in_executor(None, _blynk_set, "V1", blynk_value)
 
     log = DeviceLog(user_id=user.id, device="relay_v1", state=new_state)
