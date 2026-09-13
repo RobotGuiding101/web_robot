@@ -418,6 +418,10 @@ def api_status():
     return {
         "connected": robot.connected,
         "camera_running": cam._running,
+        "cam_w": cam.w,
+        "cam_h": cam.h,
+        "stream_w": STREAM_W,
+        "stream_h": STREAM_H,
         "pose": pose,
         "angles": angles,
         "tool_index": robot.tool_index,
