@@ -1,15 +1,55 @@
+function decodePayload(token) {
+  try {
+    const part = token.split('.')[1]
+    if (!part) return null
+    const b64 = part.replace(/-/g, '+').replace(/_/g, '/')
+    const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : ''
+    return JSON.parse(atob(b64 + pad))
+  } catch {
+    return null
+  }
+}
+
+export function getToken() {
+  return localStorage.getItem('access_token') || ''
+}
+
+export function clearToken() {
+  localStorage.removeItem('access_token')
+}
+
+export function isTokenValid() {
+  const token = getToken()
+  if (!token) return false
+  const payload = decodePayload(token)
+  if (!payload) return false
+  if (typeof payload.exp !== 'number') return true
+  return Date.now() < payload.exp * 1000
+}
+
+export function redirectToLogin() {
+  clearToken()
+  if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+    window.location.replace('/login')
+  }
+}
+
 export function authHeaders() {
-  const token = localStorage.getItem('access_token')
+  const token = getToken()
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-export function apiFetch(url, opts = {}) {
+export async function apiFetch(url, opts = {}) {
   const headers = { ...(opts.headers || {}) }
   if (!headers.Authorization && !headers.authorization) {
-    const token = localStorage.getItem('access_token')
+    const token = getToken()
     if (token) headers.Authorization = `Bearer ${token}`
   }
-  return fetch(url, { ...opts, headers })
+  const res = await fetch(url, { ...opts, headers })
+  if (res.status === 401 && !String(url).includes('/api/auth/')) {
+    redirectToLogin()
+  }
+  return res
 }
 
 export default apiFetch

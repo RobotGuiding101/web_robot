@@ -7,6 +7,7 @@ import DrawingModePage from './pages/DrawingModePage'
 import DobotControllerPage from './pages/DobotControllerPage'
 import SystemSettingsPage from './pages/SystemSettingsPage'
 import CameraStream from './components/CameraStream'
+import RequireAuth from './components/RequireAuth'
 
 function App() {
   return (
@@ -17,11 +18,11 @@ function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/login" replace />} />
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/dashboard" element={<DashboardPage />} />
-        <Route path="/camera" element={<CameraViewPage />} />
-        <Route path="/drawing" element={<DrawingModePage />} />
-        <Route path="/dobot" element={<DobotControllerPage />} />
-        <Route path="/settings" element={<SystemSettingsPage />} />
+        <Route path="/dashboard" element={<RequireAuth><DashboardPage /></RequireAuth>} />
+        <Route path="/camera" element={<RequireAuth><CameraViewPage /></RequireAuth>} />
+        <Route path="/drawing" element={<RequireAuth><DrawingModePage /></RequireAuth>} />
+        <Route path="/dobot" element={<RequireAuth><DobotControllerPage /></RequireAuth>} />
+        <Route path="/settings" element={<RequireAuth><SystemSettingsPage /></RequireAuth>} />
       </Routes>
     </BrowserRouter>
   )
