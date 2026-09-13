@@ -31,6 +31,15 @@ const PRESET_COLORS = [
 
 const STROKE_WIDTHS = [1, 2, 4, 8, 16]
 
+// ─── Teach / Grid panel constants ─────────────────────────────────────────────
+const POSE_LABELS  = ['X', 'Y', 'Z', 'Rx', 'Ry', 'Rz']
+const JOG_POS_AXES = ['x', 'y', 'z']
+const JOG_ROT_AXES = ['rx', 'ry', 'rz']
+const JOG_SPEED    = 10
+
+const axisLabel = (a) => a.charAt(0).toUpperCase() + a.slice(1)
+const clampInt  = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(Number(v) || lo)))
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function getCanvasPathData(fc) {
   return fc.getObjects().map((obj) => {
@@ -70,6 +79,16 @@ const DrawingModePage = () => {
   const viewerKey = useRef(Date.now())
   const [is3DMinimized, setIs3DMinimized] = useState(false)
   const [is3DExpanded, setIs3DExpanded]   = useState(false)
+
+  // Teach / Grid Floating Panel
+  const [isTeachMinimized, setIsTeachMinimized] = useState(false)
+  const [teachStatus, setTeachStatus]           = useState(null)
+  const [posStep, setPosStep]                   = useState(5)
+  const [rotStep, setRotStep]                   = useState(2)
+  const [gridRows, setGridRows]                 = useState(2)
+  const [gridCols, setGridCols]                 = useState(2)
+  const [teachMsg, setTeachMsg]                 = useState(null)
+  const teachMsgTimerRef = useRef(null)
 
   // Refs for latest state values (avoid stale closures)
   const strokeColorRef = useRef(strokeColor)
@@ -435,6 +454,180 @@ const DrawingModePage = () => {
     }
   }, [])
 
+  // ── Teach / Grid: poll robot + grid status every 1s ──────────────────────
+  const fetchTeachStatus = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/map/status')
+      if (!res.ok) return
+      setTeachStatus(await res.json())
+    } catch { /* ignore */ }
+  }, [])
+
+  useEffect(() => {
+    fetchTeachStatus()
+    const interval = setInterval(fetchTeachStatus, 1000)
+    return () => clearInterval(interval)
+  }, [fetchTeachStatus])
+
+  // ── Teach / Grid: transient inline message (auto-clear ~3s) ──────────────
+  const showTeachMsg = useCallback((text, kind = 'ok') => {
+    setTeachMsg({ text, kind })
+    if (teachMsgTimerRef.current) clearTimeout(teachMsgTimerRef.current)
+    teachMsgTimerRef.current = setTimeout(() => setTeachMsg(null), 3000)
+  }, [])
+
+  useEffect(() => () => {
+    if (teachMsgTimerRef.current) clearTimeout(teachMsgTimerRef.current)
+  }, [])
+
+  // ── Teach / Grid: jog ────────────────────────────────────────────────────
+  const handleJog = useCallback(async (axis, sign) => {
+    if (!teachStatus || !teachStatus.connected) return
+    const rawStep = axis.startsWith('r') ? rotStep : posStep
+    const amount = sign * Math.max(0.1, Number(rawStep) || 0.1)
+    try {
+      const res = await apiFetch('/api/map/jog', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ axis, amount, speed: JOG_SPEED }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || (data && data.ok === false)) {
+        showTeachMsg((data && data.error) || 'Jog rejected', 'error')
+      }
+    } catch {
+      showTeachMsg('Jog request failed', 'error')
+    }
+    setTimeout(fetchTeachStatus, 500)
+  }, [teachStatus, posStep, rotStep, showTeachMsg, fetchTeachStatus])
+
+  // ── Teach / Grid: set grid size ──────────────────────────────────────────
+  const handleSetGrid = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/map/grid/size', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rows: gridRows, cols: gridCols }),
+      })
+      const data = await res.json().catch(() => null)
+      if (res.ok && data && data.ok) {
+        showTeachMsg(`Grid set to ${data.rows}x${data.cols}`)
+      } else {
+        showTeachMsg((data && data.error) || 'Set grid failed', 'error')
+      }
+    } catch {
+      showTeachMsg('Set grid request failed', 'error')
+    }
+    fetchTeachStatus()
+  }, [gridRows, gridCols, showTeachMsg, fetchTeachStatus])
+
+  // ── Teach / Grid: reset grid ─────────────────────────────────────────────
+  const handleResetGrid = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/map/grid/reset', { method: 'POST' })
+      const data = await res.json().catch(() => null)
+      if (res.ok && data && data.ok) {
+        showTeachMsg('Grid reset')
+      } else {
+        showTeachMsg((data && data.error) || 'Reset grid failed', 'error')
+      }
+    } catch {
+      showTeachMsg('Reset grid request failed', 'error')
+    }
+    fetchTeachStatus()
+  }, [showTeachMsg, fetchTeachStatus])
+
+  // ── Teach / Grid: record current pose into a cell (1-based row/col) ──────
+  const handleMarkCell = useCallback(async (row, col) => {
+    if (!teachStatus || !teachStatus.connected) return
+    try {
+      const res = await apiFetch('/api/map/grid/mark', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ row, col }),
+      })
+      const data = await res.json().catch(() => null)
+      if (res.ok && data && data.ok) {
+        showTeachMsg(data.message || `Marked R${row}C${col}`)
+      } else {
+        showTeachMsg((data && data.error) || `Mark R${row}C${col} failed`, 'error')
+      }
+    } catch {
+      showTeachMsg('Mark request failed', 'error')
+    }
+    fetchTeachStatus()
+  }, [teachStatus, showTeachMsg, fetchTeachStatus])
+
+  // ── Teach / Grid: derived view data ──────────────────────────────────────
+  const teachConnected = !!(teachStatus && teachStatus.connected)
+  const teachPose      = (teachStatus && Array.isArray(teachStatus.pose)) ? teachStatus.pose : null
+  const gRows          = (teachStatus && teachStatus.grid_rows) || gridRows
+  const gCols          = (teachStatus && teachStatus.grid_cols) || gridCols
+  const gridPoints     = teachStatus ? teachStatus.grid_points    : null
+  const gridValidate   = teachStatus ? teachStatus.grid_validate  : null
+  const gridShape2d    = teachStatus ? teachStatus.grid_shape_2d  : null
+
+  let markedCount = 0
+  if (Array.isArray(gridPoints)) {
+    gridPoints.forEach((row) => {
+      if (Array.isArray(row)) row.forEach((p) => { if (p) markedCount += 1 })
+    })
+  }
+
+  // Grid shape preview geometry — port of the legacy 200x200 / 20px-padding scaling
+  let gridShapeEls = null
+  if (Array.isArray(gridShape2d) && gridShape2d.length > 0) {
+    const byKey = {}
+    const pts = []
+    gridShape2d.forEach((row, i) => {
+      if (!Array.isArray(row)) return
+      row.forEach((p, j) => {
+        if (Array.isArray(p) && p.length >= 2) {
+          const pt = { i, j, x: p[0], y: p[1] }
+          pts.push(pt)
+          byKey[`${i},${j}`] = pt
+        }
+      })
+    })
+    if (pts.length > 0) {
+      const xs = pts.map((p) => p.x)
+      const ys = pts.map((p) => p.y)
+      const minX = Math.min(...xs)
+      const maxX = Math.max(...xs)
+      const minY = Math.min(...ys)
+      const maxY = Math.max(...ys)
+      const spanX = (maxX - minX) || 1
+      const spanY = (maxY - minY) || 1
+      const scale = Math.min(160 / spanX, 160 / spanY)
+      const offX  = (200 - spanX * scale) / 2
+      const offY  = (200 - spanY * scale) / 2
+      const toXY  = (p) => [offX + (p.x - minX) * scale, offY + (p.y - minY) * scale]
+      const lines = []
+      pts.forEach((p) => {
+        const [x1, y1] = toXY(p)
+        const right = byKey[`${p.i},${p.j + 1}`]
+        const below = byKey[`${p.i + 1},${p.j}`]
+        if (right) {
+          const [x2, y2] = toXY(right)
+          lines.push(<line key={`h-${p.i}-${p.j}`} x1={x1} y1={y1} x2={x2} y2={y2} />)
+        }
+        if (below) {
+          const [x2, y2] = toXY(below)
+          lines.push(<line key={`v-${p.i}-${p.j}`} x1={x1} y1={y1} x2={x2} y2={y2} />)
+        }
+      })
+      gridShapeEls = (
+        <>
+          <g stroke="#2f8a5b" strokeWidth="1.5">{lines}</g>
+          {pts.map((p) => {
+            const [cx, cy] = toXY(p)
+            return <circle key={`p-${p.i}-${p.j}`} cx={cx} cy={cy} r="3" fill="#a8e8c5" stroke="#2f8a5b" />
+          })}
+        </>
+      )
+    }
+  }
+
   return (
     <div className="app-layout">
       <Sidebar />
@@ -533,6 +726,225 @@ const DrawingModePage = () => {
                         className="dm-3d-frame"
                         allow="accelerometer"
                       />
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* ── Floating Teach / Grid Panel (Top-Left) ── */}
+              <div
+                className={`dm-teach-floating${isTeachMinimized ? ' dm-teach-floating--minimized' : ''}`}
+              >
+                {isTeachMinimized ? (
+                  <button
+                    className="dm-teach-minimized-btn"
+                    onClick={() => setIsTeachMinimized(false)}
+                    title="Show Teach / Grid panel"
+                  >
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="3" width="18" height="18" rx="2" />
+                      <line x1="9" y1="3" x2="9" y2="21" />
+                      <line x1="15" y1="3" x2="15" y2="21" />
+                      <line x1="3" y1="9" x2="21" y2="9" />
+                      <line x1="3" y1="15" x2="21" y2="15" />
+                    </svg>
+                  </button>
+                ) : (
+                  <>
+                    {/* Header bar */}
+                    <div className="dm-teach-header">
+                      <div className="dm-teach-title-wrap">
+                        <span className={`dm-teach-title-dot${teachConnected ? '' : ' dm-teach-title-dot--off'}`} />
+                        <span className="dm-teach-title-text">Teach / Grid</span>
+                      </div>
+                      <div className="dm-teach-actions">
+                        <button
+                          className="dm-teach-btn dm-teach-btn--close"
+                          onClick={() => setIsTeachMinimized(true)}
+                          title="Minimize"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18" />
+                            <line x1="6" y1="6" x2="18" y2="18" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="dm-teach-body">
+                      {/* Live pose readout */}
+                      <div className="dm-teach-pose">
+                        {teachConnected && teachPose && teachPose.length === 6 ? (
+                          POSE_LABELS.map((lbl, i) => (
+                            <div className="dm-teach-pose-item" key={lbl}>
+                              <span className="dm-teach-pose-label">{lbl}</span>
+                              <span className="dm-teach-pose-value">{Number(teachPose[i]).toFixed(1)}</span>
+                            </div>
+                          ))
+                        ) : (
+                          <span className="dm-teach-offline">not connected</span>
+                        )}
+                      </div>
+
+                      {/* Jog — Position */}
+                      <div className="dm-teach-section">
+                        <div className="dm-teach-label-row">
+                          <span className="dm-teach-label">Jog — Position</span>
+                          <span className="dm-teach-step-wrap">
+                            <input
+                              type="number"
+                              className="dm-teach-step-input"
+                              value={posStep}
+                              min={0.1}
+                              step={0.5}
+                              onChange={(e) => setPosStep(Math.max(0.1, Number(e.target.value) || 0.1))}
+                            />
+                            <span className="dm-teach-unit">mm</span>
+                          </span>
+                        </div>
+                        {JOG_POS_AXES.map((axis) => (
+                          <div className="dm-teach-jog-row" key={axis}>
+                            <span className="dm-teach-axis">{axisLabel(axis)}</span>
+                            <button
+                              className="dm-teach-jog-btn"
+                              disabled={!teachConnected}
+                              title={teachConnected ? `Jog ${axisLabel(axis)} −${posStep}mm` : 'Robot not connected'}
+                              onClick={() => handleJog(axis, -1)}
+                            >−</button>
+                            <button
+                              className="dm-teach-jog-btn"
+                              disabled={!teachConnected}
+                              title={teachConnected ? `Jog ${axisLabel(axis)} +${posStep}mm` : 'Robot not connected'}
+                              onClick={() => handleJog(axis, 1)}
+                            >+</button>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Jog — Orientation */}
+                      <div className="dm-teach-section">
+                        <div className="dm-teach-label-row">
+                          <span className="dm-teach-label">Jog — Orientation</span>
+                          <span className="dm-teach-step-wrap">
+                            <input
+                              type="number"
+                              className="dm-teach-step-input"
+                              value={rotStep}
+                              min={0.1}
+                              step={0.5}
+                              onChange={(e) => setRotStep(Math.max(0.1, Number(e.target.value) || 0.1))}
+                            />
+                            <span className="dm-teach-unit">deg</span>
+                          </span>
+                        </div>
+                        {JOG_ROT_AXES.map((axis) => (
+                          <div className="dm-teach-jog-row" key={axis}>
+                            <span className="dm-teach-axis">{axisLabel(axis)}</span>
+                            <button
+                              className="dm-teach-jog-btn"
+                              disabled={!teachConnected}
+                              title={teachConnected ? `Jog ${axisLabel(axis)} −${rotStep}deg` : 'Robot not connected'}
+                              onClick={() => handleJog(axis, -1)}
+                            >−</button>
+                            <button
+                              className="dm-teach-jog-btn"
+                              disabled={!teachConnected}
+                              title={teachConnected ? `Jog ${axisLabel(axis)} +${rotStep}deg` : 'Robot not connected'}
+                              onClick={() => handleJog(axis, 1)}
+                            >+</button>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Grid size */}
+                      <div className="dm-teach-section">
+                        <span className="dm-teach-label">Grid size</span>
+                        <div className="dm-teach-grid-size-row">
+                          <label className="dm-teach-grid-field">
+                            <span>Rows</span>
+                            <input
+                              type="number"
+                              className="dm-teach-grid-input"
+                              value={gridRows}
+                              min={2}
+                              max={7}
+                              onChange={(e) => setGridRows(clampInt(e.target.value, 2, 7))}
+                            />
+                          </label>
+                          <label className="dm-teach-grid-field">
+                            <span>Cols</span>
+                            <input
+                              type="number"
+                              className="dm-teach-grid-input"
+                              value={gridCols}
+                              min={2}
+                              max={7}
+                              onChange={(e) => setGridCols(clampInt(e.target.value, 2, 7))}
+                            />
+                          </label>
+                        </div>
+                        <div className="dm-teach-grid-actions">
+                          <button
+                            className="dm-teach-action-btn"
+                            disabled={!teachConnected}
+                            title={teachConnected ? 'Apply grid size' : 'Robot not connected'}
+                            onClick={handleSetGrid}
+                          >Set Grid</button>
+                          <button
+                            className="dm-teach-action-btn dm-teach-action-btn--danger"
+                            disabled={!teachConnected}
+                            title={teachConnected ? 'Clear all taught points' : 'Robot not connected'}
+                            onClick={handleResetGrid}
+                          >Reset Grid</button>
+                        </div>
+                      </div>
+
+                      {/* Grid cells */}
+                      <div className="dm-teach-section">
+                        <span className="dm-teach-label">Grid cells</span>
+                        <div className="dm-teach-cells" style={{ gridTemplateColumns: `repeat(${gCols}, 1fr)` }}>
+                          {Array.from({ length: gRows }).map((_, i) =>
+                            Array.from({ length: gCols }).map((_, j) => {
+                              const marked = !!(gridPoints && gridPoints[i] && gridPoints[i][j])
+                              return (
+                                <button
+                                  key={`${i}-${j}`}
+                                  className={`dm-teach-cell${marked ? ' dm-teach-cell--marked' : ''}`}
+                                  disabled={!teachConnected}
+                                  title={teachConnected ? `Record current pose into R${i + 1}C${j + 1}` : 'Robot not connected'}
+                                  onClick={() => handleMarkCell(i + 1, j + 1)}
+                                >
+                                  {`R${i + 1}C${j + 1}`}
+                                </button>
+                              )
+                            })
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Grid status line */}
+                      <div className="dm-teach-grid-status">
+                        {`grid ${gRows}x${gCols} — ${markedCount}/${gRows * gCols} marked`}
+                        {gridValidate && ` · rmse=${gridValidate.rmse_mm}mm`}
+                        {gridValidate && Array.isArray(gridValidate.warnings) && gridValidate.warnings.length > 0 &&
+                          ` · ${gridValidate.warnings.join('; ')}`}
+                      </div>
+
+                      {/* Grid shape preview */}
+                      <svg viewBox="0 0 200 200" className="dm-teach-shape-svg">
+                        {gridShapeEls || (
+                          <text x="100" y="104" textAnchor="middle" className="dm-teach-shape-empty">
+                            mark all corners to preview shape
+                          </text>
+                        )}
+                      </svg>
+
+                      {/* Inline action message */}
+                      {teachMsg && (
+                        <div className={`dm-teach-msg dm-teach-msg--${teachMsg.kind}`}>
+                          {teachMsg.text}
+                        </div>
+                      )}
                     </div>
                   </>
                 )}
