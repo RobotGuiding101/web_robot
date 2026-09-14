@@ -63,6 +63,18 @@ class JogJointBody(BaseModel):
     speed: int = 10      # SpeedFactor 1-100 (percent)
 
 
+class MoveToBody(BaseModel):
+    mode: str = "movj"   # "movj" | "movl" | "joint"
+    x: Optional[float] = None
+    y: Optional[float] = None
+    z: Optional[float] = None
+    rx: Optional[float] = None
+    ry: Optional[float] = None
+    rz: Optional[float] = None
+    joints: Optional[list] = None
+    speed: int = 20      # SpeedFactor 1-100 (percent)
+
+
 class FrameBody(BaseModel):
     tool_index: Optional[int] = None
     user_index: Optional[int] = None
@@ -326,6 +338,36 @@ def api_jog_joint(body: JogJointBody):
     threading.Thread(target=_safe_call, args=(robot.jog_joint,),
                      kwargs={f"j{body.joint}": body.amount}, daemon=True).start()
     return {"ok": True}
+
+
+@router.post("/move_to")
+def api_move_to(body: MoveToBody):
+    if not robot.connected:
+        return {"ok": False, "error": "Robot not connected"}
+    mode = (body.mode or "movj").lower()
+    speed = max(1, min(100, body.speed or 20))
+
+    if mode == "joint":
+        if not body.joints or len(body.joints) < 6:
+            return {"ok": False, "error": "joints must contain 6 angles [J1..J6]"}
+        j = [float(val) for val in body.joints[:6]]
+        threading.Thread(target=_safe_call, args=(robot.joint_movj,),
+                         kwargs={"j1": j[0], "j2": j[1], "j3": j[2],
+                                 "j4": j[3], "j5": j[4], "j6": j[5],
+                                 "speed": speed}, daemon=True).start()
+        return {"ok": True, "mode": "joint", "joints": j}
+
+    elif mode in ("movj", "movl"):
+        if None in (body.x, body.y, body.z, body.rx, body.ry, body.rz):
+            return {"ok": False, "error": "x, y, z, rx, ry, rz must all be provided"}
+        target_fn = robot.movj if mode == "movj" else robot.movl
+        threading.Thread(target=_safe_call, args=(target_fn,),
+                         kwargs={"x": float(body.x), "y": float(body.y), "z": float(body.z),
+                                 "rx": float(body.rx), "ry": float(body.ry), "rz": float(body.rz),
+                                 "speed": speed}, daemon=True).start()
+        return {"ok": True, "mode": mode, "coords": [body.x, body.y, body.z, body.rx, body.ry, body.rz]}
+
+    return {"ok": False, "error": f"Invalid mode: {body.mode}"}
 
 
 @router.post("/frame")

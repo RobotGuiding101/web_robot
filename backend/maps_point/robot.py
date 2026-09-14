@@ -236,6 +236,23 @@ class Robot:
         self._check_reply(reply, f"MovL({x:.1f},{y:.1f},{z:.1f},{rx:.1f},{ry:.1f},{rz:.1f})")
         self._wait_stable()
 
+    def movj(self, x, y, z, rx, ry, rz, speed=None):
+        """Move to Cartesian pose (x, y, z, rx, ry, rz) via Joint interpolation (point-to-point)."""
+        if not self.move: return
+        self._apply_frame()
+        self.dashboard.SpeedFactor(speed or MOVE_SPEED)
+        reply = self.move.MovJ(x, y, z, rx, ry, rz)
+        self._check_reply(reply, f"MovJ({x:.1f},{y:.1f},{z:.1f},{rx:.1f},{ry:.1f},{rz:.1f})")
+        self._wait_stable()
+
+    def joint_movj(self, j1=0.0, j2=0.0, j3=0.0, j4=0.0, j5=0.0, j6=0.0, speed=None):
+        """Move directly to absolute joint angles [J1..J6]."""
+        if not self.move: return
+        self.dashboard.SpeedFactor(speed or MOVE_SPEED)
+        reply = self.move.JointMovJ(j1, j2, j3, j4, j5, j6)
+        self._check_reply(reply, f"JointMovJ({j1:.2f},{j2:.2f},{j3:.2f},{j4:.2f},{j5:.2f},{j6:.2f})")
+        self._wait_stable()
+
     def set_cp(self, ratio: int):
         """Set the modal 'smooth transition ratio' (CP — corner-rounding
         blend radius, 1-100 per the controller's protocol) used by
