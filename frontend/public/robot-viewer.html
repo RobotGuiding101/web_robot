@@ -79,10 +79,85 @@
             font-weight: 700;
         }
 
+        /* ── Gizmo Mode Toolbar ── */
+        #gizmo-toolbar {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            display: flex;
+            gap: 6px;
+            z-index: 30;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+
+        .gizmo-btn {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding: 6px 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(0,0,0,0.15);
+            background: rgba(255,255,255,0.88);
+            backdrop-filter: blur(8px);
+            color: #1e293b;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+            transition: all 0.15s ease;
+            user-select: none;
+        }
+        .gizmo-btn:hover {
+            background: rgba(240,248,255,0.95);
+            border-color: #3b82f6;
+            color: #1d4ed8;
+        }
+        .gizmo-btn.active {
+            background: #1d4ed8;
+            border-color: #1d4ed8;
+            color: #fff;
+            box-shadow: 0 2px 10px rgba(29,78,216,0.4);
+        }
+        .gizmo-btn .kbd {
+            font-size: 9px;
+            padding: 1px 4px;
+            border-radius: 4px;
+            background: rgba(0,0,0,0.08);
+            color: inherit;
+            opacity: 0.7;
+        }
+        .gizmo-btn.active .kbd {
+            background: rgba(255,255,255,0.25);
+        }
+        .gizmo-btn-snap {
+            border-color: rgba(249,115,22,0.4);
+            color: #c2410c;
+        }
+        .gizmo-btn-snap:hover {
+            background: rgba(255,237,213,0.95);
+            border-color: #f97316;
+            color: #c2410c;
+        }
+        .gizmo-btn-clear {
+            border-color: rgba(239, 68, 68, 0.4);
+            color: #b91c1c;
+        }
+        .gizmo-btn-clear:hover {
+            background: rgba(254, 226, 226, 0.95);
+            border-color: #ef4444;
+            color: #991b1b;
+        }
+
         /* Touch: make canvas fill properly on iPad */
         canvas {
             touch-action: none;
             display: block;
+        }
+
+        /* Display-only mode (for Drawing page): hides toolbar and hint */
+        body.display-only #gizmo-toolbar,
+        body.display-only #hint {
+            display: none !important;
         }
 
         @media (max-width: 1024px) {
@@ -104,13 +179,36 @@
         <div class="spinner"></div>
         <span>กำลังโหลดโมเดล...</span>
     </div>
+    <!-- Gizmo Mode Toolbar -->
+    <div id="gizmo-toolbar">
+        <button id="btn-mode-move" class="gizmo-btn active" title="Move mode — drag arrows/planes to translate (W)">
+            ✥ Move <span class="kbd">W</span>
+        </button>
+        <button id="btn-mode-rotate" class="gizmo-btn" title="Rotate mode — drag arcs to rotate end-effector (E)">
+            ↺ Rotate <span class="kbd">E</span>
+        </button>
+        <button id="btn-snap" class="gizmo-btn gizmo-btn-snap" title="Snap Gizmo back to arm tip & capture Ghost Shadow (R)">
+            ⊙ Snap เงา <span class="kbd">R</span>
+        </button>
+        <button id="btn-clear-ghost" class="gizmo-btn gizmo-btn-clear" style="display:none;" title="Clear ghost shadow (C)">
+            ✖ ลบเงา <span class="kbd">C</span>
+        </button>
+    </div>
+
     <div id="hint">
-        <span>ลากจุดสีส้ม</span> เพื่อขยับตำแหน่งแขนกล (IK)
+        <span>W</span>=ขยับ &nbsp;|&nbsp; <span>E</span>=หมุน &nbsp;|&nbsp; <span>R</span>=Snap เงา &nbsp;|&nbsp; ลากแกนเพื่อจัดตำแหน่ง
     </div>
     <div id="canvas-container"></div>
 
 
     <script>
+        // Check view/display mode from URL query (?mode=display or ?display=1)
+        const urlParams = new URLSearchParams(window.location.search);
+        const isDisplayOnly = urlParams.get('mode') === 'display' || urlParams.has('display') || urlParams.has('minimal') || urlParams.has('viewonly');
+        if (isDisplayOnly) {
+            document.body.classList.add('display-only');
+        }
+
         // ===== 1. Scene, Camera, Renderer =====
         const container = document.getElementById('canvas-container');
         const scene = new THREE.Scene();
@@ -323,33 +421,76 @@
         const ring = new THREE.Mesh(ringGeo, ringMat);
         targetMesh.add(ring);
 
-        // Position sphere at end-effector
-        scene.add(targetMesh);
+        let transformControls = null;
+        let gizmoMode = 'translate'; // 'translate' | 'rotate'
 
-        // TransformControls
-        const transformControls = new THREE.TransformControls(camera, renderer.domElement);
-        transformControls.setMode('translate');
-        transformControls.setSize(0.65);
-        transformControls.attach(targetMesh);
-        scene.add(transformControls);
+        function setGizmoMode(mode) {
+            if (!transformControls) return;
+            gizmoMode = mode;
+            transformControls.setMode(mode);
+            const bm = document.getElementById('btn-mode-move');
+            if (bm) bm.classList.toggle('active', mode === 'translate');
+            const br = document.getElementById('btn-mode-rotate');
+            if (br) br.classList.toggle('active', mode === 'rotate');
+        }
 
         // Disable orbit while dragging
         let ikMode = false;
-        transformControls.addEventListener('dragging-changed', (e) => {
-            cameraControls.enabled = !e.value;
-            if (e.value) {
-                ikMode = true;
-            } else {
-                syncTargetToTip();
-            }
-        });
+        let isDragging = false;
 
-        transformControls.addEventListener('change', () => {
-            if (transformControls.dragging) {
+        if (!isDisplayOnly) {
+            // Position sphere at end-effector
+            scene.add(targetMesh);
+
+            // TransformControls
+            transformControls = new THREE.TransformControls(camera, renderer.domElement);
+            transformControls.setMode('translate');
+            transformControls.setSize(0.75);
+            transformControls.attach(targetMesh);
+            scene.add(transformControls);
+
+            const bm = document.getElementById('btn-mode-move');
+            if (bm) bm.addEventListener('click', () => setGizmoMode('translate'));
+            const br = document.getElementById('btn-mode-rotate');
+            if (br) br.addEventListener('click', () => setGizmoMode('rotate'));
+            const bs = document.getElementById('btn-snap');
+            if (bs) bs.addEventListener('click', handleSnap);
+            const btnClearGhost = document.getElementById('btn-clear-ghost');
+            if (btnClearGhost) btnClearGhost.addEventListener('click', clearAllGhosts);
+
+            window.addEventListener('keydown', (e) => {
+                // Avoid triggering when typing in input fields
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+                if (e.key === 'w' || e.key === 'W') setGizmoMode('translate');
+                if (e.key === 'e' || e.key === 'E') setGizmoMode('rotate');
+                if (e.key === 'r' || e.key === 'R') handleSnap();
+                if (e.key === 'c' || e.key === 'C') clearAllGhosts();
+            });
+
+            transformControls.addEventListener('dragging-changed', (e) => {
+                cameraControls.enabled = !e.value;
+                isDragging = e.value;
+                if (e.value) {
+                    ikMode = true;
+                    // Notify parent: dragging started — pause auto sync
+                    window.parent.postMessage({ type: 'gizmoDragStart' }, '*');
+                } else {
+                    // Notify parent: drag ended — send final target pose
+                    _postTargetPose();
+                }
+            });
+
+            transformControls.addEventListener('change', () => {
+                if (!transformControls.dragging) return;
                 ikMode = true;
-                solveIK(targetMesh.position);
-            }
-        });
+                if (gizmoMode === 'translate') {
+                    solveIK(targetMesh.position);
+                } else {
+                    // Rotate mode: apply the Gizmo's orientation to Link5/Link6 (wrist)
+                    solveIKWithOrientation(targetMesh.position, targetMesh.quaternion);
+                }
+            });
+        }
 
         // ===== 5. CCD Inverse Kinematics =====
         // Matches exact joint hierarchy & rotational axes of Dobot CR5
@@ -372,92 +513,288 @@
         const _targetProj = new THREE.Vector3();
         const _cross = new THREE.Vector3();
 
+        function _ccdStep(seg, axis, min, max, weight, target, TOLERANCE, DAMPING) {
+            endEffector.getWorldPosition(_effPos);
+            if (_effPos.distanceTo(target) < TOLERANCE) return false;
+            seg.getWorldPosition(_jointPos);
+            _toEff.subVectors(_effPos, _jointPos);
+            _toTarget.subVectors(target, _jointPos);
+            const localAxis = axis === 'x' ? new THREE.Vector3(1,0,0)
+                : axis === 'y' ? new THREE.Vector3(0,1,0)
+                : new THREE.Vector3(0,0,1);
+            if (seg.parent) seg.parent.getWorldQuaternion(_parentQ);
+            else _parentQ.identity();
+            _worldAxis.copy(localAxis).applyQuaternion(_parentQ).normalize();
+            const effDot    = _toEff.dot(_worldAxis);
+            const targetDot = _toTarget.dot(_worldAxis);
+            _effProj.copy(_toEff).addScaledVector(_worldAxis, -effDot);
+            _targetProj.copy(_toTarget).addScaledVector(_worldAxis, -targetDot);
+            const effLen    = _effProj.length();
+            const targetLen = _targetProj.length();
+            if (effLen < 0.001 || targetLen < 0.001) return true;
+            _effProj.divideScalar(effLen);
+            _targetProj.divideScalar(targetLen);
+            const dot = THREE.MathUtils.clamp(_effProj.dot(_targetProj), -1, 1);
+            let angle = Math.acos(dot) * DAMPING * (weight || 1.0);
+            _cross.crossVectors(_effProj, _targetProj);
+            if (_cross.dot(_worldAxis) < 0) angle = -angle;
+            if (Math.abs(angle) > 0.0001) {
+                const curAngle  = seg.rotation[axis];
+                const nextAngle = THREE.MathUtils.clamp(curAngle + angle, min, max);
+                seg.rotation[axis] = nextAngle;
+                if (axis !== 'x') seg.rotation.x = 0;
+                if (axis !== 'y') seg.rotation.y = 0;
+                if (axis !== 'z') seg.rotation.z = 0;
+                seg.updateMatrixWorld(true);
+            }
+            return true;
+        }
+
         function solveIK(targetPos) {
             const ITERATIONS = 25;
-            const TOLERANCE = 0.0015; // 1.5mm tolerance
-            const DAMPING = 0.65;
-            const target = targetPos;
-
+            const TOLERANCE  = 0.0015;
+            const DAMPING    = 0.65;
             for (let iter = 0; iter < ITERATIONS; iter++) {
                 endEffector.getWorldPosition(_effPos);
-                if (_effPos.distanceTo(target) < TOLERANCE) break;
-
-                // Iterate from wrist down to base (link6 -> link1)
+                if (_effPos.distanceTo(targetPos) < TOLERANCE) break;
                 for (let i = ikJoints.length - 1; i >= 0; i--) {
                     const { seg, axis, min, max, weight } = ikJoints[i];
-
-                    endEffector.getWorldPosition(_effPos);
-                    if (_effPos.distanceTo(target) < TOLERANCE) break;
-
-                    seg.getWorldPosition(_jointPos);
-
-                    _toEff.subVectors(_effPos, _jointPos);
-                    _toTarget.subVectors(target, _jointPos);
-
-                    // Compute world rotation axis for this joint
-                    const localAxis = (axis === 'x') ? new THREE.Vector3(1, 0, 0)
-                        : (axis === 'y') ? new THREE.Vector3(0, 1, 0)
-                        : new THREE.Vector3(0, 0, 1);
-
-                    if (seg.parent) {
-                        seg.parent.getWorldQuaternion(_parentQ);
-                    } else {
-                        _parentQ.identity();
-                    }
-                    _worldAxis.copy(localAxis).applyQuaternion(_parentQ).normalize();
-
-                    // Project vectors onto the plane perpendicular to _worldAxis
-                    const effDot = _toEff.dot(_worldAxis);
-                    const targetDot = _toTarget.dot(_worldAxis);
-
-                    _effProj.copy(_toEff).addScaledVector(_worldAxis, -effDot);
-                    _targetProj.copy(_toTarget).addScaledVector(_worldAxis, -targetDot);
-
-                    const effLen = _effProj.length();
-                    const targetLen = _targetProj.length();
-                    if (effLen < 0.001 || targetLen < 0.001) continue;
-
-                    _effProj.divideScalar(effLen);
-                    _targetProj.divideScalar(targetLen);
-
-                    const dot = THREE.MathUtils.clamp(_effProj.dot(_targetProj), -1, 1);
-                    let angle = Math.acos(dot) * DAMPING * (weight || 1.0);
-
-                    // Cross product to find rotation direction
-                    _cross.crossVectors(_effProj, _targetProj);
-                    if (_cross.dot(_worldAxis) < 0) {
-                        angle = -angle;
-                    }
-
-                    if (Math.abs(angle) > 0.0001) {
-                        const curAngle = seg.rotation[axis];
-                        const nextAngle = THREE.MathUtils.clamp(curAngle + angle, min, max);
-                        seg.rotation[axis] = nextAngle;
-
-                        // Maintain single-DOF revolute constraint
-                        if (axis !== 'x') seg.rotation.x = 0;
-                        if (axis !== 'y') seg.rotation.y = 0;
-                        if (axis !== 'z') seg.rotation.z = 0;
-
-                        seg.updateMatrixWorld(true);
-                    }
+                    _ccdStep(seg, axis, min, max, weight, targetPos, TOLERANCE, DAMPING);
                 }
+            }
+        }
+
+        // Wrist orientation helpers
+        const _gizmoEuler = new THREE.Euler();
+        const _link5WorldQ = new THREE.Quaternion();
+        const _link5ParentQ = new THREE.Quaternion();
+        const _link6WorldQ = new THREE.Quaternion();
+        const _link6ParentQ = new THREE.Quaternion();
+        const _targetQ = new THREE.Quaternion();
+        const _localQ = new THREE.Quaternion();
+
+        function solveIKWithOrientation(targetPos, targetQuat) {
+            // 1. Position IK (same CCD)
+            solveIK(targetPos);
+            // 2. Orientation: drive Link5 (x) and Link6 (y) to match the Gizmo quaternion
+            // Extract Euler from Gizmo quaternion in order XYZ (matches Dobot wrist)
+            _gizmoEuler.setFromQuaternion(targetQuat, 'XYZ');
+
+            // Link5 axis is X
+            {
+                const desired = _gizmoEuler.x;
+                const { min, max } = ikJoints[4];
+                link5.rotation.x = THREE.MathUtils.clamp(desired, min, max);
+                link5.rotation.y = 0;
+                link5.rotation.z = 0;
+                link5.updateMatrixWorld(true);
+            }
+            // Link6 axis is Y
+            {
+                const desired = _gizmoEuler.y;
+                const { min, max } = ikJoints[5];
+                link6.rotation.y = THREE.MathUtils.clamp(desired, min, max);
+                link6.rotation.x = 0;
+                link6.rotation.z = 0;
+                link6.updateMatrixWorld(true);
             }
         }
 
         // Sync target sphere to end-effector tip on first load / drag release
         function syncTargetToTip() {
+            if (isDisplayOnly) return;
             const p = new THREE.Vector3();
             endEffector.getWorldPosition(p);
             targetMesh.position.copy(p);
             endEffector.getWorldQuaternion(targetMesh.quaternion);
+            targetMesh.updateMatrixWorld(true);
+            if (transformControls) transformControls.updateMatrixWorld();
+            ikMode = false;
         }
 
-        // ===== 6. Expose joint control to parent React app via postMessage =====
-        window.addEventListener('message', (e) => {
-            if (!e.data || e.data.type !== 'setJoints') return;
-            const j = e.data.joints; // array [j1..j6] in degrees
-            if (!Array.isArray(j) || j.length < 6) return;
+        // ── Send current target pose to parent React app ──
+        const _rad2degFn = THREE.MathUtils.radToDeg;
+        const _tpEuler   = new THREE.Euler();
+        const _tpQuat    = new THREE.Quaternion();
+
+        function _postTargetPose() {
+            endEffector.getWorldPosition(_tcpPos);
+            endEffector.getWorldQuaternion(_tpQuat);
+            _tpEuler.setFromQuaternion(_tpQuat);
+
+            const mmX = +(_tcpPos.x * 1000).toFixed(1);
+            const mmY = +(_tcpPos.y * 1000).toFixed(1);
+            const mmZ = +(_tcpPos.z * 1000).toFixed(1);
+            const rx  = +_rad2degFn(_tpEuler.x).toFixed(1);
+            const ry  = +_rad2degFn(_tpEuler.y).toFixed(1);
+            const rz  = +_rad2degFn(_tpEuler.z).toFixed(1);
+
+            const joints = [
+                +_rad2degFn(link1.rotation.y).toFixed(2),
+                +_rad2degFn(link2.rotation.z).toFixed(2),
+                +_rad2degFn(link3.rotation.z).toFixed(2),
+                +_rad2degFn(link4.rotation.z).toFixed(2),
+                +_rad2degFn(link5.rotation.x).toFixed(2),
+                +_rad2degFn(link6.rotation.y).toFixed(2),
+            ];
+
+            window.parent.postMessage({
+                type: 'targetPoseUpdate',
+                x: mmX, y: mmY, z: mmZ,
+                rx, ry, rz,
+                joints,
+            }, '*');
+        }
+
+        // ===== Multiple Transparent Grey Ghosts (เงาสีเทาแบบโปร่ง ทำได้หลายรอบ) =====
+        let ghostList = []; // Array of { id, index, group, joints, pose }
+        const MAX_GHOSTS = 25;
+
+        // Clean transparent slate-grey material (สีเทาแบบโปร่ง สบายตา มองเห็นโครงแขนกลชัดเจน)
+        const ghostMat = new THREE.MeshStandardMaterial({
+            color: 0x475569,          // Slate grey (#475569)
+            roughness: 0.55,
+            metalness: 0.1,
+            transparent: true,
+            opacity: 0.38,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+        });
+
+        function clearAllGhosts() {
+            for (const g of ghostList) {
+                if (g.group) scene.remove(g.group);
+            }
+            ghostList = [];
+            _updateGhostUI();
+            _postGhostList();
+            window.parent.postMessage({ type: 'ghostCleared' }, '*');
+        }
+
+        function removeLastGhost() {
+            if (ghostList.length === 0) return;
+            const last = ghostList.pop();
+            if (last && last.group) scene.remove(last.group);
+            _updateGhostUI();
+            _postGhostList();
+        }
+
+        function _updateGhostUI() {
+            const btnClear = document.getElementById('btn-clear-ghost');
+            if (btnClear) {
+                if (ghostList.length > 0) {
+                    btnClear.style.display = 'flex';
+                    btnClear.innerHTML = `✖ ลบเงา (${ghostList.length}) <span class="kbd">C</span>`;
+                } else {
+                    btnClear.style.display = 'none';
+                }
+            }
+
+            const hint = document.getElementById('hint');
+            if (hint) {
+                if (ghostList.length > 0) {
+                    hint.innerHTML = `<span>มีเงาสีเทา ${ghostList.length} จุด</span> &nbsp;|&nbsp; <span>R</span>=Snap เงาเพิ่ม &nbsp;|&nbsp; <span>C</span>=ลบเงา &nbsp;|&nbsp; <span>W</span>/<span>E</span>=ขยับ/หมุน`;
+                } else {
+                    hint.innerHTML = `<span>W</span>=ขยับ &nbsp;|&nbsp; <span>E</span>=หมุน &nbsp;|&nbsp; <span>R</span>=Snap เงา &nbsp;|&nbsp; ลากแกนเพื่อจัดตำแหน่ง`;
+                }
+            }
+        }
+
+        function _postGhostList() {
+            window.parent.postMessage({
+                type: 'ghostListUpdate',
+                count: ghostList.length,
+                ghosts: ghostList.map(g => ({
+                    id: g.id,
+                    index: g.index,
+                    pose: g.pose,
+                    joints: g.joints,
+                })),
+                latest: ghostList.length > 0 ? ghostList[ghostList.length - 1] : null,
+            }, '*');
+        }
+
+        function captureGhostArm() {
+            if (loadedCount < totalModels) return;
+
+            // Ensure transforms are up to date
+            robotBase.updateMatrixWorld(true);
+
+            // Clone full robot hierarchy
+            const newGhost = robotBase.clone(true);
+
+            // Apply transparent grey material and disable raycasting
+            newGhost.traverse((child) => {
+                if (child.isMesh) {
+                    child.material = ghostMat;
+                    child.castShadow = false;
+                    child.receiveShadow = false;
+                    child.raycast = () => {};
+                }
+            });
+
+            // Save ghost joints (degrees)
+            const joints = [
+                +_rad2degFn(link1.rotation.y).toFixed(2),
+                +_rad2degFn(link2.rotation.z).toFixed(2),
+                +_rad2degFn(link3.rotation.z).toFixed(2),
+                +_rad2degFn(link4.rotation.z).toFixed(2),
+                +_rad2degFn(link5.rotation.x).toFixed(2),
+                +_rad2degFn(link6.rotation.y).toFixed(2),
+            ];
+
+            // Save ghost TCP pose
+            endEffector.getWorldPosition(_tcpPos);
+            endEffector.getWorldQuaternion(_tpQuat);
+            _tpEuler.setFromQuaternion(_tpQuat);
+            const pose = {
+                x: +(_tcpPos.x * 1000).toFixed(1),
+                y: +(_tcpPos.y * 1000).toFixed(1),
+                z: +(_tcpPos.z * 1000).toFixed(1),
+                rx: +_rad2degFn(_tpEuler.x).toFixed(1),
+                ry: +_rad2degFn(_tpEuler.y).toFixed(1),
+                rz: +_rad2degFn(_tpEuler.z).toFixed(1),
+            };
+
+            // Subtle dark-grey tip sphere marker
+            const ghostTip = new THREE.Mesh(
+                new THREE.SphereGeometry(0.015, 16, 16),
+                new THREE.MeshBasicMaterial({ color: 0x334155, transparent: true, opacity: 0.65 })
+            );
+            ghostTip.position.copy(_tcpPos);
+            newGhost.add(ghostTip);
+
+            scene.add(newGhost);
+
+            // Append to list (supports multiple rounds!)
+            const item = {
+                id: Date.now() + '_' + (ghostList.length + 1),
+                index: ghostList.length + 1,
+                group: newGhost,
+                joints,
+                pose,
+            };
+            ghostList.push(item);
+
+            // Cap maximum ghosts to prevent performance issues
+            if (ghostList.length > MAX_GHOSTS) {
+                const oldest = ghostList.shift();
+                if (oldest && oldest.group) scene.remove(oldest.group);
+            }
+
+            _updateGhostUI();
+            _postGhostList();
+        }
+
+        function restoreGhostPose(targetIndex) {
+            let target = null;
+            if (typeof targetIndex === 'number' && ghostList[targetIndex]) {
+                target = ghostList[targetIndex];
+            } else if (ghostList.length > 0) {
+                target = ghostList[ghostList.length - 1];
+            }
+            if (!target || !target.joints) return;
+            const j = target.joints;
             link1.rotation.y = deg(j[0]);
             link2.rotation.z = deg(j[1]);
             link3.rotation.z = deg(j[2]);
@@ -465,8 +802,43 @@
             link5.rotation.x = deg(j[4]);
             link6.rotation.y = deg(j[5]);
             link1.updateMatrixWorld(true);
-            ikMode = false;
             syncTargetToTip();
+            _postTargetPose();
+        }
+
+        function handleSnap() {
+            // 1. Capture current arm as a new transparent grey ghost
+            captureGhostArm();
+            // 2. Snap Gizmo back to arm tip
+            syncTargetToTip();
+            // 3. Send target pose update
+            _postTargetPose();
+        }
+
+        // ===== 6. Expose joint control & ghost control to parent React app via postMessage =====
+        window.addEventListener('message', (e) => {
+            if (!e.data) return;
+            if (e.data.type === 'setJoints') {
+                const j = e.data.joints; // array [j1..j6] in degrees
+                if (!Array.isArray(j) || j.length < 6) return;
+                link1.rotation.y = deg(j[0]);
+                link2.rotation.z = deg(j[1]);
+                link3.rotation.z = deg(j[2]);
+                link4.rotation.z = deg(j[3]);
+                link5.rotation.x = deg(j[4]);
+                link6.rotation.y = deg(j[5]);
+                link1.updateMatrixWorld(true);
+                ikMode = false;
+                syncTargetToTip();
+            } else if (e.data.type === 'snapGhost') {
+                handleSnap();
+            } else if (e.data.type === 'clearGhost' || e.data.type === 'clearAllGhosts') {
+                clearAllGhosts();
+            } else if (e.data.type === 'removeLastGhost') {
+                removeLastGhost();
+            } else if (e.data.type === 'restoreGhost') {
+                restoreGhostPose(e.data.index);
+            }
         });
 
         // Snap target to tip once after first render
@@ -485,12 +857,12 @@
             cameraControls.update();
 
             if (firstFrame && loadedCount >= totalModels) {
-                syncTargetToTip();
+                if (!isDisplayOnly) syncTargetToTip();
                 firstFrame = false;
             }
 
             // Run IK every frame while dragging
-            if (ikMode) {
+            if (ikMode && !isDisplayOnly) {
                 solveIK(targetMesh.position);
                 ring.lookAt(camera.position);
             }

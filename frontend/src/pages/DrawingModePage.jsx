@@ -926,7 +926,7 @@ const DrawingModePage = () => {
                     {/* 3D Model iframe */}
                     <div className="dm-3d-frame-wrap">
                       <iframe
-                        src={`/robot-viewer.html?v=${viewerKey.current}`}
+                        src={`/robot-viewer.html?v=${viewerKey.current}&mode=display`}
                         title="Robot Arm 3D Viewer"
                         className="dm-3d-frame"
                         allow="accelerometer"

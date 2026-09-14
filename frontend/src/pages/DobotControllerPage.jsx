@@ -175,6 +175,16 @@ const DobotControllerPage = () => {
   const jogGuardRef = useRef(0)
   const frameDirtyRef = useRef(false)
 
+  // ── Target pose from 3D Gizmo drag ──
+  const [targetPose, setTargetPose] = useState(null) // { x, y, z, rx, ry, rz, joints }
+  const [ghostPose, setGhostPose] = useState(null)   // { x, y, z, rx, ry, rz, joints }
+  const [ghostList, setGhostList] = useState([])     // array of all ghost waypoints
+  const [latestGhost, setLatestGhost] = useState(null)
+  const [moveMode, setMoveMode] = useState('movj')    // 'movj' | 'movl' | 'joint'
+  const [moveToLoading, setMoveToLoading] = useState(false)
+  const [moveToStatus, setMoveToStatus] = useState(null) // 'ok' | 'error' | null
+  const [moveToError, setMoveToError] = useState(null)
+
   // ── Auto-connect + init robot on mount ─────────────────────────────────
   useEffect(() => {
     const autoInit = async () => {
@@ -257,36 +267,121 @@ const DobotControllerPage = () => {
     iframe.contentWindow.postMessage({ type: 'setJoints', joints: jArr }, '*')
   }, [joints, viewerReady, getCoordinatesEnabled])
 
-  // ── Receive 3D viewer TCP / Joint updates when dragging or manual control ─
+  // ── Receive 3D viewer TCP / Joint updates + Gizmo drag events ─
   useEffect(() => {
     const handleMessage = (e) => {
-      if (!e.data || e.data.type !== 'tcpUpdate') return
-      // When get coordinates from real robot is paused, allow 3D viewer drag to update UI coords
-      if (!getCoordinatesRef.current) {
+      if (!e.data) return
+
+      // Gizmo drag started — auto-pause real robot sync
+      if (e.data.type === 'gizmoDragStart') {
+        setGetCoordinatesEnabled(false)
+        return
+      }
+
+      // Gizmo drag released — capture the final IK-solved target pose
+      if (e.data.type === 'targetPoseUpdate') {
         if (typeof e.data.x === 'number') {
-          setPos({
-            X: +Number(e.data.x).toFixed(2),
-            Y: +Number(e.data.y).toFixed(2),
-            Z: +Number(e.data.z).toFixed(2),
-            RX: +Number(e.data.rx || 0).toFixed(2),
-            RY: +Number(e.data.ry || 0).toFixed(2),
-            RZ: +Number(e.data.rz || 0).toFixed(2),
+          setTargetPose({
+            x: +Number(e.data.x).toFixed(1),
+            y: +Number(e.data.y).toFixed(1),
+            z: +Number(e.data.z).toFixed(1),
+            rx: +Number(e.data.rx || 0).toFixed(1),
+            ry: +Number(e.data.ry || 0).toFixed(1),
+            rz: +Number(e.data.rz || 0).toFixed(1),
+            joints: Array.isArray(e.data.joints) ? e.data.joints : null,
           })
         }
-        if (Array.isArray(e.data.joints) && e.data.joints.length === 6) {
-          setJoints({
-            J1: +Number(e.data.joints[0]).toFixed(2),
-            J2: +Number(e.data.joints[1]).toFixed(2),
-            J3: +Number(e.data.joints[2]).toFixed(2),
-            J4: +Number(e.data.joints[3]).toFixed(2),
-            J5: +Number(e.data.joints[4]).toFixed(2),
-            J6: +Number(e.data.joints[5]).toFixed(2),
+        return
+      }
+
+      // Multiple ghosts updated
+      if (e.data.type === 'ghostListUpdate') {
+        const list = Array.isArray(e.data.ghosts) ? e.data.ghosts : []
+        setGhostList(list)
+        setLatestGhost(e.data.latest || null)
+        if (e.data.latest && e.data.latest.pose) {
+          setGhostPose({
+            ...e.data.latest.pose,
+            joints: e.data.latest.joints,
           })
+        } else {
+          setGhostPose(null)
+        }
+        return
+      }
+
+      // Single ghost fallback
+      if (e.data.type === 'ghostPoseUpdate') {
+        if (typeof e.data.x === 'number') {
+          setGhostPose({
+            x: +Number(e.data.x).toFixed(1),
+            y: +Number(e.data.y).toFixed(1),
+            z: +Number(e.data.z).toFixed(1),
+            rx: +Number(e.data.rx || 0).toFixed(1),
+            ry: +Number(e.data.ry || 0).toFixed(1),
+            rz: +Number(e.data.rz || 0).toFixed(1),
+            joints: Array.isArray(e.data.joints) ? e.data.joints : null,
+          })
+        }
+        return
+      }
+
+      // Ghost cleared
+      if (e.data.type === 'ghostCleared') {
+        setGhostList([])
+        setLatestGhost(null)
+        setGhostPose(null)
+        return
+      }
+
+      // Legacy tcpUpdate — only update UI coords when auto-sync is off
+      if (e.data.type === 'tcpUpdate') {
+        if (!getCoordinatesRef.current) {
+          if (typeof e.data.x === 'number') {
+            setPos({
+              X: +Number(e.data.x).toFixed(2),
+              Y: +Number(e.data.y).toFixed(2),
+              Z: +Number(e.data.z).toFixed(2),
+              RX: +Number(e.data.rx || 0).toFixed(2),
+              RY: +Number(e.data.ry || 0).toFixed(2),
+              RZ: +Number(e.data.rz || 0).toFixed(2),
+            })
+          }
+          if (Array.isArray(e.data.joints) && e.data.joints.length === 6) {
+            setJoints({
+              J1: +Number(e.data.joints[0]).toFixed(2),
+              J2: +Number(e.data.joints[1]).toFixed(2),
+              J3: +Number(e.data.joints[2]).toFixed(2),
+              J4: +Number(e.data.joints[3]).toFixed(2),
+              J5: +Number(e.data.joints[4]).toFixed(2),
+              J6: +Number(e.data.joints[5]).toFixed(2),
+            })
+          }
         }
       }
     }
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
+  }, [])
+
+  // ── Global shortcut keys (R = Snap Ghost, C = Clear Ghosts) ──
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
+      if (e.key === 'r' || e.key === 'R') {
+        const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
+        if (iframe && iframe.contentWindow) {
+          iframe.contentWindow.postMessage({ type: 'snapGhost' }, '*')
+        }
+      } else if (e.key === 'c' || e.key === 'C') {
+        const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
+        if (iframe && iframe.contentWindow) {
+          iframe.contentWindow.postMessage({ type: 'clearAllGhosts' }, '*')
+        }
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
   const toggleGetCoordinates = () => {
@@ -394,6 +489,47 @@ const DobotControllerPage = () => {
       setTimeout(() => setHomeStatus(null), 3000)
     }
   }
+
+  // ── Move to Gizmo target pose ──────────────────────────────────────────────
+  const handleMoveTo = useCallback(async () => {
+    if (!targetPose || !connected) return
+    setMoveToLoading(true)
+    setMoveToStatus(null)
+    setMoveToError(null)
+    try {
+      const body = {
+        mode: moveMode,
+        speed: Math.max(1, Math.min(100, speed || 20)),
+      }
+      if (moveMode === 'joint' && targetPose.joints) {
+        body.joints = targetPose.joints
+      } else {
+        body.x  = targetPose.x;  body.y  = targetPose.y;  body.z  = targetPose.z
+        body.rx = targetPose.rx; body.ry = targetPose.ry; body.rz = targetPose.rz
+      }
+      const res = await apiFetch('/api/map/move_to', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (data.ok) {
+        setMoveToStatus('ok')
+        setLastMoved('Move to Target')
+        // Resume auto-sync after brief delay so position readout updates
+        setTimeout(() => { setGetCoordinatesEnabled(true); setTimeout(fetchStatus, 800) }, 800)
+      } else {
+        setMoveToStatus('error')
+        setMoveToError(data.error || 'Move failed')
+      }
+    } catch (err) {
+      setMoveToStatus('error')
+      setMoveToError(String(err))
+    } finally {
+      setMoveToLoading(false)
+      setTimeout(() => setMoveToStatus(null), 3000)
+    }
+  }, [targetPose, connected, moveMode, speed, fetchStatus])
 
   const handleMove = async (axis, direction) => {
     if (!connected) return
@@ -638,6 +774,160 @@ const DobotControllerPage = () => {
                 <div className="jog-box">
                   <div className="jog-box-header"><span className="jog-box-title">Joint</span></div>
                   <JogGroup axes={JOINT_AXES} onMove={handleMove} disabled={!connected} />
+                </div>
+              </div>
+
+            {/* ── Target Pose & Move Card ── */}
+              <div className="target-pose-card">
+                {/* ── Ghost Pose Multi-Round Bar ── */}
+                <div className="ghost-pose-banner">
+                  <div className="ghost-pose-info">
+                    <span className="ghost-badge">เงาสีเทา</span>
+                    {ghostList.length > 0 ? (
+                      <span className="ghost-coords">
+                        บันทึก <strong>{ghostList.length}</strong> จุด (ล่าสุด: X:{latestGhost?.pose?.x} Y:{latestGhost?.pose?.y} Z:{latestGhost?.pose?.z})
+                      </span>
+                    ) : (
+                      <span className="ghost-empty-tip">
+                        กด <strong>Snap เงา (R)</strong> เพื่อบันทึกเงาใน 3D (ทำได้หลายจุด)
+                      </span>
+                    )}
+                  </div>
+                  <div className="ghost-actions">
+                    <button
+                      type="button"
+                      className="ghost-action-btn ghost-action-btn--snap"
+                      title="กด Snap เพื่อบันทึกเงาสีเทา ณ ตำแหน่งนี้ (กดได้หลายรอบตามต้องการ)"
+                      onClick={() => {
+                        const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
+                        if (iframe && iframe.contentWindow) {
+                          iframe.contentWindow.postMessage({ type: 'snapGhost' }, '*')
+                        }
+                      }}
+                    >
+                      Snap เงา (R)
+                    </button>
+                    {ghostList.length > 0 && (
+                      <>
+                        <button
+                          type="button"
+                          className="ghost-action-btn ghost-action-btn--restore"
+                          title="ดึงเป้าหมายกลับมาที่ตำแหน่งเงาล่าสุด"
+                          onClick={() => {
+                            const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
+                            if (iframe && iframe.contentWindow) {
+                              iframe.contentWindow.postMessage({ type: 'restoreGhost' }, '*')
+                            }
+                            if (latestGhost && latestGhost.pose) {
+                              setTargetPose({
+                                ...latestGhost.pose,
+                                joints: latestGhost.joints,
+                              })
+                            }
+                          }}
+                        >
+                          ↺ ดึงท่าล่าสุด
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost-action-btn ghost-action-btn--clear"
+                          title="ลบเงาทั้งหมดออกจาก 3D"
+                          onClick={() => {
+                            const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
+                            if (iframe && iframe.contentWindow) {
+                              iframe.contentWindow.postMessage({ type: 'clearAllGhosts' }, '*')
+                            }
+                          }}
+                        >
+                          ✕ ลบเงา ({ghostList.length})
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="target-pose-header">
+                  <span className="target-pose-title">เป้าหมายจากการลาก</span>
+                  {targetPose
+                    ? <span className="target-pose-ready">✓ พร้อมสั่ง</span>
+                    : <span className="target-pose-empty">ลาก Gizmo ใน 3D เพื่อตั้งเป้าหมาย</span>
+                  }
+                </div>
+
+                {targetPose && (
+                  <div className="target-pose-coords">
+                    <div className="tp-col">
+                      <div className="tp-label">X</div><div className="tp-val">{targetPose.x}</div>
+                      <div className="tp-diff">{(targetPose.x - pos.X).toFixed(1)}</div>
+                    </div>
+                    <div className="tp-col">
+                      <div className="tp-label">Y</div><div className="tp-val">{targetPose.y}</div>
+                      <div className="tp-diff">{(targetPose.y - pos.Y).toFixed(1)}</div>
+                    </div>
+                    <div className="tp-col">
+                      <div className="tp-label">Z</div><div className="tp-val">{targetPose.z}</div>
+                      <div className="tp-diff">{(targetPose.z - pos.Z).toFixed(1)}</div>
+                    </div>
+                    <div className="tp-col">
+                      <div className="tp-label">Rx</div><div className="tp-val">{targetPose.rx}</div>
+                      <div className="tp-diff">{(targetPose.rx - pos.RX).toFixed(1)}</div>
+                    </div>
+                    <div className="tp-col">
+                      <div className="tp-label">Ry</div><div className="tp-val">{targetPose.ry}</div>
+                      <div className="tp-diff">{(targetPose.ry - pos.RY).toFixed(1)}</div>
+                    </div>
+                    <div className="tp-col">
+                      <div className="tp-label">Rz</div><div className="tp-val">{targetPose.rz}</div>
+                      <div className="tp-diff">{(targetPose.rz - pos.RZ).toFixed(1)}</div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="target-pose-actions">
+                  <div className="move-mode-pills">
+                    {[['movj', 'MovJ'], ['movl', 'MovL'], ['joint', 'Joint']].map(([val, label]) => (
+                      <button
+                        key={val}
+                        className={`move-mode-pill ${moveMode === val ? 'active' : ''}`}
+                        onClick={() => setMoveMode(val)}
+                        title={val === 'movj' ? 'Joint interpolation (safer, recommended)' : val === 'movl' ? 'Linear Cartesian move' : 'Direct joint angles'}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="target-pose-btns">
+                    <button
+                      id="btn-move-to-target"
+                      className={`move-to-btn${
+                        moveToLoading ? ' move-to-btn--loading'
+                        : moveToStatus === 'ok' ? ' move-to-btn--ok'
+                        : moveToStatus === 'error' ? ' move-to-btn--error' : ''
+                      }`}
+                      onClick={handleMoveTo}
+                      disabled={!targetPose || !connected || moveToLoading}
+                      title={!connected ? 'Robot not connected' : !targetPose ? 'Drag Gizmo in 3D viewer first' : 'Send robot to target position'}
+                    >
+                      {moveToLoading ? <><span className="init-btn-spinner" /> Executing…</>
+                        : moveToStatus === 'ok' ? <>✓ Sent!</>
+                        : moveToStatus === 'error' ? <>✕ Error</>
+                        : <>▶ Move Robot to Target</>}
+                    </button>
+
+                    <button
+                      id="btn-reset-target"
+                      className="reset-target-btn"
+                      onClick={() => { setTargetPose(null); setGetCoordinatesEnabled(true); setTimeout(fetchStatus, 50) }}
+                      title="Clear target pose and resume auto position sync"
+                    >
+                      ↺ Reset
+                    </button>
+                  </div>
+
+                  {moveToError && (
+                    <div className="move-to-error">{moveToError}</div>
+                  )}
                 </div>
               </div>
 

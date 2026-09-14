@@ -578,10 +578,13 @@ body {
 .dobot-layout {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  grid-template-rows: minmax(0, 1fr);
   /* 50/50: log left, ctrl right */
   gap: 12px;
   flex: 1;
   min-height: 0;
+  height: 100%;
+  max-height: 100%;
   overflow: hidden;
 }
 
@@ -672,9 +675,35 @@ body {
   border-radius: 16px;
   padding: 12px 14px;
   overflow-y: auto;
+  overflow-x: hidden;
   min-height: 0;
+  height: 100%;
+  max-height: 100%;
   /* allow scroll within fixed height */
   box-shadow: 0 4px 20px rgba(74, 114, 160, 0.08);
+  scroll-behavior: smooth;
+}
+
+.ctrl-box > * {
+  flex-shrink: 0;
+}
+
+.ctrl-box::-webkit-scrollbar {
+  width: 8px;
+}
+
+.ctrl-box::-webkit-scrollbar-track {
+  background: rgba(205, 214, 227, 0.35);
+  border-radius: 4px;
+}
+
+.ctrl-box::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 4px;
+}
+
+.ctrl-box::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
 }
 
 .ctrl-box-header {
@@ -2853,14 +2882,20 @@ body {
   /* ── iPad Landscape (≥768px wide): keep side-by-side, tighter columns ── */
   .dobot-layout {
     grid-template-columns: 1fr 1fr;
+    grid-template-rows: minmax(0, 1fr);
     /* equal split on iPad */
     gap: 10px;
+    height: 100%;
+    max-height: 100%;
   }
 
   /* ctrl-box: tighter gap & padding */
   .ctrl-box {
     gap: 8px;
     padding: 10px 12px;
+    height: 100%;
+    max-height: 100%;
+    overflow-y: auto;
   }
 
   /* log strip: shorter on iPad */
@@ -4494,4 +4529,303 @@ body {
   font-weight: 800;
   cursor: pointer;
   padding: 0 2px;
+}
+
+/* =============================================
+   Target Pose Card (Gizmo Drag → Move Robot)
+   ============================================= */
+.target-pose-card {
+  margin-top: 14px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+  border-radius: 12px;
+  border: 1.5px solid rgba(59, 130, 246, 0.25);
+  background: linear-gradient(135deg, rgba(239, 246, 255, 0.9), rgba(224, 242, 254, 0.7));
+  overflow: hidden;
+  box-shadow: 0 2px 10px rgba(59, 130, 246, 0.08);
+}
+
+.target-pose-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid rgba(59, 130, 246, 0.15);
+}
+
+.target-pose-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #1e40af;
+  letter-spacing: 0.3px;
+}
+
+.target-pose-ready {
+  font-size: 11px;
+  font-weight: 700;
+  color: #16a34a;
+  background: rgba(22, 163, 74, 0.1);
+  padding: 2px 8px;
+  border-radius: 20px;
+  border: 1px solid rgba(22, 163, 74, 0.25);
+}
+
+.target-pose-empty {
+  font-size: 10px;
+  color: #64748b;
+  font-style: italic;
+}
+
+/* 6-column coord grid */
+.target-pose-coords {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 1px;
+  padding: 8px 10px;
+  background: rgba(59, 130, 246, 0.06);
+}
+
+.tp-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.tp-label {
+  font-size: 9px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.tp-val {
+  font-size: 11px;
+  font-weight: 700;
+  color: #1e3a5f;
+  font-variant-numeric: tabular-nums;
+}
+
+.tp-diff {
+  font-size: 9px;
+  color: #3b82f6;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
+/* Actions row */
+.target-pose-actions {
+  padding: 8px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.move-mode-pills {
+  display: flex;
+  gap: 5px;
+}
+
+.move-mode-pill {
+  flex: 1;
+  padding: 4px 0;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 6px;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  background: rgba(255, 255, 255, 0.7);
+  color: #3b82f6;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.move-mode-pill:hover {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.move-mode-pill.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35);
+}
+
+.target-pose-btns {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.move-to-btn {
+  flex: 1;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: none;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-shadow: 0 3px 12px rgba(37, 99, 235, 0.4);
+  transition: all 0.15s ease;
+  letter-spacing: 0.2px;
+}
+
+.move-to-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #1d4ed8, #1e40af);
+  box-shadow: 0 4px 16px rgba(37, 99, 235, 0.5);
+  transform: translateY(-1px);
+}
+
+.move-to-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.move-to-btn--loading {
+  background: linear-gradient(135deg, #6b7280, #4b5563) !important;
+  box-shadow: none !important;
+}
+
+.move-to-btn--ok {
+  background: linear-gradient(135deg, #16a34a, #15803d) !important;
+  box-shadow: 0 3px 12px rgba(22, 163, 74, 0.4) !important;
+}
+
+.move-to-btn--error {
+  background: linear-gradient(135deg, #dc2626, #b91c1c) !important;
+  box-shadow: 0 3px 12px rgba(220, 38, 38, 0.4) !important;
+}
+
+.reset-target-btn {
+  padding: 9px 14px;
+  border-radius: 8px;
+  border: 1.5px solid rgba(100, 116, 139, 0.3);
+  background: rgba(255, 255, 255, 0.8);
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.reset-target-btn:hover {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+  color: #334155;
+}
+
+.move-to-error {
+  font-size: 11px;
+  color: #dc2626;
+  background: rgba(220, 38, 38, 0.08);
+  border: 1px solid rgba(220, 38, 38, 0.2);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-weight: 600;
+}
+
+/* ── Ghost Pose Banner (Multiple Transparent Grey Ghosts) ── */
+.ghost-pose-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, rgba(71, 85, 105, 0.09), rgba(100, 116, 139, 0.05));
+  border-bottom: 1px solid rgba(100, 116, 139, 0.2);
+  font-size: 11px;
+}
+
+.ghost-pose-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.ghost-badge {
+  font-weight: 700;
+  color: #334155;
+  background: rgba(71, 85, 105, 0.14);
+  border: 1px solid rgba(71, 85, 105, 0.3);
+  border-radius: 12px;
+  padding: 2px 8px;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ghost-coords {
+  color: #334155;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ghost-empty-tip {
+  color: #64748b;
+  font-size: 10px;
+}
+
+.ghost-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.ghost-action-btn {
+  padding: 3px 9px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: 1px solid transparent;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ghost-action-btn--snap {
+  background: rgba(71, 85, 105, 0.14);
+  border-color: rgba(71, 85, 105, 0.35);
+  color: #334155;
+}
+
+.ghost-action-btn--snap:hover {
+  background: #334155;
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(51, 65, 85, 0.3);
+}
+
+.ghost-action-btn--restore {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.35);
+  color: #1d4ed8;
+}
+
+.ghost-action-btn--restore:hover {
+  background: #2563eb;
+  color: #fff;
+}
+
+.ghost-action-btn--clear {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #b91c1c;
+}
+
+.ghost-action-btn--clear:hover {
+  background: #ef4444;
+  color: #fff;
 }
