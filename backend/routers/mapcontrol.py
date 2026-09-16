@@ -180,12 +180,16 @@ def _do_move_sequence(robot_inst, points, mode, speed, pause_s):
 
 
 def _safe_call(fn, *args, **kwargs):
-    """Run a Robot method as a thread target with RobotMoveError caught
-    and logged instead of printing an unhandled traceback."""
+    """Run a Robot method as a thread target, logging any failure instead of
+    letting the daemon thread die with an unhandled traceback. Keep the
+    generic branch: a socket timeout (robot unplugged mid-session) used to
+    vanish silently here, so the UI just looked like nothing happened."""
     try:
         fn(*args, **kwargs)
     except RobotMoveError as e:
         log(f"  [Robot] move rejected — {e}")
+    except Exception as e:
+        log(f"  [Robot] call failed — {type(e).__name__}: {e}")
 
 
 def _set_grid_size(rows: int, cols: int):
