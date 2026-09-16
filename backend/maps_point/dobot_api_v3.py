@@ -131,6 +131,9 @@ def alarmAlarmJsonFile():
     return dataController, dataServo
 
 
+SOCKET_TIMEOUT_S = 3.0
+
+
 class DobotApi:
     def __init__(self, ip, port, *args):
         self.ip = ip
@@ -144,8 +147,14 @@ class DobotApi:
         if self.port == 29999 or self.port == 30003 or self.port == 30004:
             try:
                 self.socket_dobot = socket.socket()
+                self.socket_dobot.settimeout(SOCKET_TIMEOUT_S)
                 self.socket_dobot.connect((self.ip, self.port))
             except socket.error:
+                try:
+                    self.socket_dobot.close()
+                except Exception:
+                    pass
+                self.socket_dobot = 0
                 print(socket.error)
                 raise Exception(
                     f"Unable to set socket connection use port {self.port} !", socket.error)
