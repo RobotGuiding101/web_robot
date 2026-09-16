@@ -199,8 +199,10 @@ const DobotControllerPage = () => {
   useEffect(() => {
     const autoInit = async () => {
       try {
-        await apiFetch('/api/map/connect', { method: 'POST' })
-        await apiFetch('/api/map/camstart', { method: 'POST' })
+        const res = await apiFetch('/api/map/status')
+        const s = res.ok ? await res.json() : null
+        if (!s || !s.connected) await apiFetch('/api/map/connect', { method: 'POST' })
+        if (!s || !s.camera_running) await apiFetch('/api/map/camstart', { method: 'POST' })
         await apiFetch('/api/map/init', { method: 'POST' })
       } catch { /* ignore */ }
     }
