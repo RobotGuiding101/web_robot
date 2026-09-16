@@ -21,6 +21,22 @@ def cam_xy_to_robot(du: float, dv: float, depth: float, fx: float, fy: float) ->
     return dx, dy
 
 
+def pixel_to_world_xy(cam: Camera, x_px: float, y_px: float, origin_xy: tuple):
+    """Pixel → robot-frame XY using the depth at that pixel, relative to
+    `origin_xy` (the robot's X,Y when the frame was captured). No motion —
+    returns (tX, tY), or None if depth/intrinsics aren't available."""
+    depth = cam.sample_depth(int(x_px), int(y_px))
+    if depth <= 0:
+        return None
+    intr = cam.intrinsics
+    if intr is None:
+        return None
+    dx, dy = cam_xy_to_robot(x_px - intr["cx"], y_px - intr["cy"],
+                              depth, intr["fx"], intr["fy"])
+    return (origin_xy[0] + dx + CAM_TCP_OFFSET_X,
+            origin_xy[1] + dy + CAM_TCP_OFFSET_Y)
+
+
 def goto_pixel(robot: Robot, cam: Camera, x_px: float, y_px: float, z: float = None):
     """Move the robot's XY to the world position under pixel (x_px,y_px),
     at height `z` (default HOME_Z) — a rough approach position, no
@@ -29,12 +45,6 @@ def goto_pixel(robot: Robot, cam: Camera, x_px: float, y_px: float, z: float = N
     if depth couldn't be read at that pixel — caller must abort, not
     guess.
     """
-    depth = cam.sample_depth(int(x_px), int(y_px))
-    if depth <= 0:
-        return None
-    intr = cam.intrinsics
-    if intr is None:
-        return None
     # Re-assert our Tool/User frame before this read specifically — a
     # preceding rel_movl_tool(tool=N) call (align's rotation) can leave
     # the dashboard on a different Tool selection, which would make
@@ -45,10 +55,10 @@ def goto_pixel(robot: Robot, cam: Camera, x_px: float, y_px: float, z: float = N
     # elsewhere for a Tool()/User() dashboard call on every single read).
     robot.ensure_frame()
     X, Y, Z, Rx, Ry, Rz = robot.get_pose()
-    dx, dy = cam_xy_to_robot(x_px - intr["cx"], y_px - intr["cy"],
-                              depth, intr["fx"], intr["fy"])
-    tX = X + dx + CAM_TCP_OFFSET_X
-    tY = Y + dy + CAM_TCP_OFFSET_Y
+    target = pixel_to_world_xy(cam, x_px, y_px, (X, Y))
+    if target is None:
+        return None
+    tX, tY = target
     tZ = z if z is not None else (HOME_Z if HOME_Z else Z)
     robot.movl(tX, tY, tZ, Rx, Ry, Rz)
     return tX, tY, tZ

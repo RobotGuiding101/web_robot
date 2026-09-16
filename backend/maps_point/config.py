@@ -160,6 +160,7 @@ DRAW_MAX_POINTS = int(os.environ.get("DRAW_MAX_POINTS", "60"))
 # jogged by hand), not vision noise, so it reuses ALIGN_MAX_RMSE_MM's spirit
 # but is a separate knob since the expected error source differs.
 DRAW_MAX_RMSE_MM = float(os.environ.get("DRAW_MAX_RMSE_MM", "3.0"))
+DRAW_MIN_GRID_SPAN_MM = float(os.environ.get("DRAW_MIN_GRID_SPAN_MM", "5.0"))
 # Soft safety cap on grid size — a fat-fingered rows/cols value shouldn't
 # demand teaching 100 points by hand. Easy to raise if a real object needs
 # a denser grid than this.
@@ -230,6 +231,19 @@ DRAW_LIFT_MM = float(os.environ.get("DRAW_LIFT_MM", "15.0"))
 HOME_X  = float(os.environ.get("HOME_X",  "0.0"))
 HOME_Y  = float(os.environ.get("HOME_Y",  "0.0"))
 HOME_Z  = float(os.environ.get("HOME_Z",  "0.0"))
+_z_surface_env = os.environ.get("Z_SURFACE", "").strip()
+# Optional: only used by /api/map/grid/setz's "surface" shortcut. Leave UNSET
+# until you have measured YOUR table (jog the pen down to touch it, then copy
+# the Z from the pose readout) — a wrong value here drives the tool into the
+# workpiece. The touch-off datum in control_robot's z_cam_calib JSON is NOT
+# this value (it was measured on a calibration tag, not the drawing surface).
+Z_SURFACE = float(_z_surface_env) if _z_surface_env else None
+# Live surface estimate (grid/surfacez): surface_Z = pose_Z - depth + these.
+# CAM_TIP_OFFSET_MM is how far the D455 sits beyond the pen tip along the tool
+# axis (~1.5mm from the 2026-06-30 z_cam_calib intercept). DRAW_SURFACE_GAP_MM
+# keeps the pen a hair ABOVE the measured surface - safer than nicking it.
+CAM_TIP_OFFSET_MM = float(os.environ.get("CAM_TIP_OFFSET_MM", "1.5"))
+DRAW_SURFACE_GAP_MM = float(os.environ.get("DRAW_SURFACE_GAP_MM", "2.0"))
 HOME_RX = float(os.environ.get("HOME_RX", "0.0"))
 HOME_RY = float(os.environ.get("HOME_RY", "0.0"))
 HOME_RZ = float(os.environ.get("HOME_RZ", "0.0"))

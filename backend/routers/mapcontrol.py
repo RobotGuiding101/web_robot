@@ -6,6 +6,7 @@ same hardware-control logic can be driven from the web_robot frontend.
 Module-level globals (robot/cam/state + the continuous tracking thread)
 mirror maps_point/main.py's setup exactly.
 """
+import math
 import threading
 import time
 from typing import Optional
@@ -17,13 +18,15 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from maps_point.config import (ROBOT_IP, ROBOT_MODE_LABELS,
-                               DRAW_GRID_MAX_ROWS, DRAW_GRID_MAX_COLS)
+                               DRAW_GRID_MAX_ROWS, DRAW_GRID_MAX_COLS,
+                               DRAW_MIN_GRID_SPAN_MM, Z_SURFACE,
+                               CAM_TIP_OFFSET_MM, DRAW_SURFACE_GAP_MM)
 from maps_point.logs import log, server_ring, robot_ring
 from maps_point.robot import Robot, RobotMoveError
 from maps_point.camera import Camera
 from maps_point.align import AppState, do_align, start_tracking_thread
-from maps_point.motion import do_goto
-from maps_point.planegrid import do_draw, validate_grid, project_grid_2d
+from maps_point.motion import do_goto, pixel_to_world_xy
+from maps_point.planegrid import do_draw, validate_grid, project_grid_2d, bilinear_cell
 from maps_point.render import draw_overlay
 
 router = APIRouter(prefix="/api/map", tags=["MapControl"])
@@ -195,6 +198,36 @@ def _set_grid_size(rows: int, cols: int):
     return True, f"grid set to {rows}x{cols} (cleared)"
 
 
+GRID_DUP_POS_MM = 1.0
+GRID_DUP_ROT_DEG = 1.0
+
+
+def _poses_match(a, b) -> bool:
+    return (max(abs(a[i] - b[i]) for i in range(3)) < GRID_DUP_POS_MM
+            and max(abs(a[i] - b[i]) for i in range(3, 6)) < GRID_DUP_ROT_DEG)
+
+
+def _grid_span_mm() -> float:
+    pts = [p for row in state.grid_points for p in row if p is not None]
+    if len(pts) < 2:
+        return 0.0
+    return max(max(p[k] for p in pts) - min(p[k] for p in pts) for k in range(3))
+
+
+def _sort_corners(pts):
+    """Order 4 image points as [top-left, top-right, bottom-right,
+    bottom-left] by angle around their centroid — a click order the user
+    can't get wrong still fills the grid the right way round."""
+    cx = sum(p[0] for p in pts) / len(pts)
+    cy = sum(p[1] for p in pts) / len(pts)
+    ordered = sorted(pts, key=lambda p: math.atan2(p[1] - cy, p[0] - cx))
+    start = min(range(len(ordered)), key=lambda k: ordered[k][0] + ordered[k][1])
+    ordered = ordered[start:] + ordered[:start]
+    if ordered[1][0] < ordered[0][0]:
+        ordered = [ordered[0]] + list(reversed(ordered[1:]))
+    return ordered
+
+
 def _mark_grid_point(row_1based: int, col_1based: int):
     row, col = row_1based - 1, col_1based - 1
     if not (0 <= row < state.grid_rows and 0 <= col < state.grid_cols):
@@ -203,6 +236,14 @@ def _mark_grid_point(row_1based: int, col_1based: int):
         return False, "not connected"
     robot.ensure_frame()
     pose = robot.get_pose()
+    for i in range(state.grid_rows):
+        for j in range(state.grid_cols):
+            if i == row and j == col:
+                continue
+            other = state.grid_points[i][j]
+            if other is not None and _poses_match(pose, other):
+                return False, (f"R{row_1based}C{col_1based} is the same pose as R{i + 1}C{j + 1} — "
+                               f"jog the robot to this corner before marking")
     state.grid_points[row][col] = pose
     return True, f"marked R{row_1based}C{col_1based} = {[round(v, 1) for v in pose]}"
 
@@ -526,6 +567,106 @@ def api_grid_mark(body: GridMarkBody):
     return {"ok": True, "message": msg, "grid_points": state.grid_points}
 
 
+@router.post("/grid/autofill")
+def api_grid_autofill():
+    """Fill the whole grid from the 4 image points already marked on the
+    feed, so no jogging is needed. Each pixel maps to robot XY via the depth
+    at that pixel (the camera rides on the arm, so it is relative to the
+    CURRENT pose — same maths as motion.goto_pixel). Height and orientation
+    come from the current pose too, i.e. the plane align() just squared the
+    tool to. The robot does not move."""
+    if not robot.connected or not cam._running:
+        return {"ok": False, "error": "robot/camera not ready"}
+    pts = list(state.points)
+    if len(pts) < 4:
+        return {"ok": False, "error": "mark 4 corner points on the image first"}
+    if cam.intrinsics is None:
+        return {"ok": False, "error": "camera intrinsics not ready"}
+    robot.ensure_frame()
+    X, Y, Z, Rx, Ry, Rz = robot.get_pose()
+    tl, tr, br, bl = _sort_corners(pts[:4])
+    corners = {}
+    for name, (px, py) in (("top-left", tl), ("top-right", tr),
+                           ("bottom-right", br), ("bottom-left", bl)):
+        xy = pixel_to_world_xy(cam, px, py, (X, Y))
+        if xy is None:
+            return {"ok": False,
+                    "error": f"no depth at the {name} point ({px},{py}) — "
+                             f"re-mark it on the object surface"}
+        corners[name] = [xy[0], xy[1], Z, Rx, Ry, Rz]
+
+    rows, cols = state.grid_rows, state.grid_cols
+    grid = [[None] * cols for _ in range(rows)]
+    for i in range(rows):
+        lv = i / (rows - 1) if rows > 1 else 0.0
+        for j in range(cols):
+            lu = j / (cols - 1) if cols > 1 else 0.0
+            grid[i][j] = bilinear_cell(lu, lv, corners["top-left"], corners["top-right"],
+                                       corners["bottom-left"], corners["bottom-right"])
+    state.grid_points = grid
+    span = _grid_span_mm()
+    state.status = f"grid auto-filled from 4 marked points (span={span:.1f}mm)"
+    return {"ok": True, "grid_points": grid, "span_mm": span}
+
+
+class GridSetZBody(BaseModel):
+    z: Optional[float] = None
+
+
+@router.post("/grid/setz")
+def api_grid_setz(body: GridSetZBody = GridSetZBody()):
+    """Re-teach ONLY the Z + orientation of every marked grid cell, keeping
+    each cell's X/Y. With no body it uses the CURRENT pose Z (jog down until
+    the pen touches the workpiece, then press). With {"z": <mm>} it uses that
+    value instead — e.g. the touch-off surface Z from the control_robot Z
+    camera calibration (Z_SURFACE in config). The robot does not move."""
+    if not robot.connected:
+        return {"ok": False, "error": "not connected"}
+    if not _grid_fully_marked():
+        return {"ok": False, "error": "grid not fully marked"}
+    robot.ensure_frame()
+    _, _, cur_z, Rx, Ry, Rz = robot.get_pose()
+    Z = cur_z if body.z is None else float(body.z)
+    for i in range(state.grid_rows):
+        for j in range(state.grid_cols):
+            p = state.grid_points[i][j]
+            p[2], p[3], p[4], p[5] = Z, Rx, Ry, Rz
+    state.status = (f"grid Z set to {Z:.1f}mm "
+                     f"({'current pose' if body.z is None else 'requested'})")
+    return {"ok": True, "z": Z, "from_current_pose": body.z is None,
+            "grid_points": state.grid_points}
+
+
+@router.post("/grid/surfacez")
+def api_grid_surfacez():
+    """Estimate the workpiece surface Z from the LIVE depth reading and move
+    the grid onto it — no jogging. Valid while the tool is squared to the
+    surface (run Align first) so the camera looks straight down at it:
+    surface_Z = pose_Z - depth + tip offset + safety gap. The robot does not
+    move here; the next Send is what descends."""
+    if not robot.connected or not cam._running:
+        return {"ok": False, "error": "robot/camera not ready"}
+    if not _grid_fully_marked():
+        return {"ok": False, "error": "grid not fully marked"}
+    depth = state.last_center_depth
+    if not depth or depth <= 0:
+        return {"ok": False,
+                "error": "no depth reading yet — mark the object on the image first"}
+    robot.ensure_frame()
+    _, _, pose_z, Rx, Ry, Rz = robot.get_pose()
+    surface_z = pose_z - depth + CAM_TIP_OFFSET_MM + DRAW_SURFACE_GAP_MM
+    for i in range(state.grid_rows):
+        for j in range(state.grid_cols):
+            p = state.grid_points[i][j]
+            p[2], p[3], p[4], p[5] = surface_z, Rx, Ry, Rz
+    state.status = (f"grid Z -> measured surface {surface_z:.1f}mm "
+                     f"(pose {pose_z:.1f} - depth {depth:.1f} + "
+                     f"{CAM_TIP_OFFSET_MM:.1f} + {DRAW_SURFACE_GAP_MM:.1f})")
+    return {"ok": True, "z": surface_z, "pose_z": pose_z, "depth": depth,
+            "tip_offset": CAM_TIP_OFFSET_MM, "gap": DRAW_SURFACE_GAP_MM,
+            "grid_points": state.grid_points}
+
+
 @router.post("/grid/reset")
 def api_grid_reset():
     for i in range(state.grid_rows):
@@ -552,6 +693,11 @@ def api_draw(body: DrawBody):
         return {"ok": False, "error": "invalid strokes"}
     if not _grid_fully_marked():
         return {"ok": False, "error": "grid not fully marked"}
+    span_mm = _grid_span_mm()
+    if span_mm < DRAW_MIN_GRID_SPAN_MM:
+        return {"ok": False,
+                "error": f"grid has no size (span={span_mm:.1f}mm) — "
+                         f"jog to each corner before marking"}
     if state.align_running or state.draw_running:
         return {"ok": False, "error": "already running"}
     threading.Thread(target=do_draw, args=(robot, state, strokes), daemon=True).start()
@@ -577,6 +723,7 @@ def api_status():
         "cam_h": cam.h,
         "stream_w": STREAM_W,
         "stream_h": STREAM_H,
+        "z_surface": Z_SURFACE,
         "pose": pose,
         "angles": angles,
         "tool_index": robot.tool_index,
