@@ -102,7 +102,80 @@ class CameraModeBody(BaseModel):
     mode: str  # "rgb" or "gray"
 
 
+class MoveSequencePoint(BaseModel):
+    x: Optional[float] = None
+    y: Optional[float] = None
+    z: Optional[float] = None
+    rx: Optional[float] = None
+    ry: Optional[float] = None
+    rz: Optional[float] = None
+    joints: Optional[list] = None
+
+
+class MoveSequenceBody(BaseModel):
+    points: list[MoveSequencePoint] = []
+    mode: Optional[str] = "movj"  # "movj", "movl", or "joint"
+    speed: Optional[int] = 20     # 1..100
+    pause_s: Optional[float] = 0.5  # dwell pause in seconds between points
+
+
 # ── helpers (mirror maps_point/main.py) ──────────────────────────────────────
+sequence_running = False
+sequence_index = 0
+sequence_total = 0
+sequence_stop = threading.Event()
+
+
+def _do_move_sequence(robot_inst, points, mode, speed, pause_s):
+    global sequence_running, sequence_index, sequence_total
+    sequence_running = True
+    sequence_stop.clear()
+    sequence_total = len(points)
+    log(f"  [Sequence] Start executing {sequence_total} points (mode={mode}, speed={speed}%, pause={pause_s}s)")
+    try:
+        for idx, pt in enumerate(points):
+            if sequence_stop.is_set():
+                log(f"  [Sequence] Stopped by user at point {idx + 1}/{sequence_total}")
+                break
+            sequence_index = idx + 1
+            log(f"  [Sequence] Moving to point {sequence_index}/{sequence_total}...")
+
+            if mode == "joint" and pt.joints and len(pt.joints) >= 6:
+                j = [float(val) for val in pt.joints[:6]]
+                robot_inst.joint_movj(j1=j[0], j2=j[1], j3=j[2], j4=j[3], j5=j[4], j6=j[5], speed=speed)
+            else:
+                if None in (pt.x, pt.y, pt.z, pt.rx, pt.ry, pt.rz):
+                    if pt.joints and len(pt.joints) >= 6:
+                        j = [float(val) for val in pt.joints[:6]]
+                        robot_inst.joint_movj(j1=j[0], j2=j[1], j3=j[2], j4=j[3], j5=j[4], j6=j[5], speed=speed)
+                    else:
+                        log(f"  [Sequence] Skipping point {sequence_index}: missing coordinates/joints")
+                        continue
+                else:
+                    move_fn = robot_inst.movj if mode == "movj" else robot_inst.movl
+                    move_fn(x=float(pt.x), y=float(pt.y), z=float(pt.z),
+                            rx=float(pt.rx), ry=float(pt.ry), rz=float(pt.rz),
+                            speed=speed)
+
+            if pause_s > 0:
+                elapsed = 0.0
+                while elapsed < pause_s:
+                    if sequence_stop.is_set():
+                        break
+                    time.sleep(0.05)
+                    elapsed += 0.05
+
+        if sequence_stop.is_set():
+            robot_inst.clear_error()
+            log("  [Sequence] Aborted.")
+        else:
+            log(f"  [Sequence] Completed all {sequence_total} points successfully.")
+    except Exception as e:
+        log(f"  [Sequence] Error during sequence: {e}")
+    finally:
+        sequence_running = False
+
+
 def _safe_call(fn, *args, **kwargs):
     """Run a Robot method as a thread target with RobotMoveError caught
     and logged instead of printing an unhandled traceback."""
@@ -243,6 +316,8 @@ def api_camstart():
 
 @router.post("/error")
 def api_error():
+    global sequence_running
+    sequence_stop.set()
     robot.clear_error()
     return {"ok": True}
 
@@ -342,8 +417,11 @@ def api_jog_joint(body: JogJointBody):
 
 @router.post("/move_to")
 def api_move_to(body: MoveToBody):
+    global sequence_running
     if not robot.connected:
         return {"ok": False, "error": "Robot not connected"}
+    if sequence_running:
+        return {"ok": False, "error": "Robot motion sequence is currently running"}
     mode = (body.mode or "movj").lower()
     speed = max(1, min(100, body.speed or 20))
 
@@ -368,6 +446,41 @@ def api_move_to(body: MoveToBody):
         return {"ok": True, "mode": mode, "coords": [body.x, body.y, body.z, body.rx, body.ry, body.rz]}
 
     return {"ok": False, "error": f"Invalid mode: {body.mode}"}
+
+
+@router.post("/move_sequence")
+def api_move_sequence(body: MoveSequenceBody):
+    global sequence_running
+    if not robot.connected:
+        return {"ok": False, "error": "Robot not connected"}
+    if sequence_running or state.align_running or state.draw_running:
+        return {"ok": False, "error": "Robot motion already running"}
+    if not body.points:
+        return {"ok": False, "error": "No points provided in sequence"}
+
+    mode = (body.mode or "movj").lower()
+    speed = max(1, min(100, body.speed or 20))
+    pause_s = max(0.0, min(10.0, float(body.pause_s if body.pause_s is not None else 0.5)))
+
+    threading.Thread(
+        target=_do_move_sequence,
+        args=(robot, body.points, mode, speed, pause_s),
+        daemon=True,
+    ).start()
+
+    return {"ok": True, "total": len(body.points), "mode": mode, "speed": speed, "pause_s": pause_s}
+
+
+@router.post("/move_sequence/stop")
+def api_move_sequence_stop():
+    global sequence_running
+    sequence_stop.set()
+    if robot.connected:
+        try:
+            robot.clear_error()
+        except Exception:
+            pass
+    return {"ok": True}
 
 
 @router.post("/frame")
@@ -487,6 +600,9 @@ def api_status():
         "grid_shape_2d": (project_grid_2d(state.grid_points, state.grid_rows, state.grid_cols)
                           if _grid_fully_marked() else None),
         "draw_running": state.draw_running,
+        "sequence_running": sequence_running,
+        "sequence_index": sequence_index,
+        "sequence_total": sequence_total,
         "status": state.status,
     }
 
