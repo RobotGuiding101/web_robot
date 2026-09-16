@@ -408,7 +408,7 @@
 
         // ===== 4. End-Effector marker + IK Target sphere =====
         const endEffector = new THREE.Group();
-        link6.add(endEffector);
+        link5.add(endEffector); // ไม่เอาพิกัดแกน link6 ปล่อย link6 ไว้
 
         // Orange target sphere (draggable)
         const targetMesh = new THREE.Mesh(
@@ -493,14 +493,13 @@
         }
 
         // ===== 5. CCD Inverse Kinematics =====
-        // Matches exact joint hierarchy & rotational axes of Dobot CR5
+        // Matches joint hierarchy of Dobot CR5 (แกนสุดท้าย link6 ไม่ต้องเอาพิกัดมา ปล่อยอิสระ)
         const ikJoints = [
             { seg: link1, axis: 'y', min: deg(-180), max: deg(180), weight: 1.0 },
             { seg: link2, axis: 'z', min: deg(-90), max: deg(90), weight: 1.0 },
             { seg: link3, axis: 'z', min: deg(-150), max: deg(150), weight: 1.0 },
             { seg: link4, axis: 'z', min: deg(-180), max: deg(180), weight: 0.9 },
             { seg: link5, axis: 'x', min: deg(-180), max: deg(180), weight: 0.8 },
-            { seg: link6, axis: 'y', min: deg(-360), max: deg(360), weight: 0.8 },
         ];
 
         const _effPos = new THREE.Vector3();
@@ -574,10 +573,9 @@
         const _localQ = new THREE.Quaternion();
 
         function solveIKWithOrientation(targetPos, targetQuat) {
-            // 1. Position IK (same CCD)
+            // 1. Position IK (CCD on Link1..Link5)
             solveIK(targetPos);
-            // 2. Orientation: drive Link5 (x) and Link6 (y) to match the Gizmo quaternion
-            // Extract Euler from Gizmo quaternion in order XYZ (matches Dobot wrist)
+            // 2. Orientation: drive Link5 (x) to match Gizmo quaternion (Link6 ปล่อย ไม่ map พิกัด)
             _gizmoEuler.setFromQuaternion(targetQuat, 'XYZ');
 
             // Link5 axis is X
@@ -588,15 +586,6 @@
                 link5.rotation.y = 0;
                 link5.rotation.z = 0;
                 link5.updateMatrixWorld(true);
-            }
-            // Link6 axis is Y
-            {
-                const desired = _gizmoEuler.y;
-                const { min, max } = ikJoints[5];
-                link6.rotation.y = THREE.MathUtils.clamp(desired, min, max);
-                link6.rotation.x = 0;
-                link6.rotation.z = 0;
-                link6.updateMatrixWorld(true);
             }
         }
 
