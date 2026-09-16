@@ -31,11 +31,22 @@ def _create_token(user_id: str, username: str) -> str:
     )
 
 
+_USER_CACHE: dict = {}
+USER_CACHE_TTL_S = 60.0
+
+
 async def get_current_user(
     authorization: str = Header(None),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """FastAPI dependency — extracts current user from Bearer token."""
+    """FastAPI dependency — extracts current user from Bearer token.
+
+    Two things matter here for pool safety. The row is cached, so the 1-2s
+    status polls do not each checkout a connection. And the connection is
+    released before the handler runs: FastAPI keeps this dependency's session
+    alive for the whole request, and /api/map/video_feed streams for minutes,
+    so an MJPEG client used to hold a pooled connection "idle in transaction"
+    for its entire session and a few viewers exhausted the pool (2026-09-16)."""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Not authenticated")
     token = authorization.split(" ", 1)[1]
@@ -44,10 +55,18 @@ async def get_current_user(
         user_id = payload.get("sub")
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+    now = datetime.now(timezone.utc).timestamp()
+    cached = _USER_CACHE.get(user_id)
+    if cached and cached[0] > now:
+        return cached[1]
+
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
+    await db.close()
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    _USER_CACHE[user_id] = (now + USER_CACHE_TTL_S, user)
     return user
 
 
