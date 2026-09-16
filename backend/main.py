@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from anyio import to_thread
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,6 +20,11 @@ from routers import devices as devices_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Each MJPEG client parks one threadpool worker for its whole session, and
+    # every sync robot call takes another — the 40-thread default is easy to
+    # starve on a Pi with a few viewers plus the 1-2s status polls.
+    to_thread.current_default_thread_limiter().total_tokens = 80
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     
