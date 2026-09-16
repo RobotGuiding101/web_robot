@@ -108,6 +108,7 @@ const DrawingModePage = () => {
   const [alignBusy, setAlignBusy]               = useState(false)
   const [markGeom, setMarkGeom]                 = useState(null)
   const [jointStep, setJointStep]               = useState(2)
+  const [jogBusy, setJogBusy]                   = useState(false)
   const [toolIndex, setToolIndex]               = useState(0)
   const [userIndex, setUserIndex]               = useState(0)
   const [frameMsg, setFrameMsg]                 = useState(null)
@@ -444,6 +445,15 @@ const DrawingModePage = () => {
     }
   }, [])
 
+  const stopDraw = useCallback(async () => {
+    try {
+      await apiFetch('/api/map/draw/stop', { method: 'POST' })
+      setStatus('Stop requested')
+    } catch {
+      setStatus('Stop request failed')
+    }
+  }, [])
+
   // ── Emergency Stop ────────────────────────────────────────────────────────
   const handleEmergency = () => {
     apiFetch('/api/map/error', { method: 'POST' }).catch(() => {})
@@ -513,6 +523,7 @@ const DrawingModePage = () => {
     if (!teachStatus || !teachStatus.connected) return
     const rawStep = axis.startsWith('r') ? rotStep : posStep
     const amount = sign * Math.max(0.1, Number(rawStep) || 0.1)
+    setJogBusy(true)
     try {
       const res = await apiFetch('/api/map/jog', {
         method: 'POST',
@@ -525,6 +536,8 @@ const DrawingModePage = () => {
       }
     } catch {
       showTeachMsg('Jog request failed', 'error')
+    } finally {
+      setJogBusy(false)
     }
     setTimeout(fetchTeachStatus, 500)
   }, [teachStatus, posStep, rotStep, showTeachMsg, fetchTeachStatus])
@@ -692,6 +705,7 @@ const DrawingModePage = () => {
   const handleJogJoint = useCallback(async (joint, sign) => {
     if (!teachStatus || !teachStatus.connected) return
     const amount = sign * Math.max(0.1, Number(jointStep) || 0.1)
+    setJogBusy(true)
     try {
       const res = await apiFetch('/api/map/jog_joint', {
         method: 'POST',
@@ -704,6 +718,8 @@ const DrawingModePage = () => {
       }
     } catch {
       showTeachMsg('Joint jog request failed', 'error')
+    } finally {
+      setJogBusy(false)
     }
     setTimeout(fetchTeachStatus, 500)
   }, [teachStatus, jointStep, showTeachMsg, fetchTeachStatus])
@@ -737,6 +753,71 @@ const DrawingModePage = () => {
       else showTeachMsg((data && data.error) || 'Request failed', 'error')
     } catch {
       showTeachMsg('Request failed', 'error')
+    }
+    fetchTeachStatus()
+  }, [showTeachMsg, fetchTeachStatus])
+
+  const handleAutoFillGrid = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/map/grid/autofill', { method: 'POST' })
+      const data = await res.json().catch(() => null)
+      if (res.ok && data && data.ok) {
+        showTeachMsg(`Auto-filled from 4 points (span=${Number(data.span_mm).toFixed(1)}mm)`)
+      } else {
+        showTeachMsg((data && data.error) || 'Auto-fill failed', 'error')
+      }
+    } catch {
+      showTeachMsg('Auto-fill request failed', 'error')
+    }
+    fetchTeachStatus()
+  }, [showTeachMsg, fetchTeachStatus])
+
+  const handleSetGridZ = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/map/grid/setz', { method: 'POST' })
+      const data = await res.json().catch(() => null)
+      if (res.ok && data && data.ok) {
+        showTeachMsg(`Grid Z set to ${Number(data.z).toFixed(1)}mm`)
+      } else {
+        showTeachMsg((data && data.error) || 'Set grid Z failed', 'error')
+      }
+    } catch {
+      showTeachMsg('Set grid Z request failed', 'error')
+    }
+    fetchTeachStatus()
+  }, [showTeachMsg, fetchTeachStatus])
+
+  const handleSetGridZSurface = useCallback(async () => {
+    if (!teachStatus || typeof teachStatus.z_surface !== 'number') return
+    try {
+      const res = await apiFetch('/api/map/grid/setz', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ z: teachStatus.z_surface }),
+      })
+      const data = await res.json().catch(() => null)
+      if (res.ok && data && data.ok) {
+        showTeachMsg(`Grid Z = surface ${Number(data.z).toFixed(1)}mm`)
+      } else {
+        showTeachMsg((data && data.error) || 'Set surface Z failed', 'error')
+      }
+    } catch {
+      showTeachMsg('Set surface Z request failed', 'error')
+    }
+    fetchTeachStatus()
+  }, [teachStatus, showTeachMsg, fetchTeachStatus])
+
+  const handleGridSurfaceZ = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/map/grid/surfacez', { method: 'POST' })
+      const data = await res.json().catch(() => null)
+      if (res.ok && data && data.ok) {
+        showTeachMsg(`Grid Z = surface ${Number(data.z).toFixed(1)}mm (depth ${Number(data.depth).toFixed(0)}mm)`)
+      } else {
+        showTeachMsg((data && data.error) || 'Surface-Z failed', 'error')
+      }
+    } catch {
+      showTeachMsg('Surface-Z request failed', 'error')
     }
     fetchTeachStatus()
   }, [showTeachMsg, fetchTeachStatus])
@@ -819,6 +900,8 @@ const DrawingModePage = () => {
         <div className="page-content" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
           <div className="dm-ipad-shell">
+
+            <div className="dm-main-row">
 
             {/* ── Camera + Canvas overlay (fills all remaining space) ── */}
             <div className="dm-viewport" ref={dmViewportRef}>
@@ -935,10 +1018,10 @@ const DrawingModePage = () => {
                   </>
                 )}
               </div>
+            </div>
 
-              {/* ── Floating Teach / Grid Panel (Top-Left) ── */}
               <div
-                className={`dm-teach-floating${isTeachMinimized ? ' dm-teach-floating--minimized' : ''}`}
+                className={`dm-teach-col${isTeachMinimized ? ' dm-teach-col--minimized' : ''}`}
               >
                 {isTeachMinimized ? (
                   <button
@@ -1141,7 +1224,7 @@ const DrawingModePage = () => {
                             <JogPillRow
                               key={axis}
                               label={axisLabel(axis)}
-                              disabled={!teachConnected}
+                              disabled={!teachConnected || jogBusy}
                               titleMinus={`Jog ${axisLabel(axis)} −${posStep}mm`}
                               titlePlus={`Jog ${axisLabel(axis)} +${posStep}mm`}
                               onMinus={() => handleJog(axis, -1)}
@@ -1170,7 +1253,7 @@ const DrawingModePage = () => {
                             <JogPillRow
                               key={axis}
                               label={axisLabel(axis)}
-                              disabled={!teachConnected}
+                              disabled={!teachConnected || jogBusy}
                               titleMinus={`Jog ${axisLabel(axis)} −${rotStep}deg`}
                               titlePlus={`Jog ${axisLabel(axis)} +${rotStep}deg`}
                               onMinus={() => handleJog(axis, -1)}
@@ -1199,7 +1282,7 @@ const DrawingModePage = () => {
                             <JogPillRow
                               key={j}
                               label={`J${j}`}
-                              disabled={!teachConnected}
+                              disabled={!teachConnected || jogBusy}
                               titleMinus={`Jog J${j} −${jointStep}deg`}
                               titlePlus={`Jog J${j} +${jointStep}deg`}
                               onMinus={() => handleJogJoint(j, -1)}
@@ -1256,8 +1339,44 @@ const DrawingModePage = () => {
                             onClick={handleResetGrid}
                           >Reset Grid</button>
                         </div>
+                        <button
+                          className="dm-teach-autofill-btn"
+                          disabled={!teachConnected || markPoints.length < 4}
+                          title={markPoints.length < 4
+                            ? 'Mark 4 corner points on the image (Align Points) first'
+                            : 'Jog Z down until the pen touches the surface FIRST, then click — the grid inherits the current Z'}
+                          onClick={handleAutoFillGrid}
+                        >
+                          Auto-fill grid from 4 mark points
+                        </button>
+                        <button
+                          className="dm-teach-surfacez-btn"
+                          disabled={!teachConnected || markedCount === 0}
+                          title="Compute the surface Z from the LIVE camera depth (run Align first) and drop the grid onto it — no jogging. The next Send descends ~that far."
+                          onClick={handleGridSurfaceZ}
+                        >
+                          {`↧ Grid Z = measured surface (auto)${teachStatus && teachStatus.last_center_depth ? ` · depth ${Number(teachStatus.last_center_depth).toFixed(0)}mm` : ''}`}
+                        </button>
+                        <button
+                          className="dm-teach-setz-btn"
+                          disabled={!teachConnected || markedCount === 0}
+                          title="Jog Z down until the pen touches the surface FIRST, then press — keeps the grid X/Y and takes this Z"
+                          onClick={handleSetGridZ}
+                        >
+                          ↧ Grid Z = current Z  (jog to surface first)
+                        </button>
+                        {teachStatus && typeof teachStatus.z_surface === 'number' && (
+                          <button
+                            className="dm-teach-surfacez-btn"
+                            disabled={!teachConnected || markedCount === 0}
+                            title="Apply the surface Z configured in backend/.maps_point.env (Z_SURFACE) to every grid cell — no jogging needed"
+                            onClick={handleSetGridZSurface}
+                          >
+                            {`↧ Grid Z = surface (${teachStatus.z_surface.toFixed(1)}mm, configured)`}
+                          </button>
+                        )}
                         <div className="dm-teach-hint">
-                          jog ไปจุดจริง (Jog — Position ด้านบน) แล้วกดปุ่มช่องนั้นเพื่อบันทึกตำแหน่ง
+                          jog Z ลงให้ปากกาแตะผิวงานก่อน แล้วกด Auto-fill · หรือ jog ไปมุมจริงแล้วกดปุ่มช่องนั้น
                         </div>
                         <div className="dm-teach-cells" style={{ gridTemplateColumns: `repeat(${gCols}, 1fr)` }}>
                           {Array.from({ length: gRows }).map((_, i) =>
@@ -1277,8 +1396,12 @@ const DrawingModePage = () => {
                             })
                           )}
                         </div>
-                        <div className="dm-teach-grid-status">
+                        <div className={`dm-teach-grid-status${gridValidate && Array.isArray(gridValidate.warnings) && gridValidate.warnings.length ? ' dm-teach-grid-status--warn' : ''}`}>
                           {`grid ${gRows}x${gCols} — ${markedCount}/${gRows * gCols} marked`}
+                          {gridPoints && gridPoints[0] && gridPoints[0][0] &&
+                            ` · Z=${Number(gridPoints[0][0][2]).toFixed(1)}mm`}
+                          {gridValidate && gridValidate.span_mm !== undefined &&
+                            ` · span=${Number(gridValidate.span_mm).toFixed(1)}mm`}
                           {gridValidate && ` · rmse=${gridValidate.rmse_mm}mm`}
                           {gridValidate && Array.isArray(gridValidate.warnings) && gridValidate.warnings.length > 0 &&
                             ` · ${gridValidate.warnings.join('; ')}`}
@@ -1390,6 +1513,13 @@ const DrawingModePage = () => {
                 >
                    {isSending ? '…' : 'Send'}
                 </button>
+                <button
+                  id="btn-draw-stop"
+                  className="dm-bar-btn dm-bar-btn--danger"
+                  onClick={stopDraw}
+                  disabled={!isSending && !(teachStatus && teachStatus.draw_running)}
+                  title="Stop the running draw (ClearError + ResetRobot)"
+                >■</button>
               </div>
 
               {/* Status */}
