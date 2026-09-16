@@ -258,6 +258,7 @@ def _grid_fully_marked() -> bool:
 
 
 STREAM_FPS = 25
+STREAM_FPS_IDLE = 15
 STREAM_W = 640
 STREAM_H = 360
 STREAM_JPEG_QUALITY = 70
@@ -271,15 +272,61 @@ def _colorize_depth(df):
     return cv2.applyColorMap(norm, cv2.COLORMAP_JET)
 
 
+_ENC_LOCK = threading.Lock()
+_ENC_CACHE: dict = {}
+_ENC_CACHE_MAX = 4
+
+
+def _encode_frame(cf, df, effective_mode: str, count: int):
+    """Encode the shared latest frame ONCE and hand the bytes to every viewer.
+
+    Each client used to run its own colorize / draw_overlay / resize / JPEG
+    pass, so N viewers meant N copies of identical work on the same frame —
+    measured 2026-09-16 on the Pi: two viewers held ~25% of one core
+    (tid 175 = 13.0%, tid 306 = 12.0%). The key is the capture frame counter,
+    not app state: draw_overlay reads last_tilt / last_rmse / last_roll_deg,
+    which the tracking loop rewrites every ~30ms, so a state key never hits.
+    """
+    key = (count, effective_mode, bool(state.heatmap_mode))
+    hit = _ENC_CACHE.get(key)
+    if hit is not None:
+        return hit
+
+    with _ENC_LOCK:
+        hit = _ENC_CACHE.get(key)
+        if hit is not None:
+            return hit
+
+        if (effective_mode == "depth" or state.heatmap_mode) and df is not None:
+            frame = _colorize_depth(df)
+        elif effective_mode == "gray":
+            frame = cv2.cvtColor(cf, cv2.COLOR_BGR2GRAY)
+            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        else:
+            frame = cf.copy()
+
+        frame = draw_overlay(frame, state)
+        if frame.shape[1] != STREAM_W or frame.shape[0] != STREAM_H:
+            frame = cv2.resize(frame, (STREAM_W, STREAM_H), interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), STREAM_JPEG_QUALITY])
+        if not ok:
+            return None
+
+        payload = buf.tobytes()
+        if len(_ENC_CACHE) >= _ENC_CACHE_MAX:
+            _ENC_CACHE.clear()
+        _ENC_CACHE[key] = payload
+        return payload
+
+
 def _mjpeg_generator(mode: Optional[str] = None):
     """MJPEG generator — reads from shared buffers, NOT from hardware directly.
     
     Multiple clients can run this generator simultaneously without conflict.
-    The capture thread in Camera class handles hardware access. Work is
-    deduplicated by the camera frame counter and rate-limited to STREAM_FPS
-    so an idle viewer cannot spin the JPEG encoder at 100% CPU.
+    The capture thread in Camera class handles hardware access. The JPEG
+    encode itself is shared across viewers via _encode_frame, and each client
+    is paced at STREAM_FPS while align/draw runs, STREAM_FPS_IDLE otherwise.
     """
-    interval = 1.0 / STREAM_FPS
     last_count = -1
     while True:
         loop_start = time.time()
@@ -299,26 +346,15 @@ def _mjpeg_generator(mode: Optional[str] = None):
         last_count = count
 
         effective_mode = (mode or getattr(state, "camera_mode", "rgb")).lower()
-
-        if (effective_mode == "depth" or state.heatmap_mode) and df is not None:
-            frame = _colorize_depth(df)
-        elif effective_mode == "gray":
-            frame = cv2.cvtColor(cf, cv2.COLOR_BGR2GRAY)
-            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-        else:
-            frame = cf.copy()
-
-        frame = draw_overlay(frame, state)
-        if frame.shape[1] != STREAM_W or frame.shape[0] != STREAM_H:
-            frame = cv2.resize(frame, (STREAM_W, STREAM_H), interpolation=cv2.INTER_AREA)
-        ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), STREAM_JPEG_QUALITY])
-        if not ok:
+        payload = _encode_frame(cf, df, effective_mode, count)
+        if payload is None:
             continue
-        yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n")
+        yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + payload + b"\r\n")
 
+        fps = STREAM_FPS if (state.align_running or state.draw_running) else STREAM_FPS_IDLE
         dt = time.time() - loop_start
-        if dt < interval:
-            time.sleep(interval - dt)
+        if dt < 1.0 / fps:
+            time.sleep(1.0 / fps - dt)
 
 
 # ── video stream ─────────────────────────────────────────────────────────────
