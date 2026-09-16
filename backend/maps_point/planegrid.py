@@ -29,7 +29,7 @@ import cv2
 import numpy as np
 
 from .config import (
-    DRAW_SIMPLIFY_EPS, DRAW_MAX_POINTS, DRAW_MAX_RMSE_MM,
+    DRAW_SIMPLIFY_EPS, DRAW_MAX_POINTS, DRAW_MAX_RMSE_MM, DRAW_MIN_GRID_SPAN_MM,
     DRAW_CP_RATIO, DRAW_PATH_TIMEOUT_PER_POINT_S, STABLE_TIMEOUT,
     DRAW_MOTION_MODE, DRAW_SERVOP_RATE_HZ, DRAW_SERVOP_STEP_MM,
     DRAW_SERVOP_MAX_STREAM_POINTS, DRAW_SERVOP_ERROR_CHECK_S,
@@ -98,10 +98,14 @@ def validate_grid(grid_points, rows: int, cols: int) -> dict:
     rmse_mm = float(np.sqrt(np.mean(dists ** 2)))
 
     warnings = []
+    span_mm = max(max(p[k] for p in flat) - min(p[k] for p in flat) for k in range(3))
+    if span_mm < DRAW_MIN_GRID_SPAN_MM:
+        warnings.append(f"grid has no size (span={span_mm:.2f}mm) — "
+                         f"jog to each corner before marking")
     if rmse_mm > DRAW_MAX_RMSE_MM:
         warnings.append(f"grid points aren't very coplanar (rmse={rmse_mm:.2f}mm > "
                          f"{DRAW_MAX_RMSE_MM:.1f}mm) — check for a mis-taught point")
-    return {"rmse_mm": rmse_mm, "warnings": warnings}
+    return {"rmse_mm": rmse_mm, "span_mm": span_mm, "warnings": warnings}
 
 
 def project_grid_2d(grid_points, rows: int, cols: int) -> list:
