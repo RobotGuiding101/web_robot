@@ -2265,36 +2265,29 @@ body {
   display: block;
 }
 
-/* ── Floating Teach / Grid Panel in Drawing Mode (Top-Left) ─────────────── */
-.dm-teach-floating {
-  position: absolute;
-  top: 14px;
-  left: 14px;
-  z-index: 15;
+/* ── Teach / Grid panel docked as a right column (Drawing Mode) ─────────── */
+.dm-main-row {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.dm-teach-col {
+  flex: 0 0 520px;
   display: flex;
   flex-direction: column;
-  width: 302px;
-  max-height: calc(100% - 28px);
-  border-radius: 12px;
   overflow: hidden;
   background: #ffffff;
-  border: 1.5px solid #dbe3ed;
-  box-shadow: 0 10px 25px -3px rgba(15, 23, 42, 0.16), 0 4px 10px -2px rgba(15, 23, 42, 0.08);
-  transition: width 0.24s cubic-bezier(0.4, 0, 0.2, 1),
-              height 0.24s cubic-bezier(0.4, 0, 0.2, 1),
-              border-radius 0.24s ease,
-              box-shadow 0.2s ease;
+  border-left: 1.5px solid #dbe3ed;
+  transition: flex-basis 0.24s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.dm-teach-floating:hover {
-  box-shadow: 0 14px 30px -4px rgba(15, 23, 42, 0.22), 0 6px 14px -3px rgba(15, 23, 42, 0.12);
+.dm-teach-col--minimized {
+  flex-basis: 46px;
 }
 
-.dm-teach-floating--minimized {
-  width: 42px;
-  height: 42px;
-  border-radius: 50%;
-  border-color: #cbd5e1;
+.dm-teach-col--minimized .dm-teach-minimized-btn {
+  height: 46px;
 }
 
 .dm-teach-minimized-btn {
@@ -2393,11 +2386,21 @@ body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 8px 10px;
+  padding: 10px;
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 10px;
+  background: #f8fafc;
+}
+
+.dm-teach-body > .dm-teach-section {
+  flex: 1 1 236px;
+  min-width: 0;
   background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px 10px;
 }
 
 /* Live pose readout */
@@ -2446,8 +2449,18 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  border-top: 1px solid #eef2f7;
-  padding-top: 6px;
+}
+
+.dm-teach-body > .dm-teach-pose,
+.dm-teach-body > .dm-teach-msg {
+  flex: 1 1 100%;
+}
+
+.dm-teach-body > .dm-teach-pose {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px 10px;
 }
 
 .dm-teach-label-row {
@@ -2554,6 +2567,81 @@ body {
   box-shadow: none;
 }
 
+.dm-teach-autofill-btn {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 7px;
+  border: 1.5px solid #10b981;
+  background: #ecfdf5;
+  color: #047857;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.12s ease;
+}
+
+.dm-teach-autofill-btn:hover:not(:disabled) {
+  background: #10b981;
+  border-color: #10b981;
+  color: #ffffff;
+}
+
+.dm-teach-autofill-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.dm-teach-setz-btn {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 7px;
+  border: 1.5px solid #f59e0b;
+  background: #fffbeb;
+  color: #b45309;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.12s ease;
+}
+
+.dm-teach-setz-btn:hover:not(:disabled) {
+  background: #f59e0b;
+  border-color: #f59e0b;
+  color: #ffffff;
+}
+
+.dm-teach-setz-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.dm-teach-surfacez-btn {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 7px;
+  border: 1.5px solid #0ea5e9;
+  background: #f0f9ff;
+  color: #0369a1;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.12s ease;
+}
+
+.dm-teach-surfacez-btn:hover:not(:disabled) {
+  background: #0ea5e9;
+  border-color: #0ea5e9;
+  color: #ffffff;
+}
+
+.dm-teach-surfacez-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* Grid cells */
 .dm-teach-cells {
   display: grid;
@@ -2602,6 +2690,14 @@ body {
   color: #334155;
   line-height: 1.4;
   word-break: break-word;
+}
+
+.dm-teach-grid-status--warn {
+  color: #b91c1c;
+  background: #fdecec;
+  border: 1px solid #f5c2c2;
+  border-radius: 6px;
+  padding: 4px 6px;
 }
 
 /* Grid shape preview */
