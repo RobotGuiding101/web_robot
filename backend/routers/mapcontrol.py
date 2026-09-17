@@ -403,6 +403,20 @@ def api_error():
     return {"ok": True}
 
 
+@router.post("/emergency")
+def api_emergency():
+    global sequence_running
+    sequence_stop.set()
+    sequence_running = False
+    state.align_stop.set()
+    state.draw_stop.set()
+    state.align_running = False
+    state.draw_running = False
+    if robot.connected:
+        robot.emergency_stop()
+    return {"ok": True, "status": "emergency_stop_triggered"}
+
+
 @router.post("/home")
 def api_home():
     try:

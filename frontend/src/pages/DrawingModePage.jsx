@@ -456,9 +456,10 @@ const DrawingModePage = () => {
 
   // ── Emergency Stop ────────────────────────────────────────────────────────
   const handleEmergency = () => {
-    apiFetch('/api/map/error', { method: 'POST' }).catch(() => {})
+    apiFetch('/api/map/emergency', { method: 'POST' }).catch(() => {})
+    apiFetch('/api/map/draw/stop', { method: 'POST' }).catch(() => {})
+    apiFetch('/api/map/align/stop', { method: 'POST' }).catch(() => {})
     setStatus('EMERGENCY STOP sent')
-    alert('EMERGENCY STOP!')
   }
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────

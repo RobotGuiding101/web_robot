@@ -147,7 +147,9 @@ const CalibrationPage = () => {
     appendLog(`Alignment point selected at (${x.toFixed(1)}%, ${y.toFixed(1)}%)`)
   }
 
-  const handleEmergency = () => alert('EMERGENCY STOP!')
+  const handleEmergency = () => {
+    apiFetch('/api/map/emergency', { method: 'POST' }).catch(() => {})
+  }
 
   return (
     <div className="app-layout">

@@ -202,8 +202,7 @@ const DashboardPage = () => {
   useEffect(() => () => clearPingPoll(), [])
 
   const handleEmergency = () => {
-    apiFetch('/api/robot/emergency-stop', { method: 'POST' }).catch(() => { })
-    alert('EMERGENCY STOP!')
+    apiFetch('/api/map/emergency', { method: 'POST' }).catch(() => { })
   }
 
   const formatTime = (iso) => {
