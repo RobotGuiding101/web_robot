@@ -507,6 +507,20 @@ class Robot:
         self.dashboard.ClearError()
         self.dashboard.ResetRobot()
 
+    def emergency_stop(self):
+        """Immediately halt robot motion and abort queued commands."""
+        log("  [EMERGENCY] Emergency stop triggered!")
+        if not self.dashboard:
+            return
+        try:
+            self.dashboard.ResetRobot()
+        except Exception as e:
+            log(f"  [EMERGENCY] ResetRobot failed: {e}")
+        try:
+            self.dashboard.EmergencyStop()
+        except Exception as e:
+            log(f"  [EMERGENCY] EmergencyStop failed: {e}")
+
     def _raise_if_error(self):
         """Poll RobotMode() for the controller's ERROR state (code 9, the
         standard Dobot TCP-IP Remote convention — see config.

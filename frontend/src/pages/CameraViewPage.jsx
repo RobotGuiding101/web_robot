@@ -33,8 +33,7 @@ const CameraViewPage = () => {
   }, [])
 
   const handleEmergency = () => {
-    apiFetch('/api/map/error', { method: 'POST' }).catch(() => { })
-    alert('EMERGENCY STOP!')
+    apiFetch('/api/map/emergency', { method: 'POST' }).catch(() => { })
   }
 
   const handleModeChange = async (newMode) => {
