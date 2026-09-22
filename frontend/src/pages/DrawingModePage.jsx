@@ -33,26 +33,7 @@ const STROKE_WIDTHS = [1, 2, 4, 8, 16]
 
 // ─── Teach / Grid panel constants ─────────────────────────────────────────────
 const POSE_LABELS  = ['X', 'Y', 'Z', 'Rx', 'Ry', 'Rz']
-const JOG_POS_AXES = ['x', 'y', 'z']
-const JOG_ROT_AXES = ['rx', 'ry', 'rz']
-const JOG_JOINT_AXES = [1, 2, 3, 4, 5, 6]
-const JOG_SPEED    = 10
-
-const axisLabel = (a) => a.charAt(0).toUpperCase() + a.slice(1)
 const clampInt  = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(Number(v) || lo)))
-
-const JogPillRow = ({ label, onMinus, onPlus, disabled, titleMinus, titlePlus }) => (
-  <div className="jog-row">
-    <button className="jog-pill jog-pill--minus" onClick={onMinus} disabled={disabled} title={titleMinus}>
-      <span className="jog-axis-badge">{label}</span>
-      <span className="jog-sign">−</span>
-    </button>
-    <button className="jog-pill jog-pill--plus" onClick={onPlus} disabled={disabled} title={titlePlus}>
-      <span className="jog-axis-badge">{label}</span>
-      <span className="jog-sign">+</span>
-    </button>
-  </div>
-)
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function getCanvasPathData(fc) {
@@ -97,8 +78,6 @@ const DrawingModePage = () => {
   // Teach / Grid Floating Panel
   const [isTeachMinimized, setIsTeachMinimized] = useState(false)
   const [teachStatus, setTeachStatus]           = useState(null)
-  const [posStep, setPosStep]                   = useState(5)
-  const [rotStep, setRotStep]                   = useState(2)
   const [gridRows, setGridRows]                 = useState(2)
   const [gridCols, setGridCols]                 = useState(2)
   const [teachMsg, setTeachMsg]                 = useState(null)
@@ -107,12 +86,6 @@ const DrawingModePage = () => {
   const [markClickMode, setMarkClickMode]       = useState('mark')
   const [alignBusy, setAlignBusy]               = useState(false)
   const [markGeom, setMarkGeom]                 = useState(null)
-  const [jointStep, setJointStep]               = useState(2)
-  const [jogBusy, setJogBusy]                   = useState(false)
-  const [toolIndex, setToolIndex]               = useState(0)
-  const [userIndex, setUserIndex]               = useState(0)
-  const [frameMsg, setFrameMsg]                 = useState(null)
-  const frameDirtyRef = useRef(false)
 
   // Refs for latest state values (avoid stale closures)
   const strokeColorRef = useRef(strokeColor)
@@ -495,10 +468,6 @@ const DrawingModePage = () => {
       if (!res.ok) return
       const data = await res.json()
       setTeachStatus(data)
-      if (!frameDirtyRef.current) {
-        if (data.tool_index !== undefined && data.tool_index !== null) setToolIndex(data.tool_index)
-        if (data.user_index !== undefined && data.user_index !== null) setUserIndex(data.user_index)
-      }
     } catch { /* ignore */ }
   }, [])
 
@@ -518,30 +487,6 @@ const DrawingModePage = () => {
   useEffect(() => () => {
     if (teachMsgTimerRef.current) clearTimeout(teachMsgTimerRef.current)
   }, [])
-
-  // ── Teach / Grid: jog ────────────────────────────────────────────────────
-  const handleJog = useCallback(async (axis, sign) => {
-    if (!teachStatus || !teachStatus.connected) return
-    const rawStep = axis.startsWith('r') ? rotStep : posStep
-    const amount = sign * Math.max(0.1, Number(rawStep) || 0.1)
-    setJogBusy(true)
-    try {
-      const res = await apiFetch('/api/map/jog', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ axis, amount, speed: JOG_SPEED }),
-      })
-      const data = await res.json().catch(() => null)
-      if (!res.ok || (data && data.ok === false)) {
-        showTeachMsg((data && data.error) || 'Jog rejected', 'error')
-      }
-    } catch {
-      showTeachMsg('Jog request failed', 'error')
-    } finally {
-      setJogBusy(false)
-    }
-    setTimeout(fetchTeachStatus, 500)
-  }, [teachStatus, posStep, rotStep, showTeachMsg, fetchTeachStatus])
 
   // ── Teach / Grid: set grid size ──────────────────────────────────────────
   const handleSetGrid = useCallback(async () => {
@@ -701,61 +646,6 @@ const DrawingModePage = () => {
       setAlignBusy(false)
       fetchTeachStatus()
     }
-  }, [showTeachMsg, fetchTeachStatus])
-
-  const handleJogJoint = useCallback(async (joint, sign) => {
-    if (!teachStatus || !teachStatus.connected) return
-    const amount = sign * Math.max(0.1, Number(jointStep) || 0.1)
-    setJogBusy(true)
-    try {
-      const res = await apiFetch('/api/map/jog_joint', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ joint, amount, speed: JOG_SPEED }),
-      })
-      const data = await res.json().catch(() => null)
-      if (!res.ok || (data && data.ok === false)) {
-        showTeachMsg((data && data.error) || 'Joint jog rejected', 'error')
-      }
-    } catch {
-      showTeachMsg('Joint jog request failed', 'error')
-    } finally {
-      setJogBusy(false)
-    }
-    setTimeout(fetchTeachStatus, 500)
-  }, [teachStatus, jointStep, showTeachMsg, fetchTeachStatus])
-
-  const handleApplyFrame = useCallback(async () => {
-    try {
-      const res = await apiFetch('/api/map/frame', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tool_index: Number(toolIndex), user_index: Number(userIndex) }),
-      })
-      const data = await res.json().catch(() => null)
-      if (res.ok && data && data.ok !== false) {
-        setFrameMsg({ kind: 'ok', text: `Tool ${data.tool_index} / User ${data.user_index}` })
-        frameDirtyRef.current = false
-      } else {
-        setFrameMsg({ kind: 'error', text: (data && data.error) || 'Frame failed' })
-      }
-    } catch {
-      setFrameMsg({ kind: 'error', text: 'Frame request failed' })
-    }
-    setTimeout(() => setFrameMsg(null), 3000)
-    fetchTeachStatus()
-  }, [toolIndex, userIndex, fetchTeachStatus])
-
-  const robotAction = useCallback(async (url, okText) => {
-    try {
-      const res = await apiFetch(url, { method: 'POST' })
-      const data = await res.json().catch(() => null)
-      if (res.ok && data && data.ok !== false) showTeachMsg(okText)
-      else showTeachMsg((data && data.error) || 'Request failed', 'error')
-    } catch {
-      showTeachMsg('Request failed', 'error')
-    }
-    fetchTeachStatus()
   }, [showTeachMsg, fetchTeachStatus])
 
   const handleAutoFillGrid = useCallback(async () => {
@@ -1076,66 +966,6 @@ const DrawingModePage = () => {
                       </div>
 
                       <div className="dm-teach-section">
-                        <div className="ctrl-section-head">Robot / Camera</div>
-                        <div className="dm-teach-btn-grid">
-                          <button
-                            className="dm-teach-sm-btn"
-                            disabled={!teachStatus}
-                            onClick={() => robotAction('/api/map/connect', 'Robot connected')}
-                          >Connect</button>
-                          <button
-                            className="dm-teach-sm-btn"
-                            disabled={!teachStatus}
-                            onClick={() => robotAction('/api/map/init', 'Robot init sent')}
-                          >Init</button>
-                          <button
-                            className="dm-teach-sm-btn"
-                            disabled={!teachStatus}
-                            onClick={() => robotAction('/api/map/camstart', 'Camera started')}
-                          >Camera</button>
-                          <button
-                            className={`dm-teach-sm-btn${teachStatus && teachStatus.heatmap_mode ? ' active' : ''}`}
-                            disabled={!teachStatus}
-                            onClick={() => robotAction('/api/map/heatmap/toggle', 'Heatmap toggled')}
-                          >Heatmap</button>
-                        </div>
-                      </div>
-
-                      <div className="dm-teach-section">
-                        <div className="ctrl-section-head">Frame</div>
-                        <div className="frame-wrap">
-                          <label className="frame-field">
-                            <span>Tool</span>
-                            <input
-                              type="number"
-                              min="0"
-                              max="19"
-                              value={toolIndex}
-                              onChange={(e) => { frameDirtyRef.current = true; setToolIndex(e.target.value) }}
-                              disabled={!teachConnected}
-                            />
-                          </label>
-                          <label className="frame-field">
-                            <span>User</span>
-                            <input
-                              type="number"
-                              min="0"
-                              max="9"
-                              value={userIndex}
-                              onChange={(e) => { frameDirtyRef.current = true; setUserIndex(e.target.value) }}
-                              disabled={!teachConnected}
-                            />
-                          </label>
-                          <button className="frame-apply" onClick={handleApplyFrame} disabled={!teachConnected}>
-                            Apply
-                          </button>
-                        </div>
-                        {frameMsg && (
-                          <span className={`frame-msg frame-msg--${frameMsg.kind}`}>{frameMsg.text}</span>
-                        )}
-                      </div>
-
-                      <div className="dm-teach-section">
                         <div className="dm-teach-label-row">
                           <span className="ctrl-section-head">Align Points</span>
                           <button
@@ -1203,100 +1033,6 @@ const DrawingModePage = () => {
                           <span>align</span><b>{teachStatus && teachStatus.align_running ? 'running' : 'idle'}</b>
                           <span>tilt</span><b>{fmtMark(teachStatus && teachStatus.last_tilt)}°</b>
                           <span>rmse</span><b>{fmtMark(teachStatus && teachStatus.last_rmse)} mm</b>
-                        </div>
-                      </div>
-
-                      <div className="dm-teach-section">
-                        <div className="ctrl-section-head">Jog — Position (mm)</div>
-                        <label className="dm-teach-step-inline">
-                          Step
-                          <input
-                            type="number"
-                            className="dm-teach-step-input"
-                            value={posStep}
-                            min={0.1}
-                            step={0.5}
-                            onChange={(e) => setPosStep(Math.max(0.1, Number(e.target.value) || 0.1))}
-                          />
-                          mm
-                        </label>
-                        <div className="jog-panel">
-                          {JOG_POS_AXES.map((axis) => (
-                            <JogPillRow
-                              key={axis}
-                              label={axisLabel(axis)}
-                              disabled={!teachConnected || jogBusy}
-                              titleMinus={`Jog ${axisLabel(axis)} −${posStep}mm`}
-                              titlePlus={`Jog ${axisLabel(axis)} +${posStep}mm`}
-                              onMinus={() => handleJog(axis, -1)}
-                              onPlus={() => handleJog(axis, 1)}
-                            />
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="dm-teach-section">
-                        <div className="ctrl-section-head">Jog — Orientation (deg)</div>
-                        <label className="dm-teach-step-inline">
-                          Step
-                          <input
-                            type="number"
-                            className="dm-teach-step-input"
-                            value={rotStep}
-                            min={0.1}
-                            step={0.5}
-                            onChange={(e) => setRotStep(Math.max(0.1, Number(e.target.value) || 0.1))}
-                          />
-                          deg
-                        </label>
-                        <div className="jog-panel">
-                          {JOG_ROT_AXES.map((axis) => (
-                            <JogPillRow
-                              key={axis}
-                              label={axisLabel(axis)}
-                              disabled={!teachConnected || jogBusy}
-                              titleMinus={`Jog ${axisLabel(axis)} −${rotStep}deg`}
-                              titlePlus={`Jog ${axisLabel(axis)} +${rotStep}deg`}
-                              onMinus={() => handleJog(axis, -1)}
-                              onPlus={() => handleJog(axis, 1)}
-                            />
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="dm-teach-section">
-                        <div className="ctrl-section-head">Jog — Joints (deg)</div>
-                        <label className="dm-teach-step-inline">
-                          Step
-                          <input
-                            type="number"
-                            className="dm-teach-step-input"
-                            value={jointStep}
-                            min={0.1}
-                            step={0.5}
-                            onChange={(e) => setJointStep(Math.max(0.1, Number(e.target.value) || 0.1))}
-                          />
-                          deg
-                        </label>
-                        <div className="jog-panel">
-                          {JOG_JOINT_AXES.map((j) => (
-                            <JogPillRow
-                              key={j}
-                              label={`J${j}`}
-                              disabled={!teachConnected || jogBusy}
-                              titleMinus={`Jog J${j} −${jointStep}deg`}
-                              titlePlus={`Jog J${j} +${jointStep}deg`}
-                              onMinus={() => handleJogJoint(j, -1)}
-                              onPlus={() => handleJogJoint(j, 1)}
-                            />
-                          ))}
-                        </div>
-                        <div className="dm-teach-joints">
-                          {teachStatus && Array.isArray(teachStatus.angles) && teachStatus.angles.length === 6
-                            ? teachStatus.angles.map((a, i) => (
-                              <span key={i}>{`J${i + 1} ${Number(a).toFixed(1)}`}</span>
-                            ))
-                            : <span>J1-J6 —</span>}
                         </div>
                       </div>
 
