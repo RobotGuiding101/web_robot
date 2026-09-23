@@ -8,7 +8,7 @@
 
 - 🔑 **Authentication (JWT)**
   - Login ด้วย `username` / `password` (bcrypt hash ใน PostgreSQL)
-  - ออก token อายุ 72 ชม. — ทุก `/api/*` ต้องแนบ Bearer token (เปิดเฉพาะ `/login`; `/register` และ `/me` ยังต้องมี user)
+  - ออก token อายุ 72 ชม. — ทุก `/api/*` (ยกเว้น `/api/auth/*`) ต้องแนบ Bearer token
   - สมัครสมาชิก (`/register`) ต้อง login อยู่ก่อน — ปิด self-registration
 - 🎮 **Dobot Controller (การควบคุมหุ่นยนต์)**
   - **Cartesian Control**: ควบคุมตำแหน่งพิกัด X, Y, Z, RX, RY, RZ
@@ -87,6 +87,7 @@
 ```text
 web_robot/
 ├── README.md
+├── DATABASE.md                     # ER diagram + schema ฐานข้อมูล
 ├── docker-compose.yml              # รัน Frontend + Backend + PostgreSQL ด้วยคำสั่งเดียว
 │
 ├── backend/                        # FastAPI Server (port 8000)
@@ -231,6 +232,14 @@ graph TD
 
 ---
 
+## 🗄️ โครงสร้างฐานข้อมูล (Database)
+
+PostgreSQL 16 — 3 ตาราง: `users`, `user_settings`, `device_logs` (สร้างอัตโนมัติจาก SQLAlchemy `Base.metadata` ตอน startup)
+
+> 📑 ดู **ER Diagram** + รายละเอียด schema/คอลัมน์/ความสัมพันธ์ทั้งหมดที่ **[DATABASE.md](DATABASE.md)**
+
+---
+
 ## 🚀 การติดตั้งและการใช้งาน (Setup)
 
 ### 📋 ความต้องการของระบบ (Prerequisites)
@@ -281,6 +290,8 @@ docker compose down
 > - `backend` และ `frontend` ใช้ `network_mode: host` — nginx proxy `/api/*` (รวม MJPEG ที่ปิด buffering) ไปที่ backend
 > - ต้องมี `backend/.maps_point.env` (ค่ากล้อง/หุ่น/home) ไม่งั้นใช้ค่า default ใน `config.py`
 > - `backend` ต้อง `privileged: true` เพื่อเข้าถึงกล้อง RealSense/USB
+
+> **หมายเหตุ**: nginx proxy `/api/*` และ `/ws` ไปที่ backend อัตโนมัติ
 
 ---
 
