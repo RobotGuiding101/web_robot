@@ -70,12 +70,12 @@ const DrawingModePage = () => {
   const [objectCount, setObjectCount] = useState(0)
   const [isSending,   setIsSending]   = useState(false)
 
-  // 3D Robot Model Floating Viewer
+  // 3D Robot Model
   const viewerKey = useRef(Date.now())
   const [is3DMinimized, setIs3DMinimized] = useState(false)
-  const [is3DExpanded, setIs3DExpanded]   = useState(false)
+  const [is3DExpanded, setIs3DExpanded]   = useState(true)
 
-  // Teach / Grid Floating Panel
+  // Teach / Grid Panel
   const [isTeachMinimized, setIsTeachMinimized] = useState(false)
   const [teachStatus, setTeachStatus]           = useState(null)
   const [gridRows, setGridRows]                 = useState(2)
@@ -715,7 +715,6 @@ const DrawingModePage = () => {
 
   // ── Teach / Grid: derived view data ──────────────────────────────────────
   const teachConnected = !!(teachStatus && teachStatus.connected)
-  const teachPose      = (teachStatus && Array.isArray(teachStatus.pose)) ? teachStatus.pose : null
   const gRows          = (teachStatus && teachStatus.grid_rows) || gridRows
   const gCols          = (teachStatus && teachStatus.grid_cols) || gridCols
   const gridPoints     = teachStatus ? teachStatus.grid_points    : null
@@ -729,7 +728,7 @@ const DrawingModePage = () => {
     })
   }
 
-  // Grid shape preview geometry — port of the legacy 200x200 / 20px-padding scaling
+  // Grid shape preview geometry
   let gridShapeEls = null
   if (Array.isArray(gridShape2d) && gridShape2d.length > 0) {
     const byKey = {}
@@ -838,342 +837,248 @@ const DrawingModePage = () => {
                 </div>
               ))}
 
-              {/* ── Floating 3D Robot Arm Model (Top-Right) ── */}
-              <div
-                className={`dm-3d-floating${is3DMinimized ? ' dm-3d-floating--minimized' : ''}${is3DExpanded ? ' dm-3d-floating--expanded' : ''}`}
+            </div>
+
+            {/* ── Right panel: toggle tab + content ── */}
+            <div className={`dm-teach-col${isTeachMinimized ? ' dm-teach-col--minimized' : ''}`}>
+
+              {/* Toggle tab — sticks to left edge, collapses/opens entire panel */}
+              <button
+                className="dm-teach-collapse-tab"
+                onClick={() => setIsTeachMinimized((v) => !v)}
+                title={isTeachMinimized ? 'เปิดเมนู' : 'พับเมนู'}
               >
-                {is3DMinimized ? (
-                  <button
-                    className="dm-3d-minimized-btn"
-                    onClick={() => setIs3DMinimized(false)}
-                    title="Show 3D Robot Model"
-                  >
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-                      <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-                      <line x1="12" y1="22.08" x2="12" y2="12" />
-                    </svg>
-                  </button>
-                ) : (
-                  <>
-                    {/* Header bar */}
-                    <div className="dm-3d-header">
-                      <div className="dm-3d-title-wrap">
+                <svg
+                  width="12" height="12" viewBox="0 0 24 24"
+                  fill="none" stroke="currentColor" strokeWidth="2.5"
+                  strokeLinecap="round" strokeLinejoin="round"
+                  style={{ transition: 'transform 0.25s', transform: isTeachMinimized ? 'rotate(180deg)' : 'rotate(0deg)' }}
+                >
+                  <polyline points="15 18 9 12 15 6" />
+                </svg>
+              </button>
+
+              {!isTeachMinimized && (
+                <div className="dm-teach-body">
+
+                  {/* ── 3D Robot Arm ── */}
+                  <div className="dm-teach-section dm-teach-3d-section">
+                    <div className="dm-teach-3d-header">
+                      <div className="dm-teach-3d-title-wrap">
                         <span className="dm-3d-title-dot" />
                         <span className="dm-3d-title-text">3D Robot Arm</span>
                       </div>
-                      <div className="dm-3d-actions">
-                        <button
-                          className="dm-3d-btn"
-                          onClick={() => setIs3DExpanded(!is3DExpanded)}
-                          title={is3DExpanded ? 'Compact size' : 'Expand size'}
-                        >
-                          {is3DExpanded ? (
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                              <polyline points="4 14 10 14 10 20" />
-                              <polyline points="20 10 14 10 14 4" />
-                              <line x1="14" y1="10" x2="21" y2="3" />
-                              <line x1="3" y1="21" x2="10" y2="14" />
-                            </svg>
-                          ) : (
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                              <polyline points="15 3 21 3 21 9" />
-                              <polyline points="9 21 3 21 3 15" />
-                              <line x1="21" y1="3" x2="14" y2="10" />
-                              <line x1="3" y1="21" x2="10" y2="14" />
-                            </svg>
-                          )}
-                        </button>
-                        <button
-                          className="dm-3d-btn dm-3d-btn--close"
-                          onClick={() => setIs3DMinimized(true)}
-                          title="Minimize"
-                        >
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <line x1="18" y1="6" x2="6" y2="18" />
-                            <line x1="6" y1="6" x2="18" y2="18" />
-                          </svg>
-                        </button>
+                    </div>
+                    {is3DExpanded && (
+                      <div className="dm-teach-3d-frame-wrap">
+                        <iframe
+                          src={`/robot-viewer.html?v=${viewerKey.current}&mode=display`}
+                          title="Robot Arm 3D Viewer"
+                          className="dm-3d-frame"
+                          allow="accelerometer"
+                        />
                       </div>
+                    )}
+                  </div>
+
+                  {/* ── Align Points ── */}
+                  <div className="dm-teach-section">
+                    <div className="dm-teach-label-row">
+                      <span className="ctrl-section-head">Align Points</span>
+                      <button
+                        className={`dm-mark-toggle${markMode ? ' active' : ''}`}
+                        onClick={() => setMarkMode((v) => !v)}
+                        disabled={!markReady}
+                      >
+                        {markMode ? 'Mark ON' : 'Mark OFF'}
+                      </button>
                     </div>
 
-                    {/* 3D Model iframe */}
-                    <div className="dm-3d-frame-wrap">
-                      <iframe
-                        src={`/robot-viewer.html?v=${viewerKey.current}&mode=display`}
-                        title="Robot Arm 3D Viewer"
-                        className="dm-3d-frame"
-                        allow="accelerometer"
-                      />
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-
-              <div
-                className={`dm-teach-col${isTeachMinimized ? ' dm-teach-col--minimized' : ''}`}
-              >
-                {isTeachMinimized ? (
-                  <button
-                    className="dm-teach-minimized-btn"
-                    onClick={() => setIsTeachMinimized(false)}
-                    title="Show Teach / Grid panel"
-                  >
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="3" y="3" width="18" height="18" rx="2" />
-                      <line x1="9" y1="3" x2="9" y2="21" />
-                      <line x1="15" y1="3" x2="15" y2="21" />
-                      <line x1="3" y1="9" x2="21" y2="9" />
-                      <line x1="3" y1="15" x2="21" y2="15" />
-                    </svg>
-                  </button>
-                ) : (
-                  <>
-                    {/* Header bar */}
-                    <div className="dm-teach-header">
-                      <div className="dm-teach-title-wrap">
-                        <span className={`dm-teach-title-dot${teachConnected ? '' : ' dm-teach-title-dot--off'}`} />
-                        <span className="dm-teach-title-text">Teach / Grid</span>
-                      </div>
-                      <div className="dm-teach-actions">
-                        <button
-                          className="dm-teach-btn dm-teach-btn--close"
-                          onClick={() => setIsTeachMinimized(true)}
-                          title="Minimize"
-                        >
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <line x1="18" y1="6" x2="6" y2="18" />
-                            <line x1="6" y1="6" x2="18" y2="18" />
-                          </svg>
-                        </button>
-                      </div>
+                    <div className="dm-mark-modes">
+                      <button
+                        className={`dm-mark-mode${markClickMode === 'mark' ? ' active' : ''}`}
+                        onClick={() => setMarkClickMode('mark')}
+                        disabled={!markReady}
+                      >
+                        Mark
+                      </button>
+                      <button
+                        className={`dm-mark-mode${markClickMode === 'goto' ? ' active' : ''}`}
+                        onClick={() => setMarkClickMode('goto')}
+                        disabled={!markReady}
+                      >
+                        Goto
+                      </button>
                     </div>
 
-                    <div className="dm-teach-body">
-                      {/* Live pose readout */}
-                      <div className="dm-teach-pose">
-                        {teachConnected && teachPose && teachPose.length === 6 ? (
-                          POSE_LABELS.map((lbl, i) => (
-                            <div className="dm-teach-pose-item" key={lbl}>
-                              <span className="dm-teach-pose-label">{lbl}</span>
-                              <span className="dm-teach-pose-value">{Number(teachPose[i]).toFixed(1)}</span>
-                            </div>
-                          ))
-                        ) : (
-                          <span className="dm-teach-offline">not connected</span>
-                        )}
-                      </div>
+                    <div className="dm-mark-hint">
+                      {!markReady
+                        ? 'Robot / Camera ไม่พร้อมใช้งาน'
+                        : markMode
+                          ? (markClickMode === 'mark'
+                            ? 'คลิกบนภาพ 4 จุด (มุมวัตถุ) แล้วกด Align · วาดภาพถูกปิดชั่วคราว'
+                            : 'คลิกบนภาพ = สั่งหุ่นไปจุดนั้น')
+                          : 'กด Mark ON แล้วคลิกจุดบนภาพ'}
+                    </div>
 
-                      <div className="dm-teach-section">
-                        <div className="dm-teach-label-row">
-                          <span className="ctrl-section-head">Align Points</span>
-                          <button
-                            className={`dm-mark-toggle${markMode ? ' active' : ''}`}
-                            onClick={() => setMarkMode((v) => !v)}
-                            disabled={!markReady}
-                          >
-                            {markMode ? 'Mark ON' : 'Mark OFF'}
-                          </button>
-                        </div>
+                    <div className="dm-mark-actions">
+                      <button
+                        className="dm-mark-btn"
+                        onClick={() => alignAction('/api/map/reset_points', 'Points cleared')}
+                        disabled={!markReady || alignBusy}
+                      >
+                        Reset
+                      </button>
+                      <button
+                        className="dm-mark-btn dm-mark-btn--primary"
+                        onClick={() => alignAction('/api/map/align', 'Align started')}
+                        disabled={!markReady || alignBusy || !!(teachStatus && teachStatus.align_running) || markPoints.length < 4}
+                      >
+                        Align
+                      </button>
+                      <button
+                        className="dm-mark-btn dm-mark-btn--danger"
+                        onClick={() => alignAction('/api/map/align/stop', 'Stop requested')}
+                        disabled={!markReady || alignBusy || !(teachStatus && teachStatus.align_running)}
+                      >
+                        Stop
+                      </button>
+                    </div>
 
-                        <div className="dm-mark-modes">
-                          <button
-                            className={`dm-mark-mode${markClickMode === 'mark' ? ' active' : ''}`}
-                            onClick={() => setMarkClickMode('mark')}
-                            disabled={!markReady}
-                          >
-                            Mark
-                          </button>
-                          <button
-                            className={`dm-mark-mode${markClickMode === 'goto' ? ' active' : ''}`}
-                            onClick={() => setMarkClickMode('goto')}
-                            disabled={!markReady}
-                          >
-                            Goto
-                          </button>
-                        </div>
+                    <div className="dm-mark-readout">
+                      <span>points</span><b>{markPoints.length}/4</b>
+                      <span>align</span><b>{teachStatus && teachStatus.align_running ? 'running' : 'idle'}</b>
+                      <span>tilt</span><b>{fmtMark(teachStatus && teachStatus.last_tilt)}°</b>
+                      <span>rmse</span><b>{fmtMark(teachStatus && teachStatus.last_rmse)} mm</b>
+                    </div>
+                  </div>
 
-                        <div className="dm-mark-hint">
-                          {!markReady
-                            ? 'Robot / Camera ไม่พร้อมใช้งาน'
-                            : markMode
-                              ? (markClickMode === 'mark'
-                                ? 'คลิกบนภาพ 4 จุด (มุมวัตถุ) แล้วกด Align · วาดภาพถูกปิดชั่วคราว'
-                                : 'คลิกบนภาพ = สั่งหุ่นไปจุดนั้น')
-                              : 'กด Mark ON แล้วคลิกจุดบนภาพ'}
-                        </div>
-
-                        <div className="dm-mark-actions">
-                          <button
-                            className="dm-mark-btn"
-                            onClick={() => alignAction('/api/map/reset_points', 'Points cleared')}
-                            disabled={!markReady || alignBusy}
-                          >
-                            Reset
-                          </button>
-                          <button
-                            className="dm-mark-btn dm-mark-btn--primary"
-                            onClick={() => alignAction('/api/map/align', 'Align started')}
-                            disabled={!markReady || alignBusy || !!(teachStatus && teachStatus.align_running) || markPoints.length < 4}
-                          >
-                            Align
-                          </button>
-                          <button
-                            className="dm-mark-btn dm-mark-btn--danger"
-                            onClick={() => alignAction('/api/map/align/stop', 'Stop requested')}
-                            disabled={!markReady || alignBusy || !(teachStatus && teachStatus.align_running)}
-                          >
-                            Stop
-                          </button>
-                        </div>
-
-                        <div className="dm-mark-readout">
-                          <span>points</span><b>{markPoints.length}/4</b>
-                          <span>align</span><b>{teachStatus && teachStatus.align_running ? 'running' : 'idle'}</b>
-                          <span>tilt</span><b>{fmtMark(teachStatus && teachStatus.last_tilt)}°</b>
-                          <span>rmse</span><b>{fmtMark(teachStatus && teachStatus.last_rmse)} mm</b>
-                        </div>
-                      </div>
-
-                      <div className="dm-teach-section">
-                        <div className="ctrl-section-head">Grid (N×M taught points)</div>
-                        <div className="dm-teach-grid-size-row">
-                          <label className="dm-teach-grid-field">
-                            <span>Rows</span>
-                            <input
-                              type="number"
-                              className="dm-teach-grid-input"
-                              value={gridRows}
-                              min={2}
-                              max={7}
-                              onChange={(e) => setGridRows(clampInt(e.target.value, 2, 7))}
-                            />
-                          </label>
-                          <label className="dm-teach-grid-field">
-                            <span>Cols</span>
-                            <input
-                              type="number"
-                              className="dm-teach-grid-input"
-                              value={gridCols}
-                              min={2}
-                              max={7}
-                              onChange={(e) => setGridCols(clampInt(e.target.value, 2, 7))}
-                            />
-                          </label>
-                        </div>
-                        <div className="dm-teach-grid-actions">
-                          <button
-                            className="dm-teach-action-btn"
-                            disabled={!teachConnected}
-                            title={teachConnected ? 'Apply grid size' : 'Robot not connected'}
-                            onClick={handleSetGrid}
-                          >Set Grid</button>
-                          <button
-                            className="dm-teach-action-btn dm-teach-action-btn--danger"
-                            disabled={!teachConnected}
-                            title={teachConnected ? 'Clear all taught points' : 'Robot not connected'}
-                            onClick={handleResetGrid}
-                          >Reset Grid</button>
-                        </div>
-                        <button
-                          className="dm-teach-autofill-btn"
-                          disabled={!teachConnected || markPoints.length < 4}
-                          title={markPoints.length < 4
-                            ? 'Mark 4 corner points on the image (Align Points) first'
-                            : 'Jog Z down until the pen touches the surface FIRST, then click — the grid inherits the current Z'}
-                          onClick={handleAutoFillGrid}
-                        >
-                          Auto-fill grid from 4 mark points
-                        </button>
-                        <button
-                          className="dm-teach-surfacez-btn"
-                          disabled={!teachConnected || markedCount === 0}
-                          title="Compute the surface Z from the LIVE camera depth (run Align first) and drop the grid onto it — no jogging. The next Send descends ~that far."
-                          onClick={handleGridSurfaceZ}
-                        >
-                          {`↧ Grid Z = measured surface (auto)${teachStatus && teachStatus.last_center_depth ? ` · depth ${Number(teachStatus.last_center_depth).toFixed(0)}mm` : ''}`}
-                        </button>
-                        <button
-                          className="dm-teach-setz-btn"
-                          disabled={!teachConnected || markedCount === 0}
-                          title="Jog Z down until the pen touches the surface FIRST, then press — keeps the grid X/Y and takes this Z"
-                          onClick={handleSetGridZ}
-                        >
-                          ↧ Grid Z = current Z  (jog to surface first)
-                        </button>
-                        {teachStatus && typeof teachStatus.z_surface === 'number' && (
-                          <button
-                            className="dm-teach-surfacez-btn"
-                            disabled={!teachConnected || markedCount === 0}
-                            title="Apply the surface Z configured in backend/.maps_point.env (Z_SURFACE) to every grid cell — no jogging needed"
-                            onClick={handleSetGridZSurface}
-                          >
-                            {`↧ Grid Z = surface (${teachStatus.z_surface.toFixed(1)}mm, configured)`}
-                          </button>
-                        )}
-                        <div className="dm-teach-hint">
-                          jog Z ลงให้ปากกาแตะผิวงานก่อน แล้วกด Auto-fill · หรือ jog ไปมุมจริงแล้วกดปุ่มช่องนั้น
-                        </div>
-                        <div className="dm-teach-cells" style={{ gridTemplateColumns: `repeat(${gCols}, 1fr)` }}>
-                          {Array.from({ length: gRows }).map((_, i) =>
-                            Array.from({ length: gCols }).map((_, j) => {
-                              const marked = !!(gridPoints && gridPoints[i] && gridPoints[i][j])
-                              return (
-                                <button
-                                  key={`${i}-${j}`}
-                                  className={`dm-teach-cell${marked ? ' dm-teach-cell--marked' : ''}`}
-                                  disabled={!teachConnected}
-                                  title={teachConnected ? `Record current pose into R${i + 1}C${j + 1}` : 'Robot not connected'}
-                                  onClick={() => handleMarkCell(i + 1, j + 1)}
-                                >
-                                  {`R${i + 1}C${j + 1}`}
-                                </button>
-                              )
-                            })
-                          )}
-                        </div>
-                        <div className={`dm-teach-grid-status${gridValidate && Array.isArray(gridValidate.warnings) && gridValidate.warnings.length ? ' dm-teach-grid-status--warn' : ''}`}>
-                          {`grid ${gRows}x${gCols} — ${markedCount}/${gRows * gCols} marked`}
-                          {gridPoints && gridPoints[0] && gridPoints[0][0] &&
-                            ` · Z=${Number(gridPoints[0][0][2]).toFixed(1)}mm`}
-                          {gridValidate && gridValidate.span_mm !== undefined &&
-                            ` · span=${Number(gridValidate.span_mm).toFixed(1)}mm`}
-                          {gridValidate && ` · rmse=${gridValidate.rmse_mm}mm`}
-                          {gridValidate && Array.isArray(gridValidate.warnings) && gridValidate.warnings.length > 0 &&
-                            ` · ${gridValidate.warnings.join('; ')}`}
-                        </div>
-                        <svg viewBox="0 0 200 200" className="dm-teach-shape-svg">
-                          {gridShapeEls || (
-                            <text x="100" y="104" textAnchor="middle" className="dm-teach-shape-empty">
-                              mark all 4 corners
-                            </text>
-                          )}
-                        </svg>
-                      </div>
-
-                      <div className="dm-teach-section">
-                        <div className="ctrl-section-head">Status</div>
-                        <div className="dm-teach-state">
-                          <span className={`dm-teach-state-mode${teachConnected ? '' : ' dm-teach-state-mode--off'}`}>
-                            {teachStatus ? teachStatus.robot_mode_label : '—'}
-                          </span>
-                          <span className="dm-teach-state-text">
-                            {teachStatus && teachStatus.status ? teachStatus.status : '—'}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Inline action message */}
-                      {teachMsg && (
-                        <div className={`dm-teach-msg dm-teach-msg--${teachMsg.kind}`}>
-                          {teachMsg.text}
-                        </div>
+                  {/* ── Grid ── */}
+                  <div className="dm-teach-section">
+                    <div className="ctrl-section-head">Grid (N×M taught points)</div>
+                    <div className="dm-teach-grid-size-row">
+                      <label className="dm-teach-grid-field">
+                        <span>Rows</span>
+                        <input
+                          type="number"
+                          className="dm-teach-grid-input"
+                          value={gridRows}
+                          min={2}
+                          max={7}
+                          onChange={(e) => setGridRows(clampInt(e.target.value, 2, 7))}
+                        />
+                      </label>
+                      <label className="dm-teach-grid-field">
+                        <span>Cols</span>
+                        <input
+                          type="number"
+                          className="dm-teach-grid-input"
+                          value={gridCols}
+                          min={2}
+                          max={7}
+                          onChange={(e) => setGridCols(clampInt(e.target.value, 2, 7))}
+                        />
+                      </label>
+                    </div>
+                    <div className="dm-teach-grid-actions">
+                      <button
+                        className="dm-teach-action-btn"
+                        disabled={!teachConnected}
+                        title={teachConnected ? 'Apply grid size' : 'Robot not connected'}
+                        onClick={handleSetGrid}
+                      >Set Grid</button>
+                      <button
+                        className="dm-teach-action-btn dm-teach-action-btn--danger"
+                        disabled={!teachConnected}
+                        title={teachConnected ? 'Clear all taught points' : 'Robot not connected'}
+                        onClick={handleResetGrid}
+                      >Reset Grid</button>
+                    </div>
+                    <button
+                      className="dm-teach-autofill-btn"
+                      disabled={!teachConnected || markPoints.length < 4}
+                      title={markPoints.length < 4
+                        ? 'Mark 4 corner points on the image (Align Points) first'
+                        : 'Jog Z down until the pen touches the surface FIRST, then click — the grid inherits the current Z'}
+                      onClick={handleAutoFillGrid}
+                    >
+                      Auto-fill grid from 4 mark points
+                    </button>
+                    <button
+                      className="dm-teach-surfacez-btn"
+                      disabled={!teachConnected || markedCount === 0}
+                      title="Compute the surface Z from the LIVE camera depth (run Align first) and drop the grid onto it — no jogging. The next Send descends ~that far."
+                      onClick={handleGridSurfaceZ}
+                    >
+                      {`↧ Grid Z = measured surface (auto)${teachStatus && teachStatus.last_center_depth ? ` · depth ${Number(teachStatus.last_center_depth).toFixed(0)}mm` : ''}`}
+                    </button>
+                    <button
+                      className="dm-teach-setz-btn"
+                      disabled={!teachConnected || markedCount === 0}
+                      title="Jog Z down until the pen touches the surface FIRST, then press — keeps the grid X/Y and takes this Z"
+                      onClick={handleSetGridZ}
+                    >
+                      ↧ Grid Z = current Z  (jog to surface first)
+                    </button>
+                    {teachStatus && typeof teachStatus.z_surface === 'number' && (
+                      <button
+                        className="dm-teach-surfacez-btn"
+                        disabled={!teachConnected || markedCount === 0}
+                        title="Apply the surface Z configured in backend/.maps_point.env (Z_SURFACE) to every grid cell — no jogging needed"
+                        onClick={handleSetGridZSurface}
+                      >
+                        {`↧ Grid Z = surface (${teachStatus.z_surface.toFixed(1)}mm, configured)`}
+                      </button>
+                    )}
+                    <div className="dm-teach-hint">
+                      jog Z ลงให้ปากกาแตะผิวงานก่อน แล้วกด Auto-fill · หรือ jog ไปมุมจริงแล้วกดปุ่มช่องนั้น
+                    </div>
+                    <div className="dm-teach-cells" style={{ gridTemplateColumns: `repeat(${gCols}, 1fr)` }}>
+                      {Array.from({ length: gRows }).map((_, i) =>
+                        Array.from({ length: gCols }).map((_, j) => {
+                          const marked = !!(gridPoints && gridPoints[i] && gridPoints[i][j])
+                          return (
+                            <button
+                              key={`${i}-${j}`}
+                              className={`dm-teach-cell${marked ? ' dm-teach-cell--marked' : ''}`}
+                              disabled={!teachConnected}
+                              title={teachConnected ? `Record current pose into R${i + 1}C${j + 1}` : 'Robot not connected'}
+                              onClick={() => handleMarkCell(i + 1, j + 1)}
+                            >
+                              {`R${i + 1}C${j + 1}`}
+                            </button>
+                          )
+                        })
                       )}
                     </div>
-                  </>
-                )}
-              </div>
+                    <div className={`dm-teach-grid-status${gridValidate && Array.isArray(gridValidate.warnings) && gridValidate.warnings.length ? ' dm-teach-grid-status--warn' : ''}`}>
+                      {`grid ${gRows}x${gCols} — ${markedCount}/${gRows * gCols} marked`}
+                      {gridPoints && gridPoints[0] && gridPoints[0][0] &&
+                        ` · Z=${Number(gridPoints[0][0][2]).toFixed(1)}mm`}
+                      {gridValidate && gridValidate.span_mm !== undefined &&
+                        ` · span=${Number(gridValidate.span_mm).toFixed(1)}mm`}
+                      {gridValidate && ` · rmse=${gridValidate.rmse_mm}mm`}
+                      {gridValidate && Array.isArray(gridValidate.warnings) && gridValidate.warnings.length > 0 &&
+                        ` · ${gridValidate.warnings.join('; ')}`}
+                    </div>
+                    <svg viewBox="0 0 200 200" className="dm-teach-shape-svg">
+                      {gridShapeEls || (
+                        <text x="100" y="104" textAnchor="middle" className="dm-teach-shape-empty">
+                          mark all 4 corners
+                        </text>
+                      )}
+                    </svg>
+                  </div>
+
+                  {/* Inline action message */}
+                  {teachMsg && (
+                    <div className={`dm-teach-msg dm-teach-msg--${teachMsg.kind}`}>
+                      {teachMsg.text}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
             </div>
 
             {/* ── Bottom Toolbar ── */}
