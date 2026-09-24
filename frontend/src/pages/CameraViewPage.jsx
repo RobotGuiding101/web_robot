@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { apiFetch } from '../lib/api'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
-import { setStreamMode } from '../components/CameraStream'
+import CameraStream, { setStreamMode } from '../components/CameraStream'
 
 const CameraViewPage = () => {
   const [status, setStatus] = useState({ connected: false, camera_running: false })
@@ -205,22 +205,22 @@ const CameraViewPage = () => {
 
               {/* Stream2 overlay — shown when view is swapped so cam2 fills main area */}
               {viewSwapped && secondaryDevice && (
-                <img
-                  key={stream2Key}
-                  src={`/api/camera/stream2?t=${stream2Key}`}
-                  alt="Camera 2 (swapped to main)"
-                  onError={() => setStream2Error(true)}
-                  onLoad={() => setStream2Error(false)}
+                <div
                   style={{
                     position: 'absolute',
                     inset: 0,
-                    width: '100%',
-                    height: '100%',
-                    objectFit: 'contain',
                     zIndex: 5,
                     background: '#05070a',
                   }}
-                />
+                >
+                  <CameraStream
+                    key={stream2Key}
+                    src="/api/camera/stream2"
+                    withMode={false}
+                    onError={() => setStream2Error(true)}
+                    onFrame={() => setStream2Error(false)}
+                  />
+                </div>
               )}
 
               {/* Controls inside camera (Top-Right) */}
@@ -481,30 +481,26 @@ const CameraViewPage = () => {
                       {/* When view is NOT swapped: show stream2 here normally */}
                       {/* When view IS swapped: show primary stream here instead  */}
                       {viewSwapped ? (
-                        <img
-                          src="/api/camera/stream"
-                          alt="Camera 1 (moved to preview)"
-                          style={{
-                            width: '100%',
-                            height: '100%',
-                            objectFit: 'contain',
-                          }}
-                        />
+                        <div style={{ position: 'absolute', inset: 0 }}>
+                          <CameraStream src="/api/camera/stream" withMode={false} />
+                        </div>
                       ) : (
                         <>
-                          <img
-                            key={stream2Key}
-                            src={`/api/camera/stream2?t=${stream2Key}`}
-                            alt="Camera 2 Stream"
-                            onError={() => setStream2Error(true)}
-                            onLoad={() => setStream2Error(false)}
+                          <div
                             style={{
-                              width: '100%',
-                              height: '100%',
-                              objectFit: 'contain',
+                              position: 'absolute',
+                              inset: 0,
                               display: stream2Error ? 'none' : 'block',
                             }}
-                          />
+                          >
+                            <CameraStream
+                              key={stream2Key}
+                              src="/api/camera/stream2"
+                              withMode={false}
+                              onError={() => setStream2Error(true)}
+                              onFrame={() => setStream2Error(false)}
+                            />
+                          </div>
                           {stream2Error && (
                             <div
                               style={{

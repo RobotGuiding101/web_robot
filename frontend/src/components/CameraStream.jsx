@@ -36,9 +36,11 @@ function concat(a, b) {
   return out
 }
 
-const CameraStream = ({ id }) => {
+const CameraStream = ({ id, src = '/api/map/video_feed', withMode = true, onError, onFrame }) => {
   const canvasRef = useRef(null)
   const [mode, setMode] = useState(streamMode)
+  const cbRef = useRef({ onError, onFrame })
+  cbRef.current = { onError, onFrame }
 
   useEffect(() => {
     const fn = (m) => setMode(m)
@@ -55,13 +57,15 @@ const CameraStream = ({ id }) => {
     let controller = null
     let reconnectTimer = null
     let pending = null
+    let gotFrame = false
     let lastFrameAt = performance.now()
 
     const buildUrl = () => {
       const q = new URLSearchParams()
-      if (mode) q.set('mode', mode)
+      if (withMode && mode) q.set('mode', mode)
       q.set('_t', String(Date.now()))
-      return `/api/map/video_feed?${q.toString()}`
+      const base = src || '/api/map/video_feed'
+      return `${base}${base.includes('?') ? '&' : '?'}${q.toString()}`
     }
 
     async function renderLoop() {
@@ -77,6 +81,7 @@ const CameraStream = ({ id }) => {
             }
             ctx.drawImage(bmp, 0, 0)
             bmp.close()
+            if (!gotFrame) { gotFrame = true; if (cbRef.current.onFrame) cbRef.current.onFrame() }
           } catch { /* skip malformed frame */ }
         } else {
           await new Promise((r) => requestAnimationFrame(r))
@@ -114,7 +119,7 @@ const CameraStream = ({ id }) => {
           if (pos > 0) buf = buf.slice(pos)
           if (buf.length > MAX_BUF) buf = new Uint8Array(0)
         }
-      } catch { /* reconnect below */ }
+      } catch { if (cbRef.current.onError) cbRef.current.onError() }
       if (!stopped) reconnectTimer = setTimeout(readLoop, RECONNECT_MS)
     }
 
@@ -133,7 +138,7 @@ const CameraStream = ({ id }) => {
       if (reconnectTimer) clearTimeout(reconnectTimer)
       try { if (controller) controller.abort() } catch { /* ignore */ }
     }
-  }, [mode])
+  }, [mode, src, withMode])
 
   return (
     <canvas
