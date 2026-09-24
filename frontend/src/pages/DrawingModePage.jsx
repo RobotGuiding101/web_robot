@@ -9,6 +9,7 @@ import {
 } from 'fabric'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
+import { setStreamMode } from '../components/CameraStream'
 
 // ─── Tool constants ────────────────────────────────────────────────────────────
 const TOOLS = {
@@ -78,6 +79,8 @@ const DrawingModePage = () => {
   // Teach / Grid Panel
   const [isTeachMinimized, setIsTeachMinimized] = useState(false)
   const [teachStatus, setTeachStatus]           = useState(null)
+  const [cameraMode, setCameraMode]             = useState('rgb')
+  const [modeLoading, setModeLoading]           = useState(false)
   const [gridRows, setGridRows]                 = useState(2)
   const [gridCols, setGridCols]                 = useState(2)
   const [teachMsg, setTeachMsg]                 = useState(null)
@@ -468,8 +471,33 @@ const DrawingModePage = () => {
       if (!res.ok) return
       const data = await res.json()
       setTeachStatus(data)
+      if (data.camera_mode) {
+        setCameraMode(data.camera_mode)
+      }
     } catch { /* ignore */ }
   }, [])
+
+  const handleModeChange = useCallback(async (newMode) => {
+    if (cameraMode === newMode || modeLoading) return
+    setModeLoading(true)
+    try {
+      const res = await apiFetch('/api/camera/mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: newMode }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        if (data.ok) {
+          setCameraMode(data.mode)
+          setStreamMode(data.mode)
+        }
+      }
+    } catch { /* ignore */ }
+    finally {
+      setModeLoading(false)
+    }
+  }, [cameraMode, modeLoading])
 
   useEffect(() => {
     fetchTeachStatus()
@@ -795,6 +823,159 @@ const DrawingModePage = () => {
 
             {/* ── Camera + Canvas overlay (fills all remaining space) ── */}
             <div className="dm-viewport" ref={dmViewportRef}>
+
+              {/* Status indicator & Active Mode Tag (Top-Left) */}
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '14px',
+                  left: '14px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  zIndex: 10,
+                }}
+              >
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    background: 'rgba(0, 0, 0, 0.7)',
+                    borderRadius: '20px',
+                    padding: '5px 14px',
+                    fontSize: '12px',
+                    color: '#fff',
+                    backdropFilter: 'blur(8px)',
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                  }}
+                >
+                  <span
+                    style={{
+                      width: '8px',
+                      height: '8px',
+                      borderRadius: '50%',
+                      background: (teachStatus && teachStatus.camera_running) ? '#4ade80' : '#22c55e',
+                      boxShadow: '0 0 8px #4ade80',
+                    }}
+                  />
+                  LIVE
+                </div>
+
+                <div
+                  style={{
+                    background:
+                      cameraMode === 'rgb'
+                        ? 'rgba(37, 99, 235, 0.8)'
+                        : cameraMode === 'depth'
+                          ? 'rgba(220, 38, 38, 0.8)'
+                          : 'rgba(75, 85, 99, 0.8)',
+                    borderRadius: '20px',
+                    padding: '5px 12px',
+                    fontSize: '11px',
+                    fontWeight: '700',
+                    color: '#fff',
+                    backdropFilter: 'blur(8px)',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.6px',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                  }}
+                >
+                  {cameraMode}
+                </div>
+              </div>
+
+              {/* Controls inside camera: Segmented Mode Switcher (Top-Right) */}
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '14px',
+                  right: '14px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  zIndex: 10,
+                }}
+              >
+                <div
+                  style={{
+                    display: 'flex',
+                    background: 'rgba(0, 0, 0, 0.7)',
+                    borderRadius: '10px',
+                    padding: '3px',
+                    backdropFilter: 'blur(8px)',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleModeChange('rgb')
+                    }}
+                    disabled={modeLoading}
+                    style={{
+                      background: cameraMode === 'rgb' ? '#2563eb' : 'transparent',
+                      color: cameraMode === 'rgb' ? '#fff' : '#aaa',
+                      border: 'none',
+                      borderRadius: '7px',
+                      padding: '6px 14px',
+                      fontSize: '13px',
+                      fontWeight: cameraMode === 'rgb' ? '700' : '500',
+                      cursor: modeLoading ? 'not-allowed' : 'pointer',
+                      transition: 'all 0.18s ease',
+                    }}
+                    title="Switch to RGB Color"
+                  >
+                    RGB
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleModeChange('gray')
+                    }}
+                    disabled={modeLoading}
+                    style={{
+                      background: cameraMode === 'gray' ? '#4b5563' : 'transparent',
+                      color: cameraMode === 'gray' ? '#fff' : '#aaa',
+                      border: 'none',
+                      borderRadius: '7px',
+                      padding: '6px 14px',
+                      fontSize: '13px',
+                      fontWeight: cameraMode === 'gray' ? '700' : '500',
+                      cursor: modeLoading ? 'not-allowed' : 'pointer',
+                      transition: 'all 0.18s ease',
+                    }}
+                    title="Switch to Grayscale"
+                  >
+                    Gray
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleModeChange('depth')
+                    }}
+                    disabled={modeLoading}
+                    style={{
+                      background: cameraMode === 'depth' ? '#dc2626' : 'transparent',
+                      color: cameraMode === 'depth' ? '#fff' : '#aaa',
+                      border: 'none',
+                      borderRadius: '7px',
+                      padding: '6px 14px',
+                      fontSize: '13px',
+                      fontWeight: cameraMode === 'depth' ? '700' : '500',
+                      cursor: modeLoading ? 'not-allowed' : 'pointer',
+                      transition: 'all 0.18s ease',
+                    }}
+                    title="Switch to Depth Heatmap"
+                  >
+                    Depth
+                  </button>
+                </div>
+              </div>
 
               {/* Fallback label when camera is offline */}
               <div className="dm-camera-offline">
