@@ -1,4 +1,3 @@
-import time
 from typing import Optional
 from fastapi import APIRouter, Response, Query
 from fastapi.responses import StreamingResponse
@@ -8,7 +7,7 @@ import cv2
 import numpy as np
 
 from routers.mapcontrol import cam, state, _mjpeg_generator, _STREAM_HEADERS
-from maps_point.camera import list_devices, Camera
+from maps_point.camera import list_devices
 from maps_point.render import draw_overlay
 
 router = APIRouter()
@@ -22,89 +21,6 @@ class CameraModeBody(BaseModel):
 
 class CameraSelectBody(BaseModel):
     serial: str = ""
-
-
-# ── Secondary Camera Singleton ───────────────────────────────────────────────
-cam2: Optional[Camera] = None
-cam2_lock = threading.Lock()
-
-
-def get_cam2() -> Camera:
-    global cam2
-    with cam2_lock:
-        if cam2 is None:
-            cam2 = Camera()
-        return cam2
-
-
-def ensure_cam2_running(target_serial: Optional[str] = None) -> Optional[Camera]:
-    c2 = get_cam2()
-    devices = getattr(state, "camera_devices", [])
-    if not devices:
-        return None
-
-    if target_serial:
-        dev = next((d for d in devices if d.get("serial") == target_serial), None)
-    else:
-        dev = next((d for d in devices if d.get("serial") and d.get("serial") != cam.serial), None)
-
-    if not dev:
-        return None
-
-    dev_serial = dev["serial"]
-    if c2.serial != dev_serial or not c2._running:
-        try:
-            c2.stop()
-            c2.set_serial(dev_serial)
-            c2.start()
-        except Exception as e:
-            print(f"[Cam2] Start failed: {e}", flush=True)
-    return c2 if c2._running else None
-
-
-def _mjpeg_generator_cam2(target_serial: Optional[str] = None):
-    c2 = ensure_cam2_running(target_serial)
-    if not c2 or not c2._running:
-        h, w = 360, 640
-        placeholder = np.zeros((h, w, 3), dtype=np.uint8)
-        placeholder[:] = (15, 20, 28)
-        cv2.putText(placeholder, "Camera 2: Initializing...", (w // 2 - 140, h // 2),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (180, 180, 180), 2, cv2.LINE_AA)
-        ok, buf = cv2.imencode(".jpg", placeholder, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-        if ok:
-            yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n")
-        for _ in range(3):
-            time.sleep(1.0)
-            c2 = ensure_cam2_running(target_serial)
-            if c2 and c2._running:
-                break
-        if not c2 or not c2._running:
-            return
-
-    last_count = -1
-    while c2 and c2._running:
-        loop_start = time.time()
-        cf, df = c2.get_latest_frames_ref()
-        if cf is None:
-            time.sleep(0.04)
-            continue
-
-        count = c2._frame_count
-        if count == last_count:
-            time.sleep(0.02)
-            continue
-        last_count = count
-
-        ok, buf = cv2.imencode(".jpg", cf, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-        if not ok:
-            continue
-        payload = buf.tobytes()
-        yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + payload + b"\r\n")
-
-        fps = 20
-        dt = time.time() - loop_start
-        if dt < 1.0 / fps:
-            time.sleep(1.0 / fps - dt)
 
 
 @router.get("/mode")
@@ -135,27 +51,23 @@ def toggle_camera_mode():
 
 @router.get("/devices")
 def get_camera_devices():
-    """Cached RealSense device list plus currently selected serial and secondary serial."""
-    devices = getattr(state, "camera_devices", [])
-    c2 = cam2
-    c2_serial = c2.serial if c2 else None
-    c2_running = c2._running if c2 else False
-    other = next((d for d in devices if d.get("serial") and d.get("serial") != cam.serial), None)
-
+    """Cached RealSense device list plus the currently selected serial."""
     return {
-        "devices": devices,
+        "devices": getattr(state, "camera_devices", []),
         "selected": cam.serial,
         "running": cam._running,
-        "secondary_selected": c2_serial or (other["serial"] if other else None),
-        "secondary_running": c2_running,
-        "has_secondary": bool(other),
-        "secondary_device": other,
     }
 
 
 @router.post("/scan")
 def scan_camera_devices():
-    """Enumerate RealSense devices WITHOUT touching the running pipeline."""
+    """Enumerate RealSense devices WITHOUT touching the running pipeline.
+
+    librealsense deadlocks when a second rs.context() enumerates while a
+    pipeline is streaming, and that stuck worker then wedges the whole
+    threadpool (the 2026-09-13 hang). So: never stop/start the pipeline here
+    and always bound the enumeration with a timeout, falling back to the
+    cached list."""
     result: dict = {}
 
     def _enumerate():
@@ -169,90 +81,32 @@ def scan_camera_devices():
     worker.join(SCAN_TIMEOUT_S)
 
     if worker.is_alive():
-        devs = getattr(state, "camera_devices", [])
-        other = next((d for d in devs if d.get("serial") and d.get("serial") != cam.serial), None)
         return {
             "ok": False,
             "error": "scan timed out (camera busy) — showing cached list",
-            "devices": devs,
+            "devices": getattr(state, "camera_devices", []),
             "selected": cam.serial,
             "running": cam._running,
-            "has_secondary": bool(other),
-            "secondary_device": other,
         }
 
     devices = result.get("devices") or []
     if devices:
         state.camera_devices = devices
-    devs = getattr(state, "camera_devices", [])
-    other = next((d for d in devs if d.get("serial") and d.get("serial") != cam.serial), None)
     return {
         "ok": True,
-        "devices": devs,
+        "devices": getattr(state, "camera_devices", []),
         "selected": cam.serial,
         "running": cam._running,
-        "has_secondary": bool(other),
-        "secondary_device": other,
     }
 
 
 @router.post("/select")
 def select_camera(body: CameraSelectBody):
     """Switch to a specific RealSense by serial. Empty string = first device."""
-    c2 = get_cam2()
-    if c2 and c2._running and c2.serial == body.serial:
-        c2.stop()
-
-    old_primary = cam.serial
     cam.stop()
     cam.set_serial(body.serial)
     ok = cam.start()
-
-    if ok and c2 and old_primary and old_primary != body.serial:
-        devices = getattr(state, "camera_devices", [])
-        if any(d.get("serial") == old_primary for d in devices):
-            c2.set_serial(old_primary)
-            c2.start()
-
     return {"ok": ok, "selected": cam.serial, "running": cam._running}
-
-
-@router.post("/swap")
-def swap_cameras():
-    """Swap primary and secondary cameras."""
-    devices = getattr(state, "camera_devices", [])
-    if len(devices) < 2:
-        return {"ok": False, "error": "Need at least 2 cameras to swap"}
-
-    old_primary = cam.serial
-    c2 = get_cam2()
-    old_secondary = (
-        c2.serial if (c2 and c2.serial) else next((d["serial"] for d in devices if d.get("serial") != old_primary), None)
-    )
-
-    if not old_secondary or old_secondary == old_primary:
-        return {"ok": False, "error": "No secondary camera found to swap with"}
-
-    if c2:
-        c2.stop()
-    cam.stop()
-
-    cam.set_serial(old_secondary)
-    ok1 = cam.start()
-
-    if c2:
-        c2.set_serial(old_primary)
-        ok2 = c2.start()
-    else:
-        ok2 = False
-
-    return {
-        "ok": ok1,
-        "selected": cam.serial,
-        "secondary_selected": c2.serial if c2 else None,
-        "running": cam._running,
-        "secondary_running": c2._running if c2 else False,
-    }
 
 
 @router.get("/stream")
@@ -260,16 +114,6 @@ def camera_stream(mode: Optional[str] = None):
     """Stream MJPEG video feed (supports optional ?mode=rgb or ?mode=gray)."""
     return StreamingResponse(
         _mjpeg_generator(mode=mode),
-        media_type="multipart/x-mixed-replace; boundary=frame",
-        headers=_STREAM_HEADERS,
-    )
-
-
-@router.get("/stream2")
-def camera_stream_secondary(serial: Optional[str] = None):
-    """Stream MJPEG video feed for secondary camera."""
-    return StreamingResponse(
-        _mjpeg_generator_cam2(target_serial=serial),
         media_type="multipart/x-mixed-replace; boundary=frame",
         headers=_STREAM_HEADERS,
     )
@@ -300,17 +144,3 @@ def camera_snapshot(mode: Optional[str] = None, with_overlay: bool = True):
 
     return Response(content=buf.tobytes(), media_type="image/jpeg")
 
-
-@router.get("/snapshot2")
-def camera_snapshot_secondary(serial: Optional[str] = None):
-    """Return a single JPEG frame from the secondary camera."""
-    c2 = ensure_cam2_running(target_serial=serial)
-    if not c2 or not c2._running:
-        return Response(content="Secondary camera is not running", status_code=503, media_type="text/plain")
-    cf = c2.get_latest_color(max_wait=1.0)
-    if cf is None:
-        return Response(content="No frame available", status_code=503, media_type="text/plain")
-    ok, buf = cv2.imencode(".jpg", cf, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-    if not ok:
-        return Response(content="Encode failed", status_code=500, media_type="text/plain")
-    return Response(content=buf.tobytes(), media_type="image/jpeg")
