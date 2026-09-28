@@ -36,15 +36,14 @@ function concat(a, b) {
   return out
 }
 
-const CameraStream = ({ id, src = '/api/map/video_feed', withMode = true, mode: fixedMode, onError, onFrame }) => {
+const CameraStream = ({ id, src = '/api/map/video_feed', withMode = true, onError, onFrame }) => {
   const canvasRef = useRef(null)
-  const [sharedMode, setSharedMode] = useState(streamMode)
-  const mode = fixedMode !== undefined ? fixedMode : sharedMode
+  const [mode, setMode] = useState(streamMode)
   const cbRef = useRef({ onError, onFrame })
   cbRef.current = { onError, onFrame }
 
   useEffect(() => {
-    const fn = (m) => setSharedMode(m)
+    const fn = (m) => setMode(m)
     modeListeners.add(fn)
     return () => { modeListeners.delete(fn) }
   }, [])

@@ -26,7 +26,7 @@ from maps_point.robot import Robot, RobotMoveError
 from maps_point.camera import Camera
 from maps_point.align import AppState, do_align, start_tracking_thread
 from maps_point.motion import do_goto, pixel_to_world_xy
-from maps_point.planegrid import do_draw, validate_grid, project_grid_2d, bilinear_cell, grid_pose
+from maps_point.planegrid import do_draw, validate_grid, project_grid_2d, bilinear_cell
 from maps_point.render import draw_overlay
 
 router = APIRouter(prefix="/api/map", tags=["MapControl"])
@@ -624,16 +624,11 @@ def api_grid_mark(body: GridMarkBody):
 @router.post("/grid/autofill")
 def api_grid_autofill():
     """Fill the whole grid from the 4 image points already marked on the
-    feed, so no jogging is needed. Each pixel maps to robot XY AND its own
-    surface Z via the depth at that pixel (the camera rides on the arm, so
-    it is relative to the CURRENT pose — same maths as motion.goto_pixel).
-    Orientation comes from the current pose, i.e. the plane align() just
-    squared the tool to. The robot does not move.
-
-    Z must come from the depth reading, not the current pose Z: the pose Z
-    is wherever the arm happens to be hovering, so using it puts the whole
-    grid that far ABOVE the workpiece and the pen never touches down
-    (measured 2026-09-28: pose Z 568.4 vs surface ~135 — 433mm too high)."""
+    feed, so no jogging is needed. Each pixel maps to robot XY via the depth
+    at that pixel (the camera rides on the arm, so it is relative to the
+    CURRENT pose — same maths as motion.goto_pixel). Height and orientation
+    come from the current pose too, i.e. the plane align() just squared the
+    tool to. The robot does not move."""
     if not robot.connected or not cam._running:
         return {"ok": False, "error": "robot/camera not ready"}
     pts = list(state.points)
@@ -652,13 +647,7 @@ def api_grid_autofill():
             return {"ok": False,
                     "error": f"no depth at the {name} point ({px},{py}) — "
                              f"re-mark it on the object surface"}
-        depth = cam.sample_depth(int(px), int(py))
-        if depth <= 0:
-            return {"ok": False,
-                    "error": f"no depth reading at the {name} point ({px},{py}) — "
-                             f"re-mark it on the object surface"}
-        surface_z = Z - depth + CAM_TIP_OFFSET_MM + DRAW_SURFACE_GAP_MM
-        corners[name] = [xy[0], xy[1], surface_z, Rx, Ry, Rz]
+        corners[name] = [xy[0], xy[1], Z, Rx, Ry, Rz]
 
     rows, cols = state.grid_rows, state.grid_cols
     grid = [[None] * cols for _ in range(rows)]
@@ -670,11 +659,8 @@ def api_grid_autofill():
                                        corners["bottom-left"], corners["bottom-right"])
     state.grid_points = grid
     span = _grid_span_mm()
-    zs = [grid[i][j][2] for i in range(rows) for j in range(cols)]
-    state.status = (f"grid auto-filled from 4 marked points (span={span:.1f}mm, "
-                    f"surface Z={sum(zs)/len(zs):.1f})")
-    return {"ok": True, "grid_points": grid, "span_mm": span,
-            "surface_z": sum(zs) / len(zs)}
+    state.status = f"grid auto-filled from 4 marked points (span={span:.1f}mm)"
+    return {"ok": True, "grid_points": grid, "span_mm": span}
 
 
 class GridSetZBody(BaseModel):
@@ -743,80 +729,6 @@ def api_grid_reset():
     return {"ok": True}
 
 
-class GridRestoreBody(BaseModel):
-    rows: int
-    cols: int
-    points: list
-
-
-@router.post("/grid/restore")
-def api_grid_restore(body: GridRestoreBody):
-    """Set the whole taught grid directly from poses (the same rows/cols/
-    points shape /api/map/status reports back). The grid lives in memory, so
-    every backend restart wipes a hand-taught grid — this puts one back
-    without re-jogging every corner."""
-    if not (2 <= body.rows <= DRAW_GRID_MAX_ROWS and 2 <= body.cols <= DRAW_GRID_MAX_COLS):
-        return {"ok": False,
-                "error": f"rows/cols must be 2..{DRAW_GRID_MAX_ROWS} x 2..{DRAW_GRID_MAX_COLS}"}
-    if state.align_running or state.draw_running:
-        return {"ok": False, "error": "robot busy (align or draw running)"}
-    if not isinstance(body.points, list) or len(body.points) != body.rows:
-        return {"ok": False, "error": f"points must be {body.rows} rows"}
-    grid = []
-    for row in body.points:
-        if not isinstance(row, list) or len(row) != body.cols:
-            return {"ok": False, "error": f"each row must have {body.cols} points"}
-        out_row = []
-        for p in row:
-            if not isinstance(p, (list, tuple)) or len(p) != 6:
-                return {"ok": False, "error": "each point must be [X,Y,Z,Rx,Ry,Rz]"}
-            try:
-                out_row.append([float(v) for v in p])
-            except (TypeError, ValueError):
-                return {"ok": False, "error": "non-numeric point value"}
-        grid.append(out_row)
-    state.grid_rows = body.rows
-    state.grid_cols = body.cols
-    state.grid_points = grid
-    span = _grid_span_mm()
-    state.status = f"grid restored {body.rows}x{body.cols} (span={span:.1f}mm)"
-    return {"ok": True, "rows": body.rows, "cols": body.cols,
-            "grid_points": grid, "span_mm": span}
-
-
-def _log_grid_mapping(strokes):
-    """Print where each stroke's canvas (u,v) lands in robot XYZ, plus the
-    taught grid corners it interpolates between. The drawn stroke and the
-    camera frame it was drawn over live in different coordinate spaces, so
-    the only way to tell whether a click on screen lands on the intended
-    physical grid cell is to read the numbers: a systematic offset means the
-    camera<->canvas transform is wrong, while a mirrored/reordered result
-    means row/col orientation is. Read-only — never moves the robot."""
-    rows, cols = state.grid_rows, state.grid_cols
-    log(f"  [Draw] mapping {len(strokes)} stroke(s) over {rows}x{cols} grid  "
-        f"cam={cam.w}x{cam.h}")
-
-    for i in range(rows):
-        for j in range(cols):
-            p = state.grid_points[i][j]
-            if p is not None:
-                log(f"  [Draw]   R{i+1}C{j+1} = "
-                    f"({p[0]:.1f}, {p[1]:.1f}, {p[2]:.1f})")
-
-    for si, s in enumerate(strokes):
-        pts = s.get("points") or []
-        if not pts:
-            continue
-        u0, v0 = pts[0]
-        u1, v1 = pts[-1]
-        first = grid_pose(u0, v0, state.grid_points, rows, cols)
-        last = grid_pose(u1, v1, state.grid_points, rows, cols)
-        log(f"  [Draw]   stroke {si} ({s.get('tool')}, {len(pts)} pts): "
-            f"uv({u0:.3f},{v0:.3f})->({u1:.3f},{v1:.3f})  "
-            f"XY({first[0]:.1f},{first[1]:.1f})->({last[0]:.1f},{last[1]:.1f})  "
-            f"Z={first[2]:.1f}")
-
-
 @router.post("/draw")
 def api_draw(body: DrawBody):
     if not isinstance(body.strokes, list) or not body.strokes:
@@ -842,8 +754,6 @@ def api_draw(body: DrawBody):
                          f"jog to each corner before marking"}
     if state.align_running or state.draw_running:
         return {"ok": False, "error": "already running"}
-
-    _log_grid_mapping(strokes)
     threading.Thread(target=do_draw, args=(robot, state, strokes), daemon=True).start()
     return {"ok": True}
 

@@ -15,7 +15,6 @@ const CameraViewPage = () => {
   const [stream2Key, setStream2Key] = useState(Date.now())
   const [stream2Error, setStream2Error] = useState(false)
   const [viewSwapped, setViewSwapped] = useState(false)
-  const [camera2Mode, setCamera2Mode] = useState('rgb')
   const cameraBoxRef = useRef(null)
 
   // Poll robot/camera status
@@ -217,7 +216,7 @@ const CameraViewPage = () => {
                   <CameraStream
                     key={stream2Key}
                     src="/api/camera/stream2"
-                    mode={camera2Mode}
+                    withMode={false}
                     onError={() => setStream2Error(true)}
                     onFrame={() => setStream2Error(false)}
                   />
@@ -387,50 +386,33 @@ const CameraViewPage = () => {
                       />
                       CAM 2
                     </div>
-                  </div>
 
-                  {/* Actions (Mode / Swap View / Refresh) */}
-                  {secondaryDevice && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    {secondaryDevice && (
                       <div
                         style={{
-                          display: 'flex',
-                          background: 'rgba(0, 0, 0, 0.7)',
-                          borderRadius: '10px',
-                          padding: '2px',
+                          background: 'rgba(30, 41, 59, 0.8)',
+                          borderRadius: '20px',
+                          padding: '4px 10px',
+                          fontSize: '10px',
+                          color: '#94a3b8',
                           backdropFilter: 'blur(8px)',
-                          border: '1px solid rgba(255, 255, 255, 0.15)',
+                          border: '1px solid rgba(255, 255, 255, 0.1)',
+                          fontWeight: 600,
+                          maxWidth: '120px',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
                         }}
+                        title={`${secondaryDevice.name || 'RealSense'} (${secondaryDevice.serial})`}
                       >
-                        {['rgb', 'gray', 'depth'].map((m) => (
-                          <button
-                            key={m}
-                            type="button"
-                            onClick={() => setCamera2Mode(m)}
-                            style={{
-                              background:
-                                camera2Mode !== m
-                                  ? 'transparent'
-                                  : m === 'rgb'
-                                    ? '#2563eb'
-                                    : m === 'depth'
-                                      ? '#dc2626'
-                                      : '#4b5563',
-                              color: camera2Mode === m ? '#fff' : '#aaa',
-                              border: 'none',
-                              borderRadius: '8px',
-                              padding: '4px 10px',
-                              fontSize: '11px',
-                              fontWeight: camera2Mode === m ? 700 : 500,
-                              cursor: 'pointer',
-                              textTransform: 'uppercase',
-                            }}
-                            title={`CAM2 mode: ${m}`}
-                          >
-                            {m}
-                          </button>
-                        ))}
+                        {secondaryDevice.serial}
                       </div>
+                    )}
+                  </div>
+
+                  {/* Actions (Swap View / Refresh) */}
+                  {secondaryDevice && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <button
                         type="button"
                         onClick={handleSwapView}
@@ -514,7 +496,7 @@ const CameraViewPage = () => {
                             <CameraStream
                               key={stream2Key}
                               src="/api/camera/stream2"
-                              mode={camera2Mode}
+                              withMode={false}
                               onError={() => setStream2Error(true)}
                               onFrame={() => setStream2Error(false)}
                             />
@@ -533,7 +515,7 @@ const CameraViewPage = () => {
                               }}
                             >
                               <span style={{ fontSize: '28px', opacity: 0.5 }}>📷</span>
-                              <span>กำลังเชื่อมต่อกล้องตัวที่ 2…</span>
+                              <span>กำลังเชื่อมต่อกล้องตัวที่ 2 ({secondaryDevice.serial})…</span>
                               <button
                                 type="button"
                                 onClick={() => {
