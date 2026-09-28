@@ -292,25 +292,6 @@ body {
   transform: scale(0.96);
 }
 
-.topbar .emergency-btn--active {
-  background-color: #dc2626 !important;
-  color: #ffffff !important;
-  border-color: #b91c1c !important;
-  box-shadow: 0 0 16px rgba(220, 38, 38, 0.7);
-  animation: pulse-emergency 0.6s infinite alternate ease-in-out;
-}
-
-@keyframes pulse-emergency {
-  from {
-    transform: scale(1);
-    box-shadow: 0 0 10px rgba(220, 38, 38, 0.5);
-  }
-  to {
-    transform: scale(1.05);
-    box-shadow: 0 0 22px rgba(220, 38, 38, 0.95);
-  }
-}
-
 /* =============================================
    Card & Placeholder Box Base Styles
    ============================================= */
@@ -2294,39 +2275,40 @@ body {
 .dm-teach-col {
   flex: 0 0 520px;
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   overflow: hidden;
   background: #ffffff;
   border-left: 1.5px solid #dbe3ed;
-  transition: flex-basis 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  position: relative;
+  transition: flex-basis 0.24s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .dm-teach-col--minimized {
-  flex-basis: 28px;
+  flex-basis: 46px;
 }
 
-/* Side collapse tab — always visible on left edge of panel */
-.dm-teach-collapse-tab {
-  flex: 0 0 28px;
-  width: 28px;
+.dm-teach-col--minimized .dm-teach-minimized-btn {
+  height: 46px;
+}
+
+.dm-teach-minimized-btn {
+  width: 100%;
   height: 100%;
-  background: #f1f5f9;
+  background: #ffffff;
   border: none;
-  border-right: 1px solid #e2e8f0;
-  color: #64748b;
+  color: #1a8fe3;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s, color 0.15s;
   padding: 0;
-  flex-shrink: 0;
+  border-radius: 50%;
+  transition: all 0.18s ease;
 }
 
-.dm-teach-collapse-tab:hover {
-  background: #e2e8f0;
-  color: #1a8fe3;
+.dm-teach-minimized-btn:hover {
+  background: #f0f7ff;
+  color: #0b72be;
+  transform: scale(1.06);
 }
 
 .dm-teach-header {
@@ -2402,7 +2384,6 @@ body {
 
 .dm-teach-body {
   flex: 1;
-  min-width: 0;
   min-height: 0;
   overflow-y: auto;
   padding: 10px;
@@ -2420,82 +2401,6 @@ body {
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   padding: 8px 10px;
-}
-
-/* 3D Robot embedded in right panel */
-.dm-teach-3d-section {
-  flex: 1 1 100% !important;
-  padding: 0 !important;
-  overflow: hidden;
-}
-
-.dm-teach-3d-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 10px;
-  background: #f1f5f9;
-  border-bottom: 1px solid #e2e8f0;
-  border-radius: 8px 8px 0 0;
-}
-
-.dm-teach-3d-title-wrap {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.dm-3d-title-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #1a8fe3;
-  box-shadow: 0 0 6px rgba(26, 143, 227, 0.6);
-}
-
-.dm-3d-title-text {
-  font-size: 11px;
-  font-weight: 700;
-  color: #334155;
-  letter-spacing: 0.3px;
-}
-
-.dm-3d-btn {
-  background: #e2e8f0;
-  border: 1px solid #cbd5e1;
-  color: #64748b;
-  cursor: pointer;
-  width: 22px;
-  height: 22px;
-  border-radius: 5px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.15s ease;
-  padding: 0;
-}
-
-.dm-3d-btn:hover {
-  background: #cbd5e1;
-  color: #1e293b;
-}
-
-.dm-teach-3d-frame-wrap {
-  width: 100%;
-  height: 160px;
-  border-radius: 0 0 8px 8px;
-  overflow: hidden;
-}
-
-.dm-teach-3d-frame-wrap--expanded {
-  height: 260px;
-}
-
-.dm-teach-3d-frame-wrap .dm-3d-frame {
-  width: 100%;
-  height: 100%;
-  border: none;
-  display: block;
 }
 
 /* Live pose readout */
