@@ -15,13 +15,16 @@ const TOOLS = {
   SELECT:  'select',
   PEN:     'pen',
   LINE:    'line',
-
+  RECT:    'rect',
+  CIRCLE:  'circle',
 }
 
 const TOOL_META = [
   { id: TOOLS.SELECT, label: 'Select',  icon: '↖' },
   { id: TOOLS.PEN,    label: 'Pen',     icon: '✎' },
   { id: TOOLS.LINE,   label: 'Line',    icon: '╱' },
+  { id: TOOLS.RECT,   label: 'Rect',    icon: '▭' },
+  { id: TOOLS.CIRCLE, label: 'Circle',  icon: '◯' },
 ]
 
 const PRESET_COLORS = [
@@ -36,16 +39,66 @@ const POSE_LABELS  = ['X', 'Y', 'Z', 'Rx', 'Ry', 'Rz']
 const clampInt  = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(Number(v) || lo)))
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function getCanvasPathData(fc) {
-  return fc.getObjects().map((obj) => {
-    const type = obj.type
-    const base = { type, left: obj.left, top: obj.top }
-    if (type === 'path')    return { ...base, path: obj.path, stroke: obj.stroke, strokeWidth: obj.strokeWidth }
-    if (type === 'line')    return { ...base, x1: obj.x1, y1: obj.y1, x2: obj.x2, y2: obj.y2, stroke: obj.stroke, strokeWidth: obj.strokeWidth }
-    if (type === 'rect')    return { ...base, width: obj.width, height: obj.height, stroke: obj.stroke, strokeWidth: obj.strokeWidth, fill: obj.fill }
-    if (type === 'ellipse') return { ...base, rx: obj.rx, ry: obj.ry, stroke: obj.stroke, strokeWidth: obj.strokeWidth, fill: obj.fill }
-    return base
+// Do NOT read points back from obj.path: PencilBrush emits a smoothed bezier
+// (M + Q… + L), so command-reading keeps only 2 points per stroke. Capturing
+// each mousemove instead is what preserves the shape. Value: [u, v] fractions.
+const _freehandPoints = new WeakMap()
+
+// loadFromJSON rebuilds new Path objects, so _freehandPoints loses every
+// stroke. Each history snapshot also stores the samples in path order, and
+// _rekeyFreehandPoints() re-attaches them by that index after a load.
+function _snapshotFreehand(fc) {
+  return fc.getObjects()
+    .filter((o) => o.type === 'path')
+    .map((o) => _freehandPoints.get(o) || null)
+}
+
+function _rekeyFreehandPoints(fc, stored) {
+  const paths = fc.getObjects().filter((o) => o.type === 'path')
+  paths.forEach((o, i) => {
+    const pts = stored && stored[i]
+    if (pts && pts.length >= 2) _freehandPoints.set(o, pts)
   })
+}
+
+// Inverse of planegrid.grid_pose's bilinear (u,v) -> plane map. Given a point
+// p and a quad's four corners in canvas px (c00=(u0,v0), c10=(u1,v0),
+// c01=(u0,v1), c11=(u1,v1)), returns [u, v] so a stroke drawn on the rendered
+// grid-shape quad maps back to exactly the (u,v) the robot should draw at.
+function inverseBilinear(p, c00, c10, c01, c11) {
+  const cross = (ax, ay, bx, by) => ax * by - ay * bx
+  const ex = c00[0] - c10[0] - c01[0] + c11[0]
+  const ey = c00[1] - c10[1] - c01[1] + c11[1]
+  const fx = c10[0] - c00[0], fy = c10[1] - c00[1]
+  const gx = c01[0] - c00[0], gy = c01[1] - c00[1]
+  const ddx = p[0] - c00[0], ddy = p[1] - c00[1]
+  if (Math.abs(ex) < 1e-9 && Math.abs(ey) < 1e-9) {
+    // parallelogram — pure affine solve
+    const det = cross(fx, fy, gx, gy)
+    if (Math.abs(det) < 1e-12) return [0, 0]
+    return [cross(ddx, ddy, gx, gy) / det, cross(fx, fy, ddx, ddy) / det]
+  }
+  const k1 = cross(ddx, ddy, gx, gy)     // (p-c00) x g
+  const k2 = cross(ddx, ddy, fx, fy)     // (p-c00) x f
+  const a1 = cross(fx, fy, gx, gy)       // f x g
+  const a2 = cross(ex, ey, gx, gy)       // e x g
+  const b2 = cross(ex, ey, fx, fy)       // e x f
+  const A = -a1 * a2
+  const B = -a1 * a1 + k1 * b2 - k2 * a2
+  const C = -k2 * a1
+  let v
+  if (Math.abs(A) < 1e-12) {
+    v = Math.abs(B) < 1e-12 ? 0 : -C / B
+  } else {
+    const disc = B * B - 4 * A * C
+    if (disc < 0) return [0, 0]
+    const s = Math.sqrt(disc)
+    const v1 = (-B + s) / (2 * A), v2 = (-B - s) / (2 * A)
+    v = (v1 >= -0.001 && v1 <= 1.001) ? v1 : v2
+  }
+  const denom = a1 + v * a2
+  const u = Math.abs(denom) < 1e-12 ? 0 : k1 / denom
+  return [u, v]
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
@@ -53,12 +106,15 @@ const DrawingModePage = () => {
   const canvasElRef   = useRef(null)
   const dmViewportRef = useRef(null)
   const fabricRef     = useRef(null)
+  const toUvRef       = useRef(null)
   const isDrawingRef  = useRef(false)
   const tempObjRef    = useRef(null)
   const startPtRef    = useRef({ x: 0, y: 0 })
   const mouseDownRef  = useRef(null)
   const mouseMoveRef  = useRef(null)
   const mouseUpRef    = useRef(null)
+  const pendingFreehandSamples = useRef(null)
+  const pathCreatedRef = useRef(null)
 
   const [activeTool,  setActiveTool]  = useState(TOOLS.PEN)
   const [strokeColor, setStrokeColor] = useState('#1a2f45')
@@ -86,6 +142,7 @@ const DrawingModePage = () => {
   const [markClickMode, setMarkClickMode]       = useState('mark')
   const [alignBusy, setAlignBusy]               = useState(false)
   const [markGeom, setMarkGeom]                 = useState(null)
+  const [vpSize, setVpSize]                     = useState({ w: 0, h: 0 })
 
   // Refs for latest state values (avoid stale closures)
   const strokeColorRef = useRef(strokeColor)
@@ -100,14 +157,18 @@ const DrawingModePage = () => {
   // History stacks
   const historyRef    = useRef([])
   const historyIdxRef = useRef(-1)
+  const historyFreehandRef = useRef([])
 
   // ── Save state to history ──────────────────────────────────────────────────
   const saveHistory = useCallback(() => {
     const fc = fabricRef.current
     if (!fc) return
     const json = fc.toJSON()
+    const freehand = _snapshotFreehand(fc)
     historyRef.current = historyRef.current.slice(0, historyIdxRef.current + 1)
     historyRef.current.push(json)
+    historyFreehandRef.current = historyFreehandRef.current.slice(0, historyIdxRef.current + 1)
+    historyFreehandRef.current.push(freehand)
     historyIdxRef.current = historyRef.current.length - 1
     setCanUndo(historyIdxRef.current > 0)
     setCanRedo(false)
@@ -133,6 +194,7 @@ const DrawingModePage = () => {
 
     // Initial history snapshot
     historyRef.current = [fc.toJSON()]
+    historyFreehandRef.current = [null]
     historyIdxRef.current = 0
 
     fc.on('object:added',   updateCounts)
@@ -162,8 +224,7 @@ const DrawingModePage = () => {
     if (mouseDownRef.current) { fc.off('mouse:down', mouseDownRef.current); mouseDownRef.current = null }
     if (mouseMoveRef.current) { fc.off('mouse:move', mouseMoveRef.current); mouseMoveRef.current = null }
     if (mouseUpRef.current)   { fc.off('mouse:up',   mouseUpRef.current);   mouseUpRef.current   = null }
-    // also remove path:created listener
-    fc.off('path:created')
+    if (pathCreatedRef.current) { fc.off('path:created', pathCreatedRef.current); pathCreatedRef.current = null }
   }, [])
 
   // ── Apply Tool ─────────────────────────────────────────────────────────────
@@ -189,8 +250,35 @@ const DrawingModePage = () => {
       fc.freeDrawingBrush.color = strokeColor
       fc.freeDrawingBrush.width = strokeWidth
 
-      const onPathCreated = () => saveHistory()
+      const onPenDown = (opt) => {
+        const p = fc.getScenePoint(opt.e)
+        pendingFreehandSamples.current = [p]
+      }
+      const onPenMove = (opt) => {
+        const samples = pendingFreehandSamples.current
+        if (!samples) return
+        const p = fc.getScenePoint(opt.e)
+        const last = samples[samples.length - 1]
+        if (last && Math.hypot(p.x - last.x, p.y - last.y) < 0.5) return
+        samples.push(p)
+      }
+      const onPathCreated = (e) => {
+        const samples = pendingFreehandSamples.current || []
+        pendingFreehandSamples.current = null
+        if (e.path && samples.length >= 2) {
+          // Map straight through the rendered grid-shape quad -> (u,v).
+          _freehandPoints.set(e.path, samples.map((p) => (
+            toUvRef.current ? toUvRef.current(p.x, p.y)
+                            : [p.x / fc.getWidth(), p.y / fc.getHeight()])))
+        }
+        saveHistory()
+      }
+      fc.on('mouse:down', onPenDown)
+      fc.on('mouse:move', onPenMove)
       fc.on('path:created', onPathCreated)
+      mouseDownRef.current = onPenDown
+      mouseMoveRef.current = onPenMove
+      pathCreatedRef.current = onPathCreated
       return
     }
 
@@ -313,6 +401,7 @@ const DrawingModePage = () => {
     if (!fc || historyIdxRef.current <= 0) return
     historyIdxRef.current -= 1
     fc.loadFromJSON(historyRef.current[historyIdxRef.current]).then(() => {
+      _rekeyFreehandPoints(fc, historyFreehandRef.current[historyIdxRef.current])
       fc.renderAll()
       setCanUndo(historyIdxRef.current > 0)
       setCanRedo(true)
@@ -326,6 +415,7 @@ const DrawingModePage = () => {
     if (!fc || historyIdxRef.current >= historyRef.current.length - 1) return
     historyIdxRef.current += 1
     fc.loadFromJSON(historyRef.current[historyIdxRef.current]).then(() => {
+      _rekeyFreehandPoints(fc, historyFreehandRef.current[historyIdxRef.current])
       fc.renderAll()
       setCanUndo(true)
       setCanRedo(historyIdxRef.current < historyRef.current.length - 1)
@@ -369,31 +459,55 @@ const DrawingModePage = () => {
   }, [])
 
   // ── Send to Robot ─────────────────────────────────────────────────────────
+  // Three distinct pixel spaces: getScenePoint() gives CANVAS-space (527-wide
+  // backing store), the camera <img> is CSS-scaled to the viewport (422-wide),
+  // and the backend needs fractions of the CAMERA IMAGE (640x360). Collapsing
+  // any of these steps yields a ~25% stretch/offset.
   const sendToRobot = useCallback(async () => {
     const fc = fabricRef.current
     if (!fc) return
-    const pathData = getCanvasPathData(fc)
-    if (pathData.length === 0) { setStatus('⚠ No objects to send'); return }
+    const objs = fc.getObjects()
+    if (objs.length === 0) { setStatus('⚠ No objects to send'); return }
     setIsSending(true)
     setStatus('Sending to robot…')
     try {
-      // Normalize pixel coords to [0,1] for backend grid_pose()
-      const cw = fc.getWidth()
-      const ch = fc.getHeight()
+      // (u,v) is derived from the rendered grid-shape quad, so anything drawn
+      // on the quad maps 1:1 onto the taught plane (planegrid.grid_pose).
+      const toUv = (x, y) => (toUvRef.current
+        ? toUvRef.current(x, y)
+        : [x / fc.getWidth(), y / fc.getHeight()])
 
-      const strokes = pathData.map((obj) => {
-        const points = []
-        if (obj.type === 'path' && obj.path) {
-          obj.path.forEach((cmd) => {
-            if (cmd[0] === 'M' || cmd[0] === 'L') {
-              points.push([cmd[1] / cw, cmd[2] / ch])
-            }
-          })
-        } else if (obj.type === 'line') {
-          points.push([obj.x1 / cw, obj.y1 / ch], [obj.x2 / cw, obj.y2 / ch])
+      const strokes = []
+      for (const obj of objs) {
+        if (obj.type === 'path') {
+          const pts = _freehandPoints.get(obj)
+          if (pts && pts.length >= 2) strokes.push({ tool: 'pen', points: pts })
+          continue
         }
-        return { tool: 'pen', points }
-      }).filter(s => s.points.length > 0)
+        if (obj.type === 'line') {
+          strokes.push({ tool: 'line', points: [toUv(obj.x1, obj.y1), toUv(obj.x2, obj.y2)] })
+          continue
+        }
+        if (obj.type === 'rect') {
+          const x1 = obj.left
+          const y1 = obj.top
+          const x2 = obj.left + obj.width
+          const y2 = obj.top + obj.height
+          strokes.push({ tool: 'rect', points: [toUv(x1, y1), toUv(x2, y1), toUv(x2, y2), toUv(x1, y2), toUv(x1, y1)] })
+          continue
+        }
+        if (obj.type === 'ellipse') {
+          const cx = obj.left + obj.rx
+          const cy = obj.top + obj.ry
+          const n = 36
+          const points = []
+          for (let i = 0; i <= n; i++) {
+            const a = (i / n) * Math.PI * 2
+            points.push(toUv(cx + obj.rx * Math.cos(a), cy + obj.ry * Math.sin(a)))
+          }
+          strokes.push({ tool: 'circle', points })
+        }
+      }
 
       if (strokes.length === 0) {
         setStatus('⚠ No drawable paths found')
@@ -563,6 +677,44 @@ const DrawingModePage = () => {
   const canMark     = !!(markReady && markGeom && markMode)
   const fmtMark     = (v, d = 2) => (v === null || v === undefined ? '—' : Number(v).toFixed(d))
 
+  // The drawable region is the taught grid's ACTUAL shape (grid_shape_2d = the
+  // marked corners projected onto the fitted plane), fitted into the viewport.
+  // toUvRef maps a stroke point on that quad back to (u,v) for grid_pose.
+  const gridShape = teachStatus && teachStatus.grid_shape_2d
+  const gridQuad = (() => {
+    if (!Array.isArray(gridShape) || gridShape.length < 2 || !vpSize.w) return null
+    const rows = gridShape.length, cols = gridShape[0].length
+    if (!cols || cols < 2) return null
+    const pts = gridShape.flat()
+    const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1])
+    const minX = Math.min(...xs), maxX = Math.max(...xs)
+    const minY = Math.min(...ys), maxY = Math.max(...ys)
+    const pad = 44
+    const spanX = Math.max(maxX - minX, 1e-6), spanY = Math.max(maxY - minY, 1e-6)
+    const scale = Math.min((vpSize.w - 2 * pad) / spanX, (vpSize.h - 2 * pad) / spanY)
+    const offX = pad + (vpSize.w - 2 * pad - spanX * scale) / 2
+    const offY = pad + (vpSize.h - 2 * pad - spanY * scale) / 2
+    const toC = ([x, y]) => [offX + (x - minX) * scale, offY + (y - minY) * scale]
+    return {
+      rows, cols, shape: gridShape, toC,
+      c00: toC(gridShape[0][0]), c10: toC(gridShape[0][cols - 1]),
+      c01: toC(gridShape[rows - 1][0]), c11: toC(gridShape[rows - 1][cols - 1]),
+    }
+  })()
+
+  useEffect(() => {
+    toUvRef.current = (x, y) => {
+      if (gridQuad) {
+        const [u, v] = inverseBilinear([x, y], gridQuad.c00, gridQuad.c10, gridQuad.c01, gridQuad.c11)
+        return [Math.max(0, Math.min(1, u)), Math.max(0, Math.min(1, v))]
+      }
+      const fc = fabricRef.current
+      const w = fc ? fc.getWidth() : 1
+      const h = fc ? fc.getHeight() : 1
+      return [x / w, y / h]
+    }
+  }, [gridQuad])
+
   const measureMark = useCallback(() => {
     const el = document.getElementById('global-camera-stream')
     const vp = dmViewportRef.current
@@ -585,15 +737,32 @@ const DrawingModePage = () => {
     setMarkGeom(m ? { sw: m.sw, sh: m.sh, scale: m.scale, left: m.left, top: m.top } : null)
   }, [measureMark])
 
-  useEffect(() => {
+  const onViewportChange = useCallback(() => {
     computeMarkGeom()
-    const t = setTimeout(computeMarkGeom, 400)
-    window.addEventListener('resize', computeMarkGeom)
+    const vp = dmViewportRef.current
+    if (vp) setVpSize({ w: vp.clientWidth, h: vp.clientHeight })
+  }, [computeMarkGeom])
+
+  useEffect(() => {
+    onViewportChange()
+    const t = setTimeout(onViewportChange, 400)
+    window.addEventListener('resize', onViewportChange)
     return () => {
       clearTimeout(t)
-      window.removeEventListener('resize', computeMarkGeom)
+      window.removeEventListener('resize', onViewportChange)
     }
-  }, [computeMarkGeom, markCamW, markCamH, markMode])
+  }, [onViewportChange, markCamW, markCamH, markMode])
+
+  // Collapsing the teach panel resizes the viewport without a window resize
+  // event, which would leave markGeom / vpSize (mark markers + grid overlay)
+  // stale.
+  useEffect(() => {
+    const vp = dmViewportRef.current
+    if (!vp || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => onViewportChange())
+    ro.observe(vp)
+    return () => ro.disconnect()
+  }, [onViewportChange])
 
   const handleMarkClick = useCallback(async (e) => {
     if (!markMode) return
@@ -836,6 +1005,58 @@ const DrawingModePage = () => {
                   {i + 1}
                 </div>
               ))}
+
+              {/* Grid overlay: the drawable region is the taught grid's ACTUAL
+                  shape (grid_shape_2d fitted into the viewport). Draw on this
+                  quad and it maps 1:1 to the plane via toUvRef. A dashed
+                  full-viewport box shows until the grid is fully marked. */}
+              {vpSize.w > 0 && (() => {
+                if (!gridQuad) {
+                  const poly = [[0, 0], [1, 0], [1, 1], [0, 1]]
+                    .map(([u, v]) => [u * vpSize.w, v * vpSize.h]
+                      .map((n) => n.toFixed(1)).join(',')).join(' ')
+                  return (
+                    <svg className="dm-grid-overlay">
+                      <polygon points={poly} fill="rgba(148,163,184,0.05)"
+                        stroke="#94a3b8" strokeWidth={1.5} strokeDasharray="7 5" />
+                    </svg>
+                  )
+                }
+                const { shape, rows, cols, toC } = gridQuad
+                const lines = []
+                for (let i = 0; i < rows; i++) {
+                  lines.push(<polyline key={`gr-${i}`} points={
+                    shape[i].map((p) => { const [x, y] = toC(p); return `${x.toFixed(1)},${y.toFixed(1)}` }).join(' ')
+                  } />)
+                }
+                for (let j = 0; j < cols; j++) {
+                  lines.push(<polyline key={`gc-${j}`} points={
+                    shape.map((row) => { const [x, y] = toC(row[j]); return `${x.toFixed(1)},${y.toFixed(1)}` }).join(' ')
+                  } />)
+                }
+                const cornerLabels = [
+                  ['R1C1', 0, 0, 'start', 5, -6],
+                  [`R1C${cols}`, 0, cols - 1, 'end', -5, -6],
+                  [`R${rows}C1`, rows - 1, 0, 'start', 5, 14],
+                  [`R${rows}C${cols}`, rows - 1, cols - 1, 'end', -5, 14],
+                ].map(([t, i, j, anchor, dx, dy]) => {
+                  const [x, y] = toC(shape[i][j])
+                  return (
+                    <text key={t} x={x + dx} y={y + dy} textAnchor={anchor}
+                      fill="#22c55e" fontSize={11} fontWeight={700}>{t}</text>
+                  )
+                })
+                const outerPts = [shape[0][0], shape[0][cols - 1], shape[rows - 1][cols - 1], shape[rows - 1][0]]
+                  .map((p) => { const [x, y] = toC(p); return `${x.toFixed(1)},${y.toFixed(1)}` }).join(' ')
+                return (
+                  <svg className="dm-grid-overlay">
+                    <polygon points={outerPts} fill="rgba(34,197,94,0.08)"
+                      stroke="#22c55e" strokeWidth={2} />
+                    <g stroke="#22c55e" strokeWidth={1} opacity={0.6} fill="none">{lines}</g>
+                    {cornerLabels}
+                  </svg>
+                )
+              })()}
 
             </div>
 
