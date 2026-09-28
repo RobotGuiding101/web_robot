@@ -7,7 +7,7 @@ import threading
 import cv2
 import numpy as np
 
-from routers.mapcontrol import cam, state, _mjpeg_generator, _STREAM_HEADERS, _colorize_depth
+from routers.mapcontrol import cam, state, _mjpeg_generator, _STREAM_HEADERS
 from maps_point.camera import list_devices, Camera
 from maps_point.render import draw_overlay
 
@@ -27,8 +27,6 @@ class CameraSelectBody(BaseModel):
 # ── Secondary Camera Singleton ───────────────────────────────────────────────
 cam2: Optional[Camera] = None
 cam2_lock = threading.Lock()
-_cam2_last_active = 0.0
-CAM2_IDLE_STOP_S = 30.0
 
 
 def get_cam2() -> Camera:
@@ -40,7 +38,6 @@ def get_cam2() -> Camera:
 
 
 def ensure_cam2_running(target_serial: Optional[str] = None) -> Optional[Camera]:
-    global _cam2_last_active
     c2 = get_cam2()
     devices = getattr(state, "camera_devices", [])
     if not devices:
@@ -62,77 +59,10 @@ def ensure_cam2_running(target_serial: Optional[str] = None) -> Optional[Camera]
             c2.start()
         except Exception as e:
             print(f"[Cam2] Start failed: {e}", flush=True)
-    _cam2_last_active = time.time()
     return c2 if c2._running else None
 
 
-def _cam2_idle_watchdog():
-    """Stop the CAM2 pipeline once nobody has viewed it for a while.
-
-    The Camera capture thread runs independently of any HTTP client, so
-    without this a single visit to the camera page (or a stream2 request)
-    left the second D455 streaming forever — measured 2026-09-25: backend
-    CPU 175% with zero stream2 clients, which starves CAM1's depth/tracking
-    and makes align fail ("no valid plane fit" / "points not locked on yet").
-    """
-    while True:
-        time.sleep(5.0)
-        c2 = cam2
-        if c2 is None or not c2._running:
-            continue
-        if _cam2_last_active and (time.time() - _cam2_last_active) > CAM2_IDLE_STOP_S:
-            try:
-                c2.stop()
-                print("[Cam2] stopped (idle)", flush=True)
-            except Exception as e:
-                print(f"[Cam2] idle stop failed: {e}", flush=True)
-
-
-threading.Thread(target=_cam2_idle_watchdog, daemon=True).start()
-
-
-def _cam2_transform(cf, df, mode: Optional[str]):
-    """Apply display mode to a CAM2 frame (rgb/gray/depth), same modes as CAM1.
-    Works on copies only — never mutates the shared depth/color buffers."""
-    eff = (mode or "rgb").lower()
-    if eff == "depth" and df is not None:
-        return _colorize_depth(df)
-    if eff == "gray":
-        gray = cv2.cvtColor(cf, cv2.COLOR_BGR2GRAY)
-        return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-    return cf
-
-
-_CAM2_ENC_LOCK = threading.Lock()
-_CAM2_ENC_CACHE: dict = {}
-_CAM2_ENC_CACHE_MAX = 4
-
-
-def _cam2_encode(cf, df, mode: Optional[str], count: int):
-    """Encode a CAM2 frame ONCE per (frame, mode) and share the bytes across
-    every viewer — mirrors mapcontrol._encode_frame. Without this, each CAM2
-    client ran its own colorize + JPEG pass, so N viewers cost N× CPU."""
-    key = (count, (mode or "rgb").lower())
-    hit = _CAM2_ENC_CACHE.get(key)
-    if hit is not None:
-        return hit
-    with _CAM2_ENC_LOCK:
-        hit = _CAM2_ENC_CACHE.get(key)
-        if hit is not None:
-            return hit
-        ok, buf = cv2.imencode(".jpg", _cam2_transform(cf, df, mode),
-                               [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-        if not ok:
-            return None
-        payload = buf.tobytes()
-        if len(_CAM2_ENC_CACHE) >= _CAM2_ENC_CACHE_MAX:
-            _CAM2_ENC_CACHE.clear()
-        _CAM2_ENC_CACHE[key] = payload
-        return payload
-
-
-def _mjpeg_generator_cam2(target_serial: Optional[str] = None, mode: Optional[str] = None):
-    global _cam2_last_active
+def _mjpeg_generator_cam2(target_serial: Optional[str] = None):
     c2 = ensure_cam2_running(target_serial)
     if not c2 or not c2._running:
         h, w = 360, 640
@@ -154,7 +84,6 @@ def _mjpeg_generator_cam2(target_serial: Optional[str] = None, mode: Optional[st
     last_count = -1
     while c2 and c2._running:
         loop_start = time.time()
-        _cam2_last_active = time.time()
         cf, df = c2.get_latest_frames_ref()
         if cf is None:
             time.sleep(0.04)
@@ -166,14 +95,13 @@ def _mjpeg_generator_cam2(target_serial: Optional[str] = None, mode: Optional[st
             continue
         last_count = count
 
-        payload = _cam2_encode(cf, df, mode, count)
-        if payload is None:
+        ok, buf = cv2.imencode(".jpg", cf, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+        if not ok:
             continue
+        payload = buf.tobytes()
         yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + payload + b"\r\n")
 
-        # Lower CAM2 fps while the control pipeline needs the CPU, so align/draw
-        # (cam1 capture + tracking) is not starved by the display stream.
-        fps = 8 if (state.align_running or state.draw_running) else 15
+        fps = 20
         dt = time.time() - loop_start
         if dt < 1.0 / fps:
             time.sleep(1.0 / fps - dt)
@@ -271,9 +199,6 @@ def scan_camera_devices():
 @router.post("/select")
 def select_camera(body: CameraSelectBody):
     """Switch to a specific RealSense by serial. Empty string = first device."""
-    if state.align_running or state.draw_running:
-        return {"ok": False,
-                "error": "Camera switch blocked while align/draw is running — stop it first"}
     c2 = get_cam2()
     if c2 and c2._running and c2.serial == body.serial:
         c2.stop()
@@ -295,9 +220,6 @@ def select_camera(body: CameraSelectBody):
 @router.post("/swap")
 def swap_cameras():
     """Swap primary and secondary cameras."""
-    if state.align_running or state.draw_running:
-        return {"ok": False,
-                "error": "Camera swap blocked while align/draw is running — stop it first"}
     devices = getattr(state, "camera_devices", [])
     if len(devices) < 2:
         return {"ok": False, "error": "Need at least 2 cameras to swap"}
@@ -344,10 +266,10 @@ def camera_stream(mode: Optional[str] = None):
 
 
 @router.get("/stream2")
-def camera_stream_secondary(serial: Optional[str] = None, mode: Optional[str] = None):
-    """Stream MJPEG video feed for secondary camera (optional ?mode=rgb|gray|depth)."""
+def camera_stream_secondary(serial: Optional[str] = None):
+    """Stream MJPEG video feed for secondary camera."""
     return StreamingResponse(
-        _mjpeg_generator_cam2(target_serial=serial, mode=mode),
+        _mjpeg_generator_cam2(target_serial=serial),
         media_type="multipart/x-mixed-replace; boundary=frame",
         headers=_STREAM_HEADERS,
     )
