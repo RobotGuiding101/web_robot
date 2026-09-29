@@ -257,8 +257,8 @@ def _grid_fully_marked() -> bool:
                for i in range(state.grid_rows) for j in range(state.grid_cols))
 
 
-STREAM_FPS = 25
-STREAM_FPS_IDLE = 15
+STREAM_FPS = 30
+STREAM_FPS_IDLE = 30
 STREAM_W = 640
 STREAM_H = 360
 STREAM_JPEG_QUALITY = 70
@@ -321,27 +321,34 @@ def _encode_frame(cf, df, effective_mode: str, count: int):
 
 def _mjpeg_generator(mode: Optional[str] = None):
     """MJPEG generator — reads from shared buffers, NOT from hardware directly.
-    
+
     Multiple clients can run this generator simultaneously without conflict.
     The capture thread in Camera class handles hardware access. The JPEG
-    encode itself is shared across viewers via _encode_frame, and each client
-    is paced at STREAM_FPS while align/draw runs, STREAM_FPS_IDLE otherwise.
+    encode itself is shared across viewers via _encode_frame.
+
+    Pacing: the previous version slept for the remainder of a 1/fps window
+    after every yield, which added up to 67ms of pure delay on top of the
+    encode cost whenever the stream was idle (STREAM_FPS_IDLE was 15 against
+    a 30fps camera). The stream is already gated by "only send when the
+    capture counter advanced", so that throttle only ever added LATENCY —
+    every displayed frame was one to two frames behind the live scene. The
+    loop now yields the instant a new frame exists and only sleeps while
+    waiting for one.
     """
     last_count = -1
     while True:
-        loop_start = time.time()
         if not cam._running:
             time.sleep(0.2)
             continue
 
         cf, df = cam.get_latest_frames_ref()
         if cf is None:
-            time.sleep(0.02)
+            time.sleep(0.01)
             continue
 
         count = cam._frame_count
         if count == last_count:
-            time.sleep(0.004)
+            time.sleep(0.002)
             continue
         last_count = count
 
@@ -350,11 +357,6 @@ def _mjpeg_generator(mode: Optional[str] = None):
         if payload is None:
             continue
         yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + payload + b"\r\n")
-
-        fps = STREAM_FPS if (state.align_running or state.draw_running) else STREAM_FPS_IDLE
-        dt = time.time() - loop_start
-        if dt < 1.0 / fps:
-            time.sleep(1.0 / fps - dt)
 
 
 # ── video stream ─────────────────────────────────────────────────────────────

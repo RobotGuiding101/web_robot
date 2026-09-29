@@ -253,19 +253,25 @@ const DobotControllerPage = () => {
       const guarded = Date.now() < jogGuardRef.current
 
       if (!guarded && Array.isArray(data.pose) && data.pose.length === 6) {
-        const p = data.pose.map(v => {
-          const n = Number(v)
-          return isNaN(n) ? 0 : +n.toFixed(2)
+        setPos({
+          X: +data.pose[0].toFixed(2),
+          Y: +data.pose[1].toFixed(2),
+          Z: +data.pose[2].toFixed(2),
+          RX: +data.pose[3].toFixed(2),
+          RY: +data.pose[4].toFixed(2),
+          RZ: +data.pose[5].toFixed(2),
         })
-        setPos({ X: p[0], Y: p[1], Z: p[2], RX: p[3], RY: p[4], RZ: p[5] })
       }
 
       if (!guarded && Array.isArray(data.angles) && data.angles.length === 6) {
-        const a = data.angles.map(v => {
-          const n = Number(v)
-          return isNaN(n) ? 0 : +n.toFixed(2)
+        setJoints({
+          J1: +data.angles[0].toFixed(2),
+          J2: +data.angles[1].toFixed(2),
+          J3: +data.angles[2].toFixed(2),
+          J4: +data.angles[3].toFixed(2),
+          J5: +data.angles[4].toFixed(2),
+          J6: +data.angles[5].toFixed(2),
         })
-        setJoints({ J1: a[0], J2: a[1], J3: a[2], J4: a[3], J5: a[4], J6: a[5] })
       }
     } catch { /* ignore */ }
   }, [])
@@ -276,43 +282,14 @@ const DobotControllerPage = () => {
     return () => clearInterval(interval)
   }, [fetchStatus])
 
-  // ── Sync real robot joints & pose → 3D model iframe ───────────────────────
+  // ── Sync real robot joints → 3D model iframe ─────────────────────────────
   useEffect(() => {
     if (!viewerReady || !getCoordinatesEnabled) return
     const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
     if (!iframe || !iframe.contentWindow) return
     const jArr = [joints.J1, joints.J2, joints.J3, joints.J4, joints.J5, joints.J6]
-    const realPose = {
-      x: pos.X,
-      y: pos.Y,
-      z: pos.Z,
-      rx: pos.RX,
-      ry: pos.RY,
-      rz: pos.RZ,
-    }
-    iframe.contentWindow.postMessage({ type: 'setJoints', joints: jArr, realPose }, '*')
-  }, [joints, pos, viewerReady, getCoordinatesEnabled])
-
-  // ── Snap ghost using real robot pose & joints ─────────────────────────────
-  const handleSnapGhost = useCallback(() => {
-    const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
-    if (iframe && iframe.contentWindow) {
-      const realPose = {
-        x: pos.X,
-        y: pos.Y,
-        z: pos.Z,
-        rx: pos.RX,
-        ry: pos.RY,
-        rz: pos.RZ,
-      }
-      const realJoints = [joints.J1, joints.J2, joints.J3, joints.J4, joints.J5, joints.J6]
-      iframe.contentWindow.postMessage({
-        type: 'snapGhost',
-        realPose,
-        realJoints,
-      }, '*')
-    }
-  }, [pos, joints])
+    iframe.contentWindow.postMessage({ type: 'setJoints', joints: jArr }, '*')
+  }, [joints, viewerReady, getCoordinatesEnabled])
 
   // ── Receive 3D viewer TCP / Joint updates + Gizmo drag events ─
   useEffect(() => {
@@ -327,20 +304,14 @@ const DobotControllerPage = () => {
 
       // Gizmo drag released — capture the final IK-solved target pose
       if (e.data.type === 'targetPoseUpdate') {
-        const rawX = e.data.x ?? e.data.X
-        const rawY = e.data.y ?? e.data.Y
-        const rawZ = e.data.z ?? e.data.Z
-        if (rawX !== undefined && !isNaN(Number(rawX))) {
-          const numX = Number(rawX)
-          const numY = Number(rawY ?? 0)
-          const numZ = Number(rawZ ?? 0)
+        if (typeof e.data.x === 'number') {
           setTargetPose({
-            x: isNaN(numX) ? 0 : +numX.toFixed(1),
-            y: isNaN(numY) ? 0 : +numY.toFixed(1),
-            z: isNaN(numZ) ? 0 : +numZ.toFixed(1),
-            rx: +Number(e.data.rx ?? e.data.RX ?? 0).toFixed(1),
-            ry: +Number(e.data.ry ?? e.data.RY ?? 0).toFixed(1),
-            rz: +Number(e.data.rz ?? e.data.RZ ?? 0).toFixed(1),
+            x: +Number(e.data.x).toFixed(1),
+            y: +Number(e.data.y).toFixed(1),
+            z: +Number(e.data.z).toFixed(1),
+            rx: +Number(e.data.rx || 0).toFixed(1),
+            ry: +Number(e.data.ry || 0).toFixed(1),
+            rz: +Number(e.data.rz || 0).toFixed(1),
             joints: Array.isArray(e.data.joints) ? e.data.joints : null,
           })
         }
@@ -356,17 +327,15 @@ const DobotControllerPage = () => {
           ? e.data.selectedIndex
           : (list.length > 0 ? list.length - 1 : null)
         setSelectedGhostIndex(selIdx)
-        const activeItem = (selIdx !== null && list[selIdx]) ? list[selIdx] : (e.data.latest || null)
-        if (activeItem && activeItem.pose) {
-          const p = activeItem.pose
+        if (selIdx !== null && list[selIdx] && list[selIdx].pose) {
           setGhostPose({
-            x: +Number(p.x ?? p.X ?? 0).toFixed(1),
-            y: +Number(p.y ?? p.Y ?? 0).toFixed(1),
-            z: +Number(p.z ?? p.Z ?? 0).toFixed(1),
-            rx: +Number(p.rx ?? p.RX ?? 0).toFixed(1),
-            ry: +Number(p.ry ?? p.RY ?? 0).toFixed(1),
-            rz: +Number(p.rz ?? p.RZ ?? 0).toFixed(1),
-            joints: activeItem.joints,
+            ...list[selIdx].pose,
+            joints: list[selIdx].joints,
+          })
+        } else if (e.data.latest && e.data.latest.pose) {
+          setGhostPose({
+            ...e.data.latest.pose,
+            joints: e.data.latest.joints,
           })
         } else {
           setGhostPose(null)
@@ -376,20 +345,14 @@ const DobotControllerPage = () => {
 
       // Single ghost fallback
       if (e.data.type === 'ghostPoseUpdate') {
-        const rawX = e.data.x ?? e.data.X
-        const rawY = e.data.y ?? e.data.Y
-        const rawZ = e.data.z ?? e.data.Z
-        if (rawX !== undefined && !isNaN(Number(rawX))) {
-          const numX = Number(rawX)
-          const numY = Number(rawY ?? 0)
-          const numZ = Number(rawZ ?? 0)
+        if (typeof e.data.x === 'number') {
           setGhostPose({
-            x: isNaN(numX) ? 0 : +numX.toFixed(1),
-            y: isNaN(numY) ? 0 : +numY.toFixed(1),
-            z: isNaN(numZ) ? 0 : +numZ.toFixed(1),
-            rx: +Number(e.data.rx ?? e.data.RX ?? 0).toFixed(1),
-            ry: +Number(e.data.ry ?? e.data.RY ?? 0).toFixed(1),
-            rz: +Number(e.data.rz ?? e.data.RZ ?? 0).toFixed(1),
+            x: +Number(e.data.x).toFixed(1),
+            y: +Number(e.data.y).toFixed(1),
+            z: +Number(e.data.z).toFixed(1),
+            rx: +Number(e.data.rx || 0).toFixed(1),
+            ry: +Number(e.data.ry || 0).toFixed(1),
+            rz: +Number(e.data.rz || 0).toFixed(1),
             joints: Array.isArray(e.data.joints) ? e.data.joints : null,
           })
         }
@@ -404,6 +367,32 @@ const DobotControllerPage = () => {
         setSelectedGhostIndex(null)
         return
       }
+
+      // Legacy tcpUpdate — only update UI coords when auto-sync is off
+      if (e.data.type === 'tcpUpdate') {
+        if (!getCoordinatesRef.current) {
+          if (typeof e.data.x === 'number') {
+            setPos({
+              X: +Number(e.data.x).toFixed(2),
+              Y: +Number(e.data.y).toFixed(2),
+              Z: +Number(e.data.z).toFixed(2),
+              RX: +Number(e.data.rx || 0).toFixed(2),
+              RY: +Number(e.data.ry || 0).toFixed(2),
+              RZ: +Number(e.data.rz || 0).toFixed(2),
+            })
+          }
+          if (Array.isArray(e.data.joints) && e.data.joints.length === 6) {
+            setJoints({
+              J1: +Number(e.data.joints[0]).toFixed(2),
+              J2: +Number(e.data.joints[1]).toFixed(2),
+              J3: +Number(e.data.joints[2]).toFixed(2),
+              J4: +Number(e.data.joints[3]).toFixed(2),
+              J5: +Number(e.data.joints[4]).toFixed(2),
+              J6: +Number(e.data.joints[5]).toFixed(2),
+            })
+          }
+        }
+      }
     }
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
@@ -414,7 +403,10 @@ const DobotControllerPage = () => {
     const handleKeyDown = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return
       if (e.key === 'r' || e.key === 'R') {
-        handleSnapGhost()
+        const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
+        if (iframe && iframe.contentWindow) {
+          iframe.contentWindow.postMessage({ type: 'snapGhost' }, '*')
+        }
       } else if (e.key === 'c' || e.key === 'C') {
         const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
         if (iframe && iframe.contentWindow) {
@@ -424,7 +416,7 @@ const DobotControllerPage = () => {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [handleSnapGhost])
+  }, [])
 
   const toggleGetCoordinates = () => {
     setGetCoordinatesEnabled((prev) => {
@@ -438,9 +430,10 @@ const DobotControllerPage = () => {
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleEmergency = () => {
-    apiFetch('/api/map/emergency', { method: 'POST' }).catch(() => { })
+    apiFetch('/api/map/error', { method: 'POST' }).catch(() => { })
     apiFetch('/api/map/move_sequence/stop', { method: 'POST' }).catch(() => { })
     setSequenceRunning(false)
+    alert('EMERGENCY STOP!')
   }
 
   const handleApplyFrame = async () => {
@@ -580,18 +573,14 @@ const DobotControllerPage = () => {
     setSelectedGhostIndex(idx)
     const target = ghostList[idx]
     if (target && target.pose) {
-      const p = target.pose
-      const safePose = {
-        x: +Number(p.x ?? p.X ?? 0).toFixed(1),
-        y: +Number(p.y ?? p.Y ?? 0).toFixed(1),
-        z: +Number(p.z ?? p.Z ?? 0).toFixed(1),
-        rx: +Number(p.rx ?? p.RX ?? 0).toFixed(1),
-        ry: +Number(p.ry ?? p.RY ?? 0).toFixed(1),
-        rz: +Number(p.rz ?? p.RZ ?? 0).toFixed(1),
-        joints: Array.isArray(target.joints) ? target.joints : null,
-      }
-      setTargetPose(safePose)
-      setGhostPose(safePose)
+      setTargetPose({
+        ...target.pose,
+        joints: target.joints,
+      })
+      setGhostPose({
+        ...target.pose,
+        joints: target.joints,
+      })
     }
     const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
     if (iframe && iframe.contentWindow) {
@@ -966,7 +955,12 @@ const DobotControllerPage = () => {
                       type="button"
                       className="ghost-action-btn ghost-action-btn--snap"
                       title="กด Snap เพื่อบันทึกเงาสีเทา ณ ตำแหน่งนี้ (กดได้หลายรอบตามต้องการ)"
-                      onClick={handleSnapGhost}
+                      onClick={() => {
+                        const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
+                        if (iframe && iframe.contentWindow) {
+                          iframe.contentWindow.postMessage({ type: 'snapGhost' }, '*')
+                        }
+                      }}
                     >
                       Snap เงา (R)
                     </button>
@@ -1275,26 +1269,30 @@ const DobotControllerPage = () => {
 
                 {targetPose && (
                   <div className="target-pose-coords">
-                    {[
-                      { label: 'X', tVal: targetPose.x, cVal: pos.X },
-                      { label: 'Y', tVal: targetPose.y, cVal: pos.Y },
-                      { label: 'Z', tVal: targetPose.z, cVal: pos.Z },
-                      { label: 'Rx', tVal: targetPose.rx, cVal: pos.RX },
-                      { label: 'Ry', tVal: targetPose.ry, cVal: pos.RY },
-                      { label: 'Rz', tVal: targetPose.rz, cVal: pos.RZ },
-                    ].map(({ label, tVal, cVal }) => {
-                      const tNum = Number(tVal)
-                      const cNum = Number(cVal)
-                      const displayVal = isNaN(tNum) ? '0.0' : tNum.toFixed(1)
-                      const diffVal = (!isNaN(tNum) && !isNaN(cNum)) ? (tNum - cNum).toFixed(1) : '0.0'
-                      return (
-                        <div key={label} className="tp-col">
-                          <div className="tp-label">{label}</div>
-                          <div className="tp-val">{displayVal}</div>
-                          <div className="tp-diff">{diffVal}</div>
-                        </div>
-                      )
-                    })}
+                    <div className="tp-col">
+                      <div className="tp-label">X</div><div className="tp-val">{targetPose.x}</div>
+                      <div className="tp-diff">{(targetPose.x - pos.X).toFixed(1)}</div>
+                    </div>
+                    <div className="tp-col">
+                      <div className="tp-label">Y</div><div className="tp-val">{targetPose.y}</div>
+                      <div className="tp-diff">{(targetPose.y - pos.Y).toFixed(1)}</div>
+                    </div>
+                    <div className="tp-col">
+                      <div className="tp-label">Z</div><div className="tp-val">{targetPose.z}</div>
+                      <div className="tp-diff">{(targetPose.z - pos.Z).toFixed(1)}</div>
+                    </div>
+                    <div className="tp-col">
+                      <div className="tp-label">Rx</div><div className="tp-val">{targetPose.rx}</div>
+                      <div className="tp-diff">{(targetPose.rx - pos.RX).toFixed(1)}</div>
+                    </div>
+                    <div className="tp-col">
+                      <div className="tp-label">Ry</div><div className="tp-val">{targetPose.ry}</div>
+                      <div className="tp-diff">{(targetPose.ry - pos.RY).toFixed(1)}</div>
+                    </div>
+                    <div className="tp-col">
+                      <div className="tp-label">Rz</div><div className="tp-val">{targetPose.rz}</div>
+                      <div className="tp-diff">{(targetPose.rz - pos.RZ).toFixed(1)}</div>
+                    </div>
                   </div>
                 )}
 
