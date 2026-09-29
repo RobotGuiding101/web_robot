@@ -4,6 +4,8 @@ STRUCTURE.md
 PI5.md
 
 # Python
+.venv/
+venv/
 __pycache__/
 *.py[cod]
 
