@@ -17,6 +17,8 @@ const CameraViewPage = () => {
   const [viewSwapped, setViewSwapped] = useState(false)
   const [camera2Mode, setCamera2Mode] = useState('rgb')
   const cameraBoxRef = useRef(null)
+  const [homeLoading, setHomeLoading] = useState(false)
+  const [homeMsg, setHomeMsg] = useState(null)
 
   // Poll robot/camera status
   useEffect(() => {
@@ -89,6 +91,26 @@ const CameraViewPage = () => {
     } catch { /* ignore */ }
     finally {
       setModeLoading(false)
+    }
+  }
+
+  const handleGoHome = async () => {
+    if (!status.connected || homeLoading) return
+    setHomeLoading(true)
+    setHomeMsg(null)
+    try {
+      const res = await apiFetch('/api/map/home', { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.ok === false) {
+        setHomeMsg({ type: 'error', text: data.error || 'Home command failed' })
+      } else {
+        setHomeMsg({ type: 'success', text: 'กำลังเคลื่อนที่ไปยังตำแหน่ง Home' })
+      }
+    } catch {
+      setHomeMsg({ type: 'error', text: 'ไม่สามารถส่งคำสั่ง Home ได้' })
+    } finally {
+      setHomeLoading(false)
+      setTimeout(() => setHomeMsg(null), 3500)
     }
   }
 
@@ -576,68 +598,156 @@ const CameraViewPage = () => {
                 </div>
               </div>
 
-              {/* ช่องขวาล่าง - D-pad + O-pad */}
-              <div
-                className="carddd"
-                style={{
-                  flex: 1,
-                  minHeight: '250px',
-                  borderRadius: '12px',
-                  padding: '16px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '40px',
-                }}
-              >
-                {/* o-pad ด้านซ้าย */}
-                <nav className="o-pad">
-                  <a
-                    className="up"
-                    href="#"
-                    onClick={(e) => {
-                      e.preventDefault()
-                      console.log('UP')
-                    }}
-                  />
-                  <a
-                    className="right"
-                    href="#"
-                    onClick={(e) => {
-                      e.preventDefault()
-                      console.log('RIGHT')
-                    }}
-                  />
-                  <a
-                    className="down"
-                    href="#"
-                    onClick={(e) => {
-                      e.preventDefault()
-                      console.log('DOWN')
-                    }}
-                  />
-                  <a
-                    className="left"
-                    href="#"
-                    onClick={(e) => {
-                      e.preventDefault()
-                      console.log('LEFT')
-                    }}
-                  />
-                </nav>
+              {/* ช่องขวาล่าง - Robot Status, Home Button & Coordinates (Dobot Controller Panel Theme) */}
+              {(() => {
+                const cartLabels = ['X', 'Y', 'Z', 'Rx', 'Ry', 'Rz']
+                const jointLabels = ['J1', 'J2', 'J3', 'J4', 'J5', 'J6']
+                const pose = Array.isArray(status.pose) && status.pose.length >= 6 ? status.pose : [0, 0, 0, 0, 0, 0]
+                const angles = Array.isArray(status.angles) && status.angles.length >= 6 ? status.angles : [0, 0, 0, 0, 0, 0]
 
-                {/* ด้านขวา */}
-                <div className="ud-pad">
-                  <button className="ud-btn up" onClick={() => console.log("UP")}>
-                    <span></span>
-                  </button>
+                return (
+                  <div
+                    className="camera-ctrl-box"
+                    style={{
+                      flex: 1,
+                      minHeight: '250px',
+                      borderRadius: '16px',
+                      background: '#f0f3f8',
+                      border: '1.5px solid #cdd6e3',
+                      boxShadow: '0 2px 8px rgba(74, 114, 160, 0.05)',
+                      padding: '12px 14px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                      gap: '10px',
+                      boxSizing: 'border-box',
+                    }}
+                  >
+                    {/* ── Top Bar: Connection, Mode & Home Button ── */}
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '8px',
+                      }}
+                    >
+                      {/* Left: Status Badges */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        <span
+                          style={{
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.4px',
+                            padding: '4px 10px',
+                            borderRadius: '12px',
+                            background: status.connected ? 'rgba(74, 222, 128, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                            color: status.connected ? '#16a34a' : '#ef4444',
+                            border: `1px solid ${status.connected ? 'rgba(74, 222, 128, 0.4)' : 'rgba(239, 68, 68, 0.4)'}`,
+                          }}
+                        >
+                          {status.connected ? 'Connected' : 'Disconnected'}
+                        </span>
 
-                  <button className="ud-btn down" onClick={() => console.log("DOWN")}>
-                    <span></span>
-                  </button>
-                </div>
+                        {status.connected && (
+                          <span
+                            style={{
+                              fontSize: '11px',
+                              fontWeight: 700,
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.4px',
+                              padding: '4px 10px',
+                              borderRadius: '12px',
+                              background: '#ffffff',
+                              color: '#1a2f45',
+                              border: '1px solid #cdd6e3',
+                            }}
+                          >
+                            {status.robot_mode_label || (status.robot_mode !== undefined ? `Mode ${status.robot_mode}` : 'Ready')}
+                          </span>
+                        )}
+                      </div>
 
-              </div>
+                      {/* Right: Home Button */}
+                      <button
+                        type="button"
+                        id="btn-camera-go-home"
+                        className={`init-btn${homeLoading ? ' init-btn--loading' : ''}`}
+                        onClick={handleGoHome}
+                        disabled={!status.connected || homeLoading}
+                        title="Send robot to configured Home position (/home)"
+                        style={{ minWidth: '70px' }}
+                      >
+                        {homeLoading ? (
+                          <>
+                            <span className="init-btn-spinner" /> Homing…
+                          </>
+                        ) : (
+                          'Home'
+                        )}
+                      </button>
+                    </div>
+
+                    {/* ── Coordinate Readout ── */}
+                    <div className="coord-bar" style={{ margin: 0, padding: '10px' }}>
+                      {/* Cartesian */}
+                      <div className="coord-group">
+                        <div className="coord-group-header">
+                          <span className="coord-group-dot coord-group-dot--cartesian" />
+                          <span className="coord-group-label">Cartesian (mm / deg)</span>
+                        </div>
+                        <div className="coord-items">
+                          {cartLabels.map((axis, i) => (
+                            <div key={axis} className="coord-item">
+                              <span className="coord-axis">{axis}</span>
+                              <span className="coord-val">
+                                {(pose[i] !== undefined && pose[i] !== null ? Number(pose[i]) : 0).toFixed(2)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Joint Angles */}
+                      <div className="coord-group">
+                        <div className="coord-group-header">
+                          <span className="coord-group-dot coord-group-dot--joint" />
+                          <span className="coord-group-label">Joint Angles (deg)</span>
+                        </div>
+                        <div className="coord-items">
+                          {jointLabels.map((axis, i) => (
+                            <div key={axis} className="coord-item">
+                              <span className="coord-axis">{axis}</span>
+                              <span className="coord-val">
+                                {(angles[i] !== undefined && angles[i] !== null ? Number(angles[i]) : 0).toFixed(2)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Notification Message */}
+                    {homeMsg && (
+                      <div
+                        style={{
+                          padding: '5px 10px',
+                          borderRadius: '8px',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          textAlign: 'center',
+                          background: homeMsg.type === 'error' ? '#fef2f2' : '#f0fdf4',
+                          color: homeMsg.type === 'error' ? '#dc2626' : '#16a34a',
+                          border: `1px solid ${homeMsg.type === 'error' ? '#fecaca' : '#bbf7d0'}`,
+                        }}
+                      >
+                        {homeMsg.text}
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
             </div>
           </div>
         </div>
