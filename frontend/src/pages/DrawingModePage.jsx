@@ -947,7 +947,7 @@ const DrawingModePage = () => {
                 </div>
               ))}
 
-              {/* ── Floating 3D Robot Arm Model (Top-Right) ── */}
+              {/* ── Floating 3D Robot Arm Model (Bottom-Left) ── */}
               <div
                 className={`dm-3d-floating${is3DMinimized ? ' dm-3d-floating--minimized' : ''}${is3DExpanded ? ' dm-3d-floating--expanded' : ''}`}
               >

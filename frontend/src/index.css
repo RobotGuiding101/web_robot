@@ -2129,8 +2129,8 @@ body {
 /* ── Floating 3D Robot Viewer in Drawing Mode ──────────────── */
 .dm-3d-floating {
   position: absolute;
-  top: 14px;
-  right: 14px;
+  bottom: 14px;
+  left: 14px;
   z-index: 15;
   display: flex;
   flex-direction: column;
