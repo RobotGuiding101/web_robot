@@ -62,6 +62,7 @@
 ```text
 web_robot/
 ├── README.md
+├── DATABASE.md                   # ER diagram + schema ฐานข้อมูล
 ├── docker-compose.yml            # รัน Frontend + Backend ด้วยคำสั่งเดียว
 │
 ├── backend/                      # FastAPI Server
@@ -119,6 +120,14 @@ graph TD
     Backend <-->|SDK / Serial / TCP| Dobot[🤖 Dobot Robot Arm]
     Backend <-->|OpenCV / MJPEG| Camera[📹 Camera Device]
 ```
+
+---
+
+## 🗄️ โครงสร้างฐานข้อมูล (Database)
+
+PostgreSQL 16 — 3 ตาราง: `users`, `user_settings`, `device_logs` (สร้างอัตโนมัติจาก SQLAlchemy `Base.metadata` ตอน startup)
+
+> 📑 ดู **ER Diagram** + รายละเอียด schema/คอลัมน์/ความสัมพันธ์ทั้งหมดที่ **[DATABASE.md](DATABASE.md)**
 
 ---
 
