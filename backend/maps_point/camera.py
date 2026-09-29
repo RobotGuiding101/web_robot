@@ -84,6 +84,9 @@ class Camera:
         self._capture_thread = None
         self._capture_stop_event = threading.Event()
         self._frame_count = 0
+        # Rolling-median cache, keyed by the frame counter it was built from.
+        self._stacked_frame = None
+        self._stacked_key = None
 
     def start(self, retries=3, retry_delay=1.0) -> bool:
         if not HAS_RS:
@@ -340,9 +343,37 @@ class Camera:
         buf = self._wait_depth_buf()
         if not buf:
             return None
-        full = np.median(np.stack(buf), axis=0).astype(float)
+        # Rolling median over the whole frame costs ~256ms for 30x848x480 on the
+        # Pi — far more than the ~30ms tracking period, so recomputing it on
+        # every call pinned one core permanently. The capture thread only
+        # advances _frame_count when a new frame lands, so keying the result on
+        # it reuses the identical median across calls that see no new frame.
+        key = self._frame_count
+        if key != self._stacked_key:
+            self._stacked_frame = np.median(np.stack(buf), axis=0).astype(float)
+            self._stacked_key = key
+        full = self._stacked_frame
         fx = self.intrinsics["fx"]; fy = self.intrinsics["fy"]
         cx = self.intrinsics["cx"]; cy = self.intrinsics["cy"]
+
+        # The seed is the marked centroid, which can land on a depth hole (a
+        # specular/dark dot) or its noisy edge — the seed-patch plane fit then
+        # comes out garbage and connectedComponents can't seed a component
+        # there, so align fails every cycle (observed 2026-09-25). Re-seat the
+        # seed on the centroid of the largest solid-depth component near it.
+        rr = 30
+        sy_a = max(0, int(seed_y) - rr); sy_b = min(self.h - 1, int(seed_y) + rr)
+        sx_a = max(0, int(seed_x) - rr); sx_b = min(self.w - 1, int(seed_x) + rr)
+        sub_valid = (full[sy_a:sy_b, sx_a:sx_b] > MIN_DEPTH_MM * 0.8).astype(np.uint8)
+        if sub_valid.sum() >= 50:
+            n_lbl, _, sts, cents = cv2.connectedComponentsWithStats(sub_valid)
+            if n_lbl > 1:
+                k = int(np.argmax(sts[1:, cv2.CC_STAT_AREA])) + 1
+                n_seed_x = int(cents[k][0] + sx_a); n_seed_y = int(cents[k][1] + sy_a)
+                if (n_seed_x, n_seed_y) != (int(seed_x), int(seed_y)):
+                    log(f"  [Cam] region-grow: seed re-seated to solid region "
+                        f"({int(seed_x)},{int(seed_y)}) -> ({n_seed_x},{n_seed_y})")
+                    seed_x, seed_y = n_seed_x, n_seed_y
 
         # ── seed-patch plane estimate ───────────────────────────────────
         r = DEPTH_ROI
