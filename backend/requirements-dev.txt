@@ -1,0 +1,9 @@
+# Test/dev-only dependencies.
+# Runtime dependencies still come from requirements.txt
+# (pyrealsense2 is hardware-only and is NOT required to run these unit tests).
+pytest
+pytest-asyncio
+pytest-cov
+pytest-mock
+httpx
+aiosqlite
