@@ -172,11 +172,21 @@ def simplify_stroke(points_uv, eps: float = DRAW_SIMPLIFY_EPS) -> list:
     designed to discard), turning a circle back into a visibly-faceted
     polygon — the same "not detailed enough" complaint that motivated
     ServoP streaming in the first place, reintroduced through a different
-    path if this function were applied unconditionally."""
+    path if this function were applied unconditionally.
+
+    DP only runs when the stroke is OVER the cap — a short stroke (e.g. 29
+    samples) is already under it, and running DP anyway collapses it to a
+    2-point straight line, which is how a drawn shape silently became "the
+    arm just went down and didn't trace anything" on hardware. The <3
+    fallback guards the over-cap case against the same total collapse."""
     if len(points_uv) <= 2:
         return list(points_uv)
+    if len(points_uv) <= DRAW_MAX_POINTS:
+        return _cap_points(points_uv, DRAW_MAX_POINTS)
     arr = np.array(points_uv, dtype=np.float32).reshape(-1, 1, 2)
     simplified = cv2.approxPolyDP(arr, eps, closed=False).reshape(-1, 2).tolist()
+    if len(simplified) < 3:
+        return _cap_points(points_uv, DRAW_MAX_POINTS)
     return _cap_points(simplified, DRAW_MAX_POINTS)
 
 
@@ -254,6 +264,27 @@ def _assemble_strokes(strokes: list, grid_points, rows: int, cols: int, lift_mm:
     return poses
 
 
+def _return_to_start(robot: Robot, state, start_pose) -> None:
+    """Lift, travel back above the pose the arm had when the draw began, then
+    settle onto it — without this the arm parks on the last stroke point.
+    Each leg checks Stop so a mid-return abort actually halts."""
+    try:
+        robot.ensure_frame()
+        cur = robot.get_pose()
+        robot.movl(cur[0], cur[1], cur[2] + DRAW_LIFT_MM, cur[3], cur[4], cur[5])
+        if state.draw_stop.is_set():
+            return
+        robot.movl(start_pose[0], start_pose[1], start_pose[2] + DRAW_LIFT_MM,
+                   start_pose[3], start_pose[4], start_pose[5])
+        if state.draw_stop.is_set():
+            return
+        robot.movl(*start_pose)
+        log("  [Draw] returned to start pose")
+    except RobotMoveError as e:
+        state.status = f"draw done — return to start failed: {e}"
+        log(f"  [Draw] {state.status}")
+
+
 def do_draw(robot: Robot, state, strokes: list) -> None:
     """Background-thread action (see main.py's /api/draw) — `strokes` is a
     list of {"tool": "pen"|"line"|"rect"|"circle", "points": [(u,v), ...]}
@@ -321,6 +352,8 @@ def do_draw(robot: Robot, state, strokes: list) -> None:
         if not poses:
             state.status = "draw: empty stroke"
             return
+        robot.ensure_frame()
+        start_pose = robot.get_pose()
 
         if DRAW_MOTION_MODE == "servo":
             dense = densify_path(poses, DRAW_SERVOP_STEP_MM, DRAW_SERVOP_MAX_STREAM_POINTS)
@@ -345,6 +378,8 @@ def do_draw(robot: Robot, state, strokes: list) -> None:
         else:
             state.status = f"draw done  ({len(poses)} waypoints)"
         log(f"  [Draw] {state.status}")
+        if not state.draw_stop.is_set():
+            _return_to_start(robot, state, start_pose)
     except RobotMoveError as e:
         state.status = f"draw: robot rejected a move — {e} — aborted, check robot log"
         log(f"  [Draw] {state.status}")
