@@ -1,63 +1,171 @@
 <!DOCTYPE html>
 <html lang="th">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Robot Arm 3D Viewer</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { overflow: hidden; background: #0f2942; }
-        #canvas-container { width: 100%; height: 100vh; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            overflow: hidden;
+            background: #f5f5f5;
+        }
+
+        #canvas-container {
+            width: 100%;
+            height: 100vh;
+        }
 
         #loading-overlay {
             position: absolute;
             inset: 0;
-            background: rgba(15, 41, 66, 0.85);
+            background: rgba(245, 245, 245, 0.90);
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
             gap: 12px;
-            color: #fff;
+            color: #333;
             font-family: system-ui, sans-serif;
             font-size: 13px;
             z-index: 50;
             transition: opacity 0.4s ease;
         }
+
         .spinner {
-            width: 36px; height: 36px;
-            border: 3px solid rgba(255,255,255,0.15);
+            width: 36px;
+            height: 36px;
+            border: 3px solid rgba(0, 0, 0, 0.1);
             border-top-color: #1a8fe3;
             border-radius: 50%;
             animation: spin 0.8s linear infinite;
         }
-        @keyframes spin { to { transform: rotate(360deg); } }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
 
         #hint {
             position: absolute;
             bottom: 12px;
             left: 50%;
             transform: translateX(-50%);
-            background: rgba(15,41,66,0.75);
-            backdrop-filter: blur(6px);
-            color: rgba(255,255,255,0.75);
-            font-family: system-ui, sans-serif;
+            background: rgba(255, 255, 255, 0.88);
+            backdrop-filter: blur(8px);
+            color: rgba(30, 41, 59, 0.9);
+            font-family: system-ui, -apple-system, sans-serif;
             font-size: 11px;
-            padding: 6px 14px;
+            padding: 6px 16px;
             border-radius: 20px;
-            border: 1px solid rgba(255,255,255,0.12);
+            border: 1px solid rgba(0, 0, 0, 0.1);
             pointer-events: none;
             white-space: normal;
             text-align: center;
             max-width: 90vw;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            z-index: 20;
         }
-        #hint span { color: #1a8fe3; font-weight: 600; }
+
+        #hint span {
+            color: #0284c7;
+            font-weight: 700;
+        }
+
+        /* ── Gizmo Mode Toolbar ── */
+        #gizmo-toolbar {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            display: flex;
+            gap: 6px;
+            z-index: 30;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+
+        .gizmo-btn {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding: 6px 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(0,0,0,0.15);
+            background: rgba(255,255,255,0.88);
+            backdrop-filter: blur(8px);
+            color: #1e293b;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+            transition: all 0.15s ease;
+            user-select: none;
+        }
+        .gizmo-btn:hover {
+            background: rgba(240,248,255,0.95);
+            border-color: #3b82f6;
+            color: #1d4ed8;
+        }
+        .gizmo-btn.active {
+            background: #1d4ed8;
+            border-color: #1d4ed8;
+            color: #fff;
+            box-shadow: 0 2px 10px rgba(29,78,216,0.4);
+        }
+        .gizmo-btn .kbd {
+            font-size: 9px;
+            padding: 1px 4px;
+            border-radius: 4px;
+            background: rgba(0,0,0,0.08);
+            color: inherit;
+            opacity: 0.7;
+        }
+        .gizmo-btn.active .kbd {
+            background: rgba(255,255,255,0.25);
+        }
+        .gizmo-btn-snap {
+            border-color: rgba(249,115,22,0.4);
+            color: #c2410c;
+        }
+        .gizmo-btn-snap:hover {
+            background: rgba(255,237,213,0.95);
+            border-color: #f97316;
+            color: #c2410c;
+        }
+        .gizmo-btn-clear {
+            border-color: rgba(239, 68, 68, 0.4);
+            color: #b91c1c;
+        }
+        .gizmo-btn-clear:hover {
+            background: rgba(254, 226, 226, 0.95);
+            border-color: #ef4444;
+            color: #991b1b;
+        }
 
         /* Touch: make canvas fill properly on iPad */
-        canvas { touch-action: none; display: block; }
+        canvas {
+            touch-action: none;
+            display: block;
+        }
+
+        /* Display-only mode (for Drawing page): hides toolbar and hint */
+        body.display-only #gizmo-toolbar,
+        body.display-only #hint {
+            display: none !important;
+        }
 
         @media (max-width: 1024px) {
-            #hint { font-size: 10px; padding: 5px 12px; bottom: 8px; }
+            #hint {
+                font-size: 10px;
+                padding: 5px 12px;
+                bottom: 8px;
+            }
         }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -65,20 +173,46 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/TransformControls.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/ColladaLoader.js"></script>
 </head>
+
 <body>
     <div id="loading-overlay">
         <div class="spinner"></div>
         <span>กำลังโหลดโมเดล...</span>
     </div>
+    <!-- Gizmo Mode Toolbar -->
+    <div id="gizmo-toolbar">
+        <button id="btn-mode-move" class="gizmo-btn active" title="Move mode — drag arrows/planes to translate (W)">
+            ✥ Move <span class="kbd">W</span>
+        </button>
+        <button id="btn-mode-rotate" class="gizmo-btn" title="Rotate mode — drag arcs to rotate end-effector (E)">
+            ↺ Rotate <span class="kbd">E</span>
+        </button>
+        <button id="btn-snap" class="gizmo-btn gizmo-btn-snap" title="Snap Gizmo back to arm tip & capture Ghost Shadow (R)">
+            ⊙ Snap เงา <span class="kbd">R</span>
+        </button>
+        <button id="btn-clear-ghost" class="gizmo-btn gizmo-btn-clear" style="display:none;" title="Clear ghost shadow (C)">
+            ✖ ลบเงา <span class="kbd">C</span>
+        </button>
+    </div>
+
+    <div id="hint">
+        <span>W</span>=ขยับ &nbsp;|&nbsp; <span>E</span>=หมุน &nbsp;|&nbsp; <span>R</span>=Snap เงา &nbsp;|&nbsp; ลากแกนเพื่อจัดตำแหน่ง
+    </div>
     <div id="canvas-container"></div>
-    <div id="hint">🟠 <span>ลากลูกบอล</span> เพื่อขยับแขนกล &nbsp;|&nbsp; <span>Space</span> สลับ Translate/Rotate &nbsp;|&nbsp; คลิกพื้นหลังเพื่อหมุนกล้อง</div>
 
 
     <script>
+        // Check view/display mode from URL query (?mode=display or ?display=1)
+        const urlParams = new URLSearchParams(window.location.search);
+        const isDisplayOnly = urlParams.get('mode') === 'display' || urlParams.has('display') || urlParams.has('minimal') || urlParams.has('viewonly');
+        if (isDisplayOnly) {
+            document.body.classList.add('display-only');
+        }
+
         // ===== 1. Scene, Camera, Renderer =====
         const container = document.getElementById('canvas-container');
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x0f2942);
+        scene.background = new THREE.Color(0xf5f5f5);
 
         const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
         camera.position.set(1.8, 1.8, 2.2);
@@ -96,20 +230,100 @@
         cameraControls.target.set(0, 0.4, 0);
 
         // Lighting
-        scene.add(new THREE.AmbientLight(0xaaccff, 0.5));
-        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
         dirLight.position.set(4, 8, 4);
         dirLight.castShadow = true;
         scene.add(dirLight);
-        const fillLight = new THREE.DirectionalLight(0x4488ff, 0.3);
+        const fillLight = new THREE.DirectionalLight(0xddeeff, 0.4);
         fillLight.position.set(-4, 2, -4);
         scene.add(fillLight);
 
         // Grid
-        const gridHelper = new THREE.GridHelper(3, 15, 0x1a3f6f, 0x1a3f6f);
+        const gridHelper = new THREE.GridHelper(3, 15, 0xbbbbbb, 0xdddddd);
         scene.add(gridHelper);
         const axesHelper = new THREE.AxesHelper(0.4);
         scene.add(axesHelper);
+
+        // ===== Camera Feed Ground Plane =====
+        const camCanvas = document.createElement('canvas');
+        camCanvas.width = 640;
+        camCanvas.height = 360;
+        const camCtx = camCanvas.getContext('2d');
+        const camTexture = new THREE.CanvasTexture(camCanvas);
+        camTexture.minFilter = THREE.LinearFilter;
+        camTexture.magFilter = THREE.LinearFilter;
+
+        function findSeq(buf, seq, from) {
+            const n = seq.length;
+            for (let i = from; i <= buf.length - n; i++) {
+                let ok = true;
+                for (let j = 0; j < n; j++) { if (buf[i + j] !== seq[j]) { ok = false; break; } }
+                if (ok) return i;
+            }
+            return -1;
+        }
+
+        function catBuf(a, b) {
+            if (a.length === 0) return b;
+            const out = new Uint8Array(a.length + b.length);
+            out.set(a, 0); out.set(b, a.length);
+            return out;
+        }
+
+        function drawJpeg(jpeg) {
+            createImageBitmap(new Blob([jpeg], { type: 'image/jpeg' })).then((bmp) => {
+                if (camCanvas.width !== bmp.width || camCanvas.height !== bmp.height) {
+                    camCanvas.width = bmp.width; camCanvas.height = bmp.height;
+                }
+                camCtx.drawImage(bmp, 0, 0);
+                bmp.close();
+                camTexture.needsUpdate = true;
+            }).catch(() => {});
+        }
+
+        function readCamStream() {
+            const token = localStorage.getItem('access_token') || '';
+            if (!token) { setTimeout(readCamStream, 2000); return; }
+            fetch('/api/map/video_feed?_t=' + Date.now(), {
+                headers: { Authorization: 'Bearer ' + token },
+                cache: 'no-store',
+            }).then((res) => {
+                if (!res.ok || !res.body) throw new Error('stream ' + res.status);
+                const reader = res.body.getReader();
+                let buf = new Uint8Array(0);
+                const pump = () => reader.read().then(({ value, done }) => {
+                    if (done) return;
+                    buf = catBuf(buf, value);
+                    let pos = 0;
+                    for (;;) {
+                        const soi = findSeq(buf, [0xff, 0xd8], pos);
+                        if (soi < 0) { pos = Math.max(0, buf.length - 1); break; }
+                        const eoi = findSeq(buf, [0xff, 0xd9], soi + 2);
+                        if (eoi < 0) { pos = soi; break; }
+                        drawJpeg(buf.slice(soi, eoi + 2));
+                        pos = eoi + 2;
+                    }
+                    buf = buf.slice(pos);
+                    return pump();
+                });
+                return pump();
+            }).catch(() => { setTimeout(readCamStream, 1000); });
+        }
+        readCamStream();
+
+        const groundGeo = new THREE.PlaneGeometry(3, 3);
+        const groundMat = new THREE.MeshBasicMaterial({
+            map: camTexture,
+            transparent: true,
+            opacity: 0.85,
+            side: THREE.DoubleSide,
+        });
+        const groundPlane = new THREE.Mesh(groundGeo, groundMat);
+        groundPlane.rotation.x = -Math.PI / 2;
+        groundPlane.position.y = 0.001;
+        groundPlane.renderOrder = -1;
+        scene.add(groundPlane);
 
         // ===== 2. Robot Hierarchy =====
         const robotBase = new THREE.Group();
@@ -152,37 +366,37 @@
         }
 
         loader.load('models/base_link.dae', (c) => {
-            c.scene.rotation.set(deg(-90), 0, 0);
+            c.scene.rotation.set(deg(-90), deg(0), deg(0));
             robotBase.add(c.scene); onModelLoaded();
         }, undefined, onModelLoaded);
 
         loader.load('models/Link1.dae', (c) => {
-            c.scene.rotation.set(deg(-90), 0, 0);
+            c.scene.rotation.set(deg(-90), deg(0), deg(0));
             link1.add(c.scene); onModelLoaded();
         }, undefined, onModelLoaded);
 
         loader.load('models/Link2.dae', (c) => {
-            c.scene.rotation.set(0, 0, deg(-90));
+            c.scene.rotation.set(deg(0), deg(0), deg(-90));
             link2.add(c.scene); onModelLoaded();
         }, undefined, onModelLoaded);
 
         loader.load('models/Link3.dae', (c) => {
-            c.scene.rotation.set(0, 0, deg(-90));
+            c.scene.rotation.set(deg(0), deg(0), deg(-90));
             link3.add(c.scene); onModelLoaded();
         }, undefined, onModelLoaded);
 
         loader.load('models/Link4.dae', (c) => {
-            c.scene.rotation.set(0, 0, deg(-180));
+            c.scene.rotation.set(deg(0), deg(0), deg(-180));
             link4.add(c.scene); onModelLoaded();
         }, undefined, onModelLoaded);
 
         loader.load('models/Link5.dae', (c) => {
-            c.scene.rotation.set(0, deg(180), deg(90));
+            c.scene.rotation.set(deg(90), deg(180), deg(90));
             link5.add(c.scene); onModelLoaded();
         }, undefined, onModelLoaded);
 
         loader.load('models/Link6.dae', (c) => {
-            c.scene.rotation.set(0, deg(3), 0);
+            c.scene.rotation.set(deg(180), deg(-90), deg(90));
             c.scene.traverse((child) => {
                 if (child.isMesh) {
                     child.material = child.material.clone();
@@ -198,130 +412,512 @@
 
         // Orange target sphere (draggable)
         const targetMesh = new THREE.Mesh(
-            new THREE.SphereGeometry(0.03, 20, 20),
-            new THREE.MeshPhongMaterial({ color: 0xff6b35, emissive: 0xff3300, emissiveIntensity: 0.3, shininess: 80 })
+            new THREE.SphereGeometry(0.025, 24, 24),
+            new THREE.MeshPhongMaterial({ color: 0xff6b35, emissive: 0xff3300, emissiveIntensity: 0.35, shininess: 90 })
         );
         // Ring around it for visibility
-        const ringGeo = new THREE.TorusGeometry(0.045, 0.006, 8, 24);
+        const ringGeo = new THREE.TorusGeometry(0.042, 0.005, 12, 32);
         const ringMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
         const ring = new THREE.Mesh(ringGeo, ringMat);
         targetMesh.add(ring);
 
-        // Position sphere at end-effector after first frame
-        scene.add(targetMesh);
+        let transformControls = null;
+        let gizmoMode = 'translate'; // 'translate' | 'rotate'
 
-        // TransformControls — translate mode
-        const transformControls = new THREE.TransformControls(camera, renderer.domElement);
-        transformControls.setMode('translate');
-        transformControls.setSize(0.6);
-        transformControls.attach(targetMesh);
-        scene.add(transformControls);
+        function setGizmoMode(mode) {
+            if (!transformControls) return;
+            gizmoMode = mode;
+            transformControls.setMode(mode);
+            const bm = document.getElementById('btn-mode-move');
+            if (bm) bm.classList.toggle('active', mode === 'translate');
+            const br = document.getElementById('btn-mode-rotate');
+            if (br) br.classList.toggle('active', mode === 'rotate');
+        }
 
         // Disable orbit while dragging
         let ikMode = false;
-        transformControls.addEventListener('dragging-changed', (e) => {
-            cameraControls.enabled = !e.value;
-            if (e.value) ikMode = true;
-        });
-        transformControls.addEventListener('change', () => {
-            if (transformControls.dragging) ikMode = true;
-        });
+        let isDragging = false;
 
-        // Space → toggle translate / rotate
-        window.addEventListener('keydown', (e) => {
-            if (e.code === 'Space') {
-                transformControls.setMode(
-                    transformControls.getMode() === 'translate' ? 'rotate' : 'translate'
-                );
-                e.preventDefault();
-            }
-        });
+        if (!isDisplayOnly) {
+            // Position sphere at end-effector
+            scene.add(targetMesh);
+
+            // TransformControls
+            transformControls = new THREE.TransformControls(camera, renderer.domElement);
+            transformControls.setMode('translate');
+            transformControls.setSize(0.75);
+            transformControls.attach(targetMesh);
+            scene.add(transformControls);
+
+            const bm = document.getElementById('btn-mode-move');
+            if (bm) bm.addEventListener('click', () => setGizmoMode('translate'));
+            const br = document.getElementById('btn-mode-rotate');
+            if (br) br.addEventListener('click', () => setGizmoMode('rotate'));
+            const bs = document.getElementById('btn-snap');
+            if (bs) bs.addEventListener('click', handleSnap);
+            const btnClearGhost = document.getElementById('btn-clear-ghost');
+            if (btnClearGhost) btnClearGhost.addEventListener('click', clearAllGhosts);
+
+            window.addEventListener('keydown', (e) => {
+                // Avoid triggering when typing in input fields
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+                if (e.key === 'w' || e.key === 'W') setGizmoMode('translate');
+                if (e.key === 'e' || e.key === 'E') setGizmoMode('rotate');
+                if (e.key === 'r' || e.key === 'R') handleSnap();
+                if (e.key === 'c' || e.key === 'C') clearAllGhosts();
+            });
+
+            transformControls.addEventListener('dragging-changed', (e) => {
+                cameraControls.enabled = !e.value;
+                isDragging = e.value;
+                if (e.value) {
+                    ikMode = true;
+                    // Notify parent: dragging started — pause auto sync
+                    window.parent.postMessage({ type: 'gizmoDragStart' }, '*');
+                } else {
+                    // Notify parent: drag ended — send final target pose
+                    _postTargetPose();
+                }
+            });
+
+            transformControls.addEventListener('change', () => {
+                if (!transformControls.dragging) return;
+                ikMode = true;
+                if (gizmoMode === 'translate') {
+                    solveIK(targetMesh.position);
+                } else {
+                    // Rotate mode: apply the Gizmo's orientation to Link5/Link6 (wrist)
+                    solveIKWithOrientation(targetMesh.position, targetMesh.quaternion);
+                }
+            });
+        }
 
         // ===== 5. CCD Inverse Kinematics =====
+        // Matches joint hierarchy of Dobot CR5 (J1..J6)
         const ikJoints = [
-            { seg: link1, axis: 'y', min: deg(-180), max: deg(180) },
-            { seg: link2, axis: 'z', min: deg(-90),  max: deg(90)  },
-            { seg: link3, axis: 'z', min: deg(-150), max: deg(150) },
-            { seg: link4, axis: 'z', min: deg(-180), max: deg(180) },
-            { seg: link5, axis: 'z', min: deg(-120), max: deg(120) },
-            { seg: link6, axis: 'x', min: deg(-360), max: deg(360) },
+            { seg: link1, axis: 'y', min: deg(-180), max: deg(180), weight: 1.0 },
+            { seg: link2, axis: 'z', min: deg(-90), max: deg(90), weight: 1.0 },
+            { seg: link3, axis: 'z', min: deg(-150), max: deg(150), weight: 1.0 },
+            { seg: link4, axis: 'z', min: deg(-180), max: deg(180), weight: 0.9 },
+            { seg: link5, axis: 'x', min: deg(-180), max: deg(180), weight: 0.8 },
+            { seg: link6, axis: 'y', min: deg(-180), max: deg(180), weight: 0.7 },
         ];
 
+        const _effPos = new THREE.Vector3();
+        const _jointPos = new THREE.Vector3();
+        const _parentQ = new THREE.Quaternion();
+        const _worldAxis = new THREE.Vector3();
+        const _toEff = new THREE.Vector3();
+        const _toTarget = new THREE.Vector3();
+        const _effProj = new THREE.Vector3();
+        const _targetProj = new THREE.Vector3();
+        const _cross = new THREE.Vector3();
+
+        function _ccdStep(seg, axis, min, max, weight, target, TOLERANCE, DAMPING) {
+            endEffector.getWorldPosition(_effPos);
+            if (_effPos.distanceTo(target) < TOLERANCE) return false;
+            seg.getWorldPosition(_jointPos);
+            _toEff.subVectors(_effPos, _jointPos);
+            _toTarget.subVectors(target, _jointPos);
+            const localAxis = axis === 'x' ? new THREE.Vector3(1,0,0)
+                : axis === 'y' ? new THREE.Vector3(0,1,0)
+                : new THREE.Vector3(0,0,1);
+            if (seg.parent) seg.parent.getWorldQuaternion(_parentQ);
+            else _parentQ.identity();
+            _worldAxis.copy(localAxis).applyQuaternion(_parentQ).normalize();
+            const effDot    = _toEff.dot(_worldAxis);
+            const targetDot = _toTarget.dot(_worldAxis);
+            _effProj.copy(_toEff).addScaledVector(_worldAxis, -effDot);
+            _targetProj.copy(_toTarget).addScaledVector(_worldAxis, -targetDot);
+            const effLen    = _effProj.length();
+            const targetLen = _targetProj.length();
+            if (effLen < 0.001 || targetLen < 0.001) return true;
+            _effProj.divideScalar(effLen);
+            _targetProj.divideScalar(targetLen);
+            const dot = THREE.MathUtils.clamp(_effProj.dot(_targetProj), -1, 1);
+            let angle = Math.acos(dot) * DAMPING * (weight || 1.0);
+            _cross.crossVectors(_effProj, _targetProj);
+            if (_cross.dot(_worldAxis) < 0) angle = -angle;
+            if (Math.abs(angle) > 0.0001) {
+                const curAngle  = seg.rotation[axis];
+                const nextAngle = THREE.MathUtils.clamp(curAngle + angle, min, max);
+                seg.rotation[axis] = nextAngle;
+                if (axis !== 'x') seg.rotation.x = 0;
+                if (axis !== 'y') seg.rotation.y = 0;
+                if (axis !== 'z') seg.rotation.z = 0;
+                seg.updateMatrixWorld(true);
+            }
+            return true;
+        }
+
         function solveIK(targetPos) {
-            const ITERATIONS = 20;
-            const TOLERANCE  = 0.004; // metres
-            const DAMPING    = 0.5;
-            const target = new THREE.Vector3().copy(targetPos);
-            const effPos = new THREE.Vector3();
-
+            const ITERATIONS = 25;
+            const TOLERANCE  = 0.0015;
+            const DAMPING    = 0.65;
             for (let iter = 0; iter < ITERATIONS; iter++) {
-                endEffector.getWorldPosition(effPos);
-                if (effPos.distanceTo(target) < TOLERANCE) break;
-
+                endEffector.getWorldPosition(_effPos);
+                if (_effPos.distanceTo(targetPos) < TOLERANCE) break;
                 for (let i = ikJoints.length - 1; i >= 0; i--) {
-                    const { seg, axis, min, max } = ikJoints[i];
-
-                    endEffector.getWorldPosition(effPos);
-                    if (effPos.distanceTo(target) < TOLERANCE) break;
-
-                    const jointPos = new THREE.Vector3();
-                    seg.getWorldPosition(jointPos);
-
-                    const toEff    = effPos.clone().sub(jointPos).normalize();
-                    const toTarget = target.clone().sub(jointPos).normalize();
-
-                    const localAxis = axis === 'x' ? new THREE.Vector3(1,0,0)
-                                    : axis === 'y' ? new THREE.Vector3(0,1,0)
-                                    :                new THREE.Vector3(0,0,1);
-
-                    const parentQ = seg.parent
-                        ? seg.parent.getWorldQuaternion(new THREE.Quaternion())
-                        : new THREE.Quaternion();
-                    const worldAxis = localAxis.applyQuaternion(parentQ).normalize();
-
-                    // Project onto plane perpendicular to rotation axis
-                    const effProj    = toEff.clone().sub(worldAxis.clone().multiplyScalar(toEff.dot(worldAxis))).normalize();
-                    const targetProj = toTarget.clone().sub(worldAxis.clone().multiplyScalar(toTarget.dot(worldAxis))).normalize();
-
-                    const dot   = THREE.MathUtils.clamp(effProj.dot(targetProj), -1, 1);
-                    let angle   = Math.acos(dot) * DAMPING;
-                    const cross = new THREE.Vector3().crossVectors(effProj, targetProj);
-                    if (cross.dot(worldAxis) < 0) angle = -angle;
-
-                    if (Math.abs(angle) > 0.0005) {
-                        seg.rotation[axis] = THREE.MathUtils.clamp(
-                            seg.rotation[axis] + angle, min, max
-                        );
-                        // Lock other axes
-                        if (axis !== 'x') seg.rotation.x = 0;
-                        if (axis !== 'y') seg.rotation.y = 0;
-                        if (axis !== 'z') seg.rotation.z = 0;
-                        seg.updateMatrixWorld(true);
-                    }
+                    const { seg, axis, min, max, weight } = ikJoints[i];
+                    _ccdStep(seg, axis, min, max, weight, targetPos, TOLERANCE, DAMPING);
                 }
             }
         }
 
-        // Sync target sphere to end-effector tip on first load
+        // Wrist orientation helpers
+        const _gizmoEuler = new THREE.Euler();
+        const _link5WorldQ = new THREE.Quaternion();
+        const _link5ParentQ = new THREE.Quaternion();
+        const _link6WorldQ = new THREE.Quaternion();
+        const _link6ParentQ = new THREE.Quaternion();
+        const _targetQ = new THREE.Quaternion();
+        const _localQ = new THREE.Quaternion();
+
+        function solveIKWithOrientation(targetPos, targetQuat) {
+            // 1. Position IK (CCD on Link1..Link6)
+            solveIK(targetPos);
+            // 2. Orientation: drive Link5 (x) and Link6 (y) to match Gizmo quaternion
+            _gizmoEuler.setFromQuaternion(targetQuat, 'XYZ');
+
+            // Link5 axis is X
+            {
+                const desired = _gizmoEuler.x;
+                const { min, max } = ikJoints[4];
+                link5.rotation.x = THREE.MathUtils.clamp(desired, min, max);
+                link5.rotation.y = 0;
+                link5.rotation.z = 0;
+                link5.updateMatrixWorld(true);
+            }
+
+            // Link6 axis is Y
+            {
+                const desired = _gizmoEuler.y;
+                const { min, max } = ikJoints[5];
+                link6.rotation.y = THREE.MathUtils.clamp(desired, min, max);
+                link6.rotation.x = 0;
+                link6.rotation.z = 0;
+                link6.updateMatrixWorld(true);
+            }
+        }
+
+        // Sync target sphere to end-effector tip on first load / drag release
         function syncTargetToTip() {
+            if (isDisplayOnly) return;
             const p = new THREE.Vector3();
             endEffector.getWorldPosition(p);
             targetMesh.position.copy(p);
+            endEffector.getWorldQuaternion(targetMesh.quaternion);
+            targetMesh.updateMatrixWorld(true);
+            if (transformControls) transformControls.updateMatrixWorld();
+            ikMode = false;
         }
 
-        // ===== 6. Expose joint control to parent React app via postMessage =====
-        window.addEventListener('message', (e) => {
-            if (!e.data || e.data.type !== 'setJoints') return;
-            const j = e.data.joints; // array [j1..j6] in degrees
-            if (!Array.isArray(j) || j.length < 6) return;
+        // ── Send current target pose to parent React app ──
+        const _rad2degFn = THREE.MathUtils.radToDeg;
+        const _tpEuler   = new THREE.Euler();
+        const _tpQuat    = new THREE.Quaternion();
+
+        function _postTargetPose() {
+            endEffector.getWorldPosition(_tcpPos);
+            endEffector.getWorldQuaternion(_tpQuat);
+            _tpEuler.setFromQuaternion(_tpQuat);
+
+            const mmX = +(_tcpPos.x * 1000).toFixed(1);
+            const mmY = +(_tcpPos.y * 1000).toFixed(1);
+            const mmZ = +(_tcpPos.z * 1000).toFixed(1);
+            const rx  = +_rad2degFn(_tpEuler.x).toFixed(1);
+            const ry  = +_rad2degFn(_tpEuler.y).toFixed(1);
+            const rz  = +_rad2degFn(_tpEuler.z).toFixed(1);
+
+            const joints = [
+                +_rad2degFn(link1.rotation.y).toFixed(2),
+                +_rad2degFn(link2.rotation.z).toFixed(2),
+                +_rad2degFn(link3.rotation.z).toFixed(2),
+                +_rad2degFn(link4.rotation.z).toFixed(2),
+                +_rad2degFn(link5.rotation.x).toFixed(2),
+                +_rad2degFn(link6.rotation.y).toFixed(2),
+            ];
+
+            window.parent.postMessage({
+                type: 'targetPoseUpdate',
+                x: mmX, y: mmY, z: mmZ,
+                rx, ry, rz,
+                joints,
+            }, '*');
+        }
+
+        // ===== Multiple Transparent Grey Ghosts (เงาสีเทาแบบโปร่ง ทำได้หลายรอบ) =====
+        let ghostList = []; // Array of { id, index, group, tipMesh, joints, pose }
+        let selectedGhostIndex = -1;
+        const MAX_GHOSTS = 25;
+
+        // Clean transparent slate-grey material (สีเทาแบบโปร่ง สบายตา มองเห็นโครงแขนกลชัดเจน)
+        const ghostMat = new THREE.MeshStandardMaterial({
+            color: 0x475569,          // Slate grey (#475569)
+            roughness: 0.55,
+            metalness: 0.1,
+            transparent: true,
+            opacity: 0.38,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+        });
+
+        // Vibrant glowing cyan highlight material for selected ghost
+        const ghostMatHighlight = new THREE.MeshStandardMaterial({
+            color: 0x06b6d4,          // Cyan (#06b6d4)
+            roughness: 0.3,
+            metalness: 0.2,
+            transparent: true,
+            opacity: 0.72,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+        });
+
+        function highlightGhost(targetIndex) {
+            selectedGhostIndex = (typeof targetIndex === 'number' && targetIndex >= 0 && targetIndex < ghostList.length) ? targetIndex : -1;
+            for (let i = 0; i < ghostList.length; i++) {
+                const g = ghostList[i];
+                if (!g || !g.group) continue;
+                const isSelected = (i === selectedGhostIndex);
+                const matToUse = isSelected ? ghostMatHighlight : ghostMat;
+                g.group.traverse((child) => {
+                    if (child.isMesh && child !== g.tipMesh) {
+                        child.material = matToUse;
+                    }
+                });
+                if (g.tipMesh && g.tipMesh.material) {
+                    g.tipMesh.material.color.setHex(isSelected ? 0x06b6d4 : 0x334155);
+                    g.tipMesh.material.opacity = isSelected ? 0.95 : 0.65;
+                }
+            }
+        }
+
+        function clearAllGhosts() {
+            for (const g of ghostList) {
+                if (g.group) scene.remove(g.group);
+            }
+            ghostList = [];
+            selectedGhostIndex = -1;
+            _updateGhostUI();
+            _postGhostList();
+            window.parent.postMessage({ type: 'ghostCleared' }, '*');
+        }
+
+        function removeLastGhost() {
+            if (ghostList.length === 0) return;
+            const last = ghostList.pop();
+            if (last && last.group) scene.remove(last.group);
+            if (selectedGhostIndex >= ghostList.length) {
+                selectedGhostIndex = ghostList.length - 1;
+            }
+            highlightGhost(selectedGhostIndex);
+            _updateGhostUI();
+            _postGhostList();
+        }
+
+        function deleteGhost(targetIndex) {
+            if (typeof targetIndex !== 'number' || targetIndex < 0 || targetIndex >= ghostList.length) return;
+            const item = ghostList.splice(targetIndex, 1)[0];
+            if (item && item.group) scene.remove(item.group);
+            ghostList.forEach((g, idx) => { g.index = idx + 1; });
+            if (selectedGhostIndex === targetIndex) {
+                selectedGhostIndex = ghostList.length > 0 ? Math.min(targetIndex, ghostList.length - 1) : -1;
+            } else if (selectedGhostIndex > targetIndex) {
+                selectedGhostIndex--;
+            }
+            highlightGhost(selectedGhostIndex);
+            _updateGhostUI();
+            _postGhostList();
+        }
+
+        function _updateGhostUI() {
+            const btnClear = document.getElementById('btn-clear-ghost');
+            if (btnClear) {
+                if (ghostList.length > 0) {
+                    btnClear.style.display = 'flex';
+                    btnClear.innerHTML = `ลบเงา (${ghostList.length}) <span class="kbd">C</span>`;
+                } else {
+                    btnClear.style.display = 'none';
+                }
+            }
+
+            const hint = document.getElementById('hint');
+            if (hint) {
+                if (ghostList.length > 0) {
+                    hint.innerHTML = `<span>มีเงาสีเทา ${ghostList.length} จุด</span> &nbsp;|&nbsp; <span>R</span>=Snap เงาเพิ่ม &nbsp;|&nbsp; <span>C</span>=ลบเงา &nbsp;|&nbsp; <span>W</span>/<span>E</span>=ขยับ/หมุน`;
+                } else {
+                    hint.innerHTML = `<span>W</span>=ขยับ &nbsp;|&nbsp; <span>E</span>=หมุน &nbsp;|&nbsp; <span>R</span>=Snap เงา &nbsp;|&nbsp; ลากแกนเพื่อจัดตำแหน่ง`;
+                }
+            }
+        }
+
+        function _postGhostList() {
+            const cleanGhosts = ghostList.map(g => ({
+                id: g.id,
+                index: g.index,
+                pose: g.pose,
+                joints: g.joints,
+            }));
+            const cleanLatest = cleanGhosts.length > 0 ? cleanGhosts[cleanGhosts.length - 1] : null;
+            try {
+                window.parent.postMessage({
+                    type: 'ghostListUpdate',
+                    count: cleanGhosts.length,
+                    selectedIndex: selectedGhostIndex,
+                    ghosts: cleanGhosts,
+                    latest: cleanLatest,
+                }, '*');
+            } catch (err) {
+                console.error('Failed to post ghostListUpdate:', err);
+            }
+        }
+
+        function captureGhostArm() {
+            if (loadedCount < totalModels) return;
+
+            // Ensure transforms are up to date
+            robotBase.updateMatrixWorld(true);
+
+            // Clone full robot hierarchy
+            const newGhost = robotBase.clone(true);
+
+            // Apply transparent grey material and disable raycasting
+            newGhost.traverse((child) => {
+                if (child.isMesh) {
+                    child.material = ghostMat;
+                    child.castShadow = false;
+                    child.receiveShadow = false;
+                    child.raycast = () => {};
+                }
+            });
+
+            // Save ghost joints (degrees)
+            const joints = [
+                +_rad2degFn(link1.rotation.y).toFixed(2),
+                +_rad2degFn(link2.rotation.z).toFixed(2),
+                +_rad2degFn(link3.rotation.z).toFixed(2),
+                +_rad2degFn(link4.rotation.z).toFixed(2),
+                +_rad2degFn(link5.rotation.x).toFixed(2),
+                +_rad2degFn(link6.rotation.y).toFixed(2),
+            ];
+
+            // Save ghost TCP pose
+            endEffector.getWorldPosition(_tcpPos);
+            endEffector.getWorldQuaternion(_tpQuat);
+            _tpEuler.setFromQuaternion(_tpQuat);
+            const pose = {
+                x: +(_tcpPos.x * 1000).toFixed(1),
+                y: +(_tcpPos.y * 1000).toFixed(1),
+                z: +(_tcpPos.z * 1000).toFixed(1),
+                rx: +_rad2degFn(_tpEuler.x).toFixed(1),
+                ry: +_rad2degFn(_tpEuler.y).toFixed(1),
+                rz: +_rad2degFn(_tpEuler.z).toFixed(1),
+            };
+
+            // Subtle dark-grey tip sphere marker
+            const ghostTip = new THREE.Mesh(
+                new THREE.SphereGeometry(0.015, 16, 16),
+                new THREE.MeshBasicMaterial({ color: 0x334155, transparent: true, opacity: 0.65 })
+            );
+            ghostTip.position.copy(_tcpPos);
+            newGhost.add(ghostTip);
+
+            scene.add(newGhost);
+
+            // Append to list (supports multiple rounds!)
+            const item = {
+                id: Date.now() + '_' + (ghostList.length + 1),
+                index: ghostList.length + 1,
+                group: newGhost,
+                tipMesh: ghostTip,
+                joints,
+                pose,
+            };
+            ghostList.push(item);
+
+            // Cap maximum ghosts to prevent performance issues
+            if (ghostList.length > MAX_GHOSTS) {
+                const oldest = ghostList.shift();
+                if (oldest && oldest.group) scene.remove(oldest.group);
+            }
+
+            selectedGhostIndex = ghostList.length - 1;
+            highlightGhost(selectedGhostIndex);
+            _updateGhostUI();
+            _postGhostList();
+        }
+
+        function restoreGhostPose(targetIndex) {
+            let target = null;
+            let idx = -1;
+            if (typeof targetIndex === 'number' && ghostList[targetIndex]) {
+                target = ghostList[targetIndex];
+                idx = targetIndex;
+            } else if (ghostList.length > 0) {
+                target = ghostList[ghostList.length - 1];
+                idx = ghostList.length - 1;
+            }
+            if (!target || !target.joints) return;
+            const j = target.joints;
             link1.rotation.y = deg(j[0]);
             link2.rotation.z = deg(j[1]);
             link3.rotation.z = deg(j[2]);
             link4.rotation.z = deg(j[3]);
             link5.rotation.x = deg(j[4]);
             link6.rotation.y = deg(j[5]);
-            ikMode = false;
+            link1.updateMatrixWorld(true);
             syncTargetToTip();
+            _postTargetPose();
+            highlightGhost(idx);
+        }
+
+        function selectGhost(targetIndex) {
+            if (typeof targetIndex !== 'number' || targetIndex < 0 || targetIndex >= ghostList.length) {
+                highlightGhost(-1);
+                return;
+            }
+            restoreGhostPose(targetIndex);
+        }
+
+        function handleSnap() {
+            // 1. Capture current arm as a new transparent grey ghost
+            captureGhostArm();
+            // 2. Snap Gizmo back to arm tip
+            syncTargetToTip();
+            // 3. Send target pose update
+            _postTargetPose();
+        }
+
+        // ===== 6. Expose joint control & ghost control to parent React app via postMessage =====
+        window.addEventListener('message', (e) => {
+            if (!e.data) return;
+            if (e.data.type === 'setJoints') {
+                const j = e.data.joints; // array [j1..j6] in degrees
+                if (!Array.isArray(j) || j.length < 6) return;
+                link1.rotation.y = deg(j[0]);
+                link2.rotation.z = deg(j[1]);
+                link3.rotation.z = deg(j[2]);
+                link4.rotation.z = deg(j[3]);
+                link5.rotation.x = deg(j[4]);
+                link6.rotation.y = deg(j[5]);
+                link1.updateMatrixWorld(true);
+                ikMode = false;
+                syncTargetToTip();
+            } else if (e.data.type === 'snapGhost') {
+                handleSnap();
+            } else if (e.data.type === 'clearGhost' || e.data.type === 'clearAllGhosts') {
+                clearAllGhosts();
+            } else if (e.data.type === 'removeLastGhost') {
+                removeLastGhost();
+            } else if (e.data.type === 'restoreGhost') {
+                restoreGhostPose(e.data.index);
+            } else if (e.data.type === 'selectGhost') {
+                selectGhost(e.data.index);
+            } else if (e.data.type === 'highlightGhost') {
+                highlightGhost(e.data.index);
+            } else if (e.data.type === 'deleteGhost') {
+                deleteGhost(e.data.index);
+            }
         });
 
         // Snap target to tip once after first render
@@ -329,7 +925,7 @@
 
         // ===== 7. Render Loop =====
         // Cache TCP display elements
-        const _tcpPos  = new THREE.Vector3();
+        const _tcpPos = new THREE.Vector3();
         const _tcpQuat = new THREE.Quaternion();
         const _tcpEuler = new THREE.Euler();
         const _rad2deg = THREE.MathUtils.radToDeg;
@@ -339,15 +935,14 @@
             requestAnimationFrame(animate);
             cameraControls.update();
 
-            if (firstFrame) {
-                syncTargetToTip();
+            if (firstFrame && loadedCount >= totalModels) {
+                if (!isDisplayOnly) syncTargetToTip();
                 firstFrame = false;
             }
 
             // Run IK every frame while dragging
-            if (ikMode) {
+            if (ikMode && !isDisplayOnly) {
                 solveIK(targetMesh.position);
-                // Keep ring facing camera
                 ring.lookAt(camera.position);
             }
 
@@ -374,8 +969,8 @@
                     +_rad2deg(link2.rotation.z).toFixed(2),
                     +_rad2deg(link3.rotation.z).toFixed(2),
                     +_rad2deg(link4.rotation.z).toFixed(2),
-                    +_rad2deg(link5.rotation.z).toFixed(2),
-                    +_rad2deg(link6.rotation.x).toFixed(2),
+                    +_rad2deg(link5.rotation.x).toFixed(2),
+                    +_rad2deg(link6.rotation.y).toFixed(2),
                 ];
 
                 window.parent.postMessage({
@@ -399,4 +994,5 @@
         });
     </script>
 </body>
+
 </html>

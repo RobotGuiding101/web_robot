@@ -1,12 +1,8 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
+import { apiFetch, clearToken } from '../lib/api'
 import { useNavigate, useLocation } from 'react-router-dom'
 
 const NAV_ITEMS = [
-  // { icon: '🏠', label: 'Dashboard', path: '/dashboard' },
-  // { icon: '📷', label: 'Camera', path: '/camera' },
-  // { icon: '✏️', label: 'Drawing', path: '/drawing' },
-  // { icon: '📦', label: 'Dobot', path: '/dobot' },
-  // { icon: '⚙️', label: 'Settings', path: '/settings' },
   { img: 'assets/images/home.png' ,label: 'Dashboard', path: '/dashboard' },
   { img: 'assets/images/camera.png' ,label: 'Camera', path: '/camera' },
   { img: 'assets/images/drawing.png' ,label: 'Drawing', path: '/drawing' },
@@ -29,17 +25,63 @@ const NavItem = ({ item, isActive, onClick }) => (
   </div>
 )
 
+const authHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('access_token') || ''}`,
+})
+
+const LogoutIcon = ({ size = 18 }) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor"
+       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+    <polyline points="16 17 21 12 16 7" />
+    <line x1="21" y1="12" x2="9" y2="12" />
+  </svg>
+)
+
 const Sidebar = () => {
   const navigate = useNavigate()
   const location = useLocation()
   const [speed, setSpeed] = useState(50)
 
+  /* Load speed from DB on mount */
+  useEffect(() => {
+    apiFetch('/api/settings', { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data && data.sidebar_speed) setSpeed(Number(data.sidebar_speed))
+      })
+      .catch(() => {})
+  }, [])
+
+  /* Debounced save to DB */
+  const saveSpeed = useCallback((val) => {
+    apiFetch('/api/settings', {
+      method: 'PUT',
+      headers: authHeaders(),
+      body: JSON.stringify({ settings: [{ key: 'sidebar_speed', value: String(val) }] }),
+    }).catch(() => {})
+  }, [])
+
+  const handleSpeedChange = (e) => {
+    const val = Number(e.target.value)
+    setSpeed(val)
+    saveSpeed(val)
+  }
+
+  const handleLogout = useCallback(() => {
+    clearToken()
+    localStorage.removeItem('username')
+    navigate('/login', { replace: true })
+  }, [navigate])
+
   return (
     <>
       {/* ── Sidebar: Tablet / Desktop ── */}
       <div className="sidebar">
-        {/* <div className="logo" title="Robot Arm System">🤖</div> */}
-         <div className="logo" title="Robot Arm System"></div>
+        <div className="logo" title="Robot Arm System">
+          <img src="assets/images/robot-arm.png" alt="Robot Arm System" className="nav-icon" />
+        </div>
 
         <div className="nav-items">
           {NAV_ITEMS.map((item) => (
@@ -59,10 +101,15 @@ const Sidebar = () => {
             min="0"
             max="100"
             value={speed}
-            onChange={(e) => setSpeed(Number(e.target.value))}
+            onChange={handleSpeedChange}
           />
           <span>SPEED</span>
         </div>
+
+        <button className="logout-btn" onClick={handleLogout} title="Logout" aria-label="Logout">
+          <LogoutIcon size={18} />
+          <span>LOGOUT</span>
+        </button>
       </div>
 
       {/* ── Bottom Nav: Mobile only (shown via CSS) ── */}
@@ -82,6 +129,15 @@ const Sidebar = () => {
             <span className="label">{item.label}</span>
           </div>
         ))}
+        <div
+          className="nav-item"
+          onClick={handleLogout}
+          role="button"
+          aria-label="Logout"
+        >
+          <LogoutIcon size={20} />
+          <span className="label">Logout</span>
+        </div>
       </nav>
     </>
   )

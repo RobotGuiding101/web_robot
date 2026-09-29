@@ -1,12 +1,16 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { apiFetch } from '../lib/api'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
 
-const STEP_VALUES = [0.1, 1, 5, 10]
+const STEP_VALUES = [0.1, 1, 5, 10, 20, 50]
 const CARTESIAN_AXES = ['X', 'Y', 'Z', 'RX', 'RY', 'RZ']
 const JOINT_AXES = ['J1', 'J2', 'J3', 'J4', 'J5', 'J6']
+const LOG_MAX = 200
+const STATUS_POLL_MS = 1000
 
-const JogGroup = ({ axes, onMove }) => (
+// ── Jog Button Group ──────────────────────────────────────────────────────────
+const JogGroup = ({ axes, onMove, disabled }) => (
   <div className="jog-panel">
     {axes.map((axis) => (
       <div key={axis} className="jog-row">
@@ -14,7 +18,8 @@ const JogGroup = ({ axes, onMove }) => (
           id={`jog-${axis}-minus`}
           className="jog-pill jog-pill--minus"
           onClick={() => onMove(axis, '-')}
-          title={`Decrease ${axis}`}
+          disabled={disabled}
+          title={disabled ? 'Robot not connected' : `Decrease ${axis}`}
         >
           <span className="jog-axis-badge">{axis}</span>
           <span className="jog-sign">-</span>
@@ -23,7 +28,8 @@ const JogGroup = ({ axes, onMove }) => (
           id={`jog-${axis}-plus`}
           className="jog-pill jog-pill--plus"
           onClick={() => onMove(axis, '+')}
-          title={`Increase ${axis}`}
+          disabled={disabled}
+          title={disabled ? 'Robot not connected' : `Increase ${axis}`}
         >
           <span className="jog-axis-badge">{axis}</span>
           <span className="jog-sign">+</span>
@@ -33,101 +39,803 @@ const JogGroup = ({ axes, onMove }) => (
   </div>
 )
 
+// ── Log Panel ─────────────────────────────────────────────────────────────────
+const LogPanel = ({ title, channel, accentClass }) => {
+  const [lines, setLines] = useState([])
+  const [paused, setPaused] = useState(false)
+  const bottomRef = useRef(null)
+  const pausedRef = useRef(false)
+  const pendingRef = useRef([])
+
+  pausedRef.current = paused
+
+  useEffect(() => {
+    if (!paused) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [lines, paused])
+
+  useEffect(() => {
+    let dead = false
+
+    const addLine = (entry) => {
+      if (pausedRef.current) { pendingRef.current.push(entry); return }
+      setLines((prev) => {
+        const next = [...prev, entry]
+        return next.length > LOG_MAX ? next.slice(-LOG_MAX) : next
+      })
+    }
+
+    apiFetch('/api/map/robot_logs')
+      .then((r) => r.json())
+      .then((data) => {
+        if (!dead && Array.isArray(data.entries)) {
+          setLines(data.entries.map(e => ({ t: e.t || '', msg: e.msg || e })))
+        }
+      })
+      .catch(() => { })
+
+    const pollInterval = setInterval(() => {
+      if (dead || pausedRef.current) return
+      apiFetch('/api/map/robot_logs')
+        .then((r) => r.json())
+        .then((data) => {
+          if (!dead && Array.isArray(data.entries)) {
+            setLines(data.entries.map(e => ({ t: e.t || '', msg: e.msg || e })))
+          }
+        })
+        .catch(() => { })
+    }, 2000)
+
+    return () => { dead = true; clearInterval(pollInterval) }
+  }, [channel])
+
+  const handleResume = useCallback(() => {
+    setPaused(false)
+    if (pendingRef.current.length) {
+      setLines((prev) => {
+        const next = [...prev, ...pendingRef.current]
+        pendingRef.current = []
+        return next.length > LOG_MAX ? next.slice(-LOG_MAX) : next
+      })
+    }
+  }, [])
+
+  const handleClear = useCallback(() => {
+    setLines([])
+    pendingRef.current = []
+  }, [])
+
+  return (
+    <div className={`log-panel-box ${accentClass}`}>
+      <div className="log-panel-header">
+        <span className="log-panel-title">{title}</span>
+        <div className="log-panel-actions">
+          {paused
+            ? <button className="log-btn log-btn--resume" onClick={handleResume}>Resume</button>
+            : <button className="log-btn log-btn--pause" onClick={() => setPaused(true)}>Pause</button>
+          }
+          <button className="log-btn log-btn--clear" onClick={handleClear}>Clear</button>
+        </div>
+      </div>
+      <div className="log-panel-body" id={`log-${channel}`}>
+        {lines.length === 0
+          ? <span className="log-empty">No log entries yet…</span>
+          : lines.map((l, i) => (
+            <div key={i} className="log-line">
+              <span className="log-time">{l.t}</span>
+              <span className="log-msg">{l.msg}</span>
+            </div>
+          ))
+        }
+        <div ref={bottomRef} />
+      </div>
+      {paused && pendingRef.current.length > 0 && (
+        <div className="log-paused-banner">
+          Paused — {pendingRef.current.length} new line{pendingRef.current.length > 1 ? 's' : ''} waiting
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Section header (compact reusable) ─────────────────────────────────────────
+const SectionHead = ({ children }) => (
+  <div className="ctrl-section-head">{children}</div>
+)
+
+// ── Main Page ─────────────────────────────────────────────────────────────────
 const DobotControllerPage = () => {
+  // ── Jog / position state ──────────────────────────────────────────────────
   const [stepValue, setStepValue] = useState(1)
-  const [pos, setPos]       = useState({ X: 0, Y: 0, Z: 150, RX: 0, RY: 0, RZ: 0 })
+  const [speed, setSpeed] = useState(10)  // SpeedFactor 1-100%, loaded from DB
+  const [pos, setPos] = useState({ X: 0, Y: 0, Z: 150, RX: 0, RY: 0, RZ: 0 })
   const [joints, setJoints] = useState({ J1: 0, J2: 0, J3: 0, J4: 0, J5: 0, J6: 0 })
   const [lastMoved, setLastMoved] = useState(null)
 
-  // Receive TCP position + joints from the 3D viewer iframe
+  // ── Action statuses ───────────────────────────────────────────────────────
+  const [initLoading, setInitLoading] = useState(false)
+  const [initStatus, setInitStatus] = useState(null) // 'ok' | 'error' | null
+  const [homeLoading, setHomeLoading] = useState(false)
+  const [homeStatus, setHomeStatus] = useState(null)
+  const [errorStatus, setErrorStatus] = useState(null)
+
+  const [connected, setConnected] = useState(false)
+  const [jogError, setJogError] = useState(null)
+  const [viewerReady, setViewerReady] = useState(false)
+  const [getCoordinatesEnabled, setGetCoordinatesEnabled] = useState(true)
+  const getCoordinatesRef = useRef(true)
+  getCoordinatesRef.current = getCoordinatesEnabled
+  const [toolIndex, setToolIndex] = useState(0)
+  const [userIndex, setUserIndex] = useState(0)
+  const [frameMsg, setFrameMsg] = useState(null)
+
+  // ── Stable cache-buster ──
+  const viewerKey = useRef(Date.now())
+  const viewerBoxRef = useRef(null)
+  const [isViewerFullscreen, setIsViewerFullscreen] = useState(false)
+  const jogGuardRef = useRef(0)
+  const frameDirtyRef = useRef(false)
+
+  // ── Target pose from 3D Gizmo drag ──
+  const [targetPose, setTargetPose] = useState(null) // { x, y, z, rx, ry, rz, joints }
+  const [ghostPose, setGhostPose] = useState(null)   // { x, y, z, rx, ry, rz, joints }
+  const [ghostList, setGhostList] = useState([])     // array of all ghost waypoints
+  const [latestGhost, setLatestGhost] = useState(null)
+  const [selectedGhostIndex, setSelectedGhostIndex] = useState(null)
+  const [moveMode, setMoveMode] = useState('movj')    // 'movj' | 'movl' | 'joint'
+  const [moveToLoading, setMoveToLoading] = useState(false)
+  const [moveToStatus, setMoveToStatus] = useState(null) // 'ok' | 'error' | null
+  const [moveToError, setMoveToError] = useState(null)
+
+  // ── Ghost Sequence Execution States ──
+  const [sequenceRunning, setSequenceRunning] = useState(false)
+  const [sequenceIndex, setSequenceIndex] = useState(0)
+  const [sequenceTotal, setSequenceTotal] = useState(0)
+  const [sequencePause, setSequencePause] = useState(0.5)
+  const [sequenceMode, setSequenceMode] = useState('movj')
+  const [sequenceStatus, setSequenceStatus] = useState(null)
+  const [sequenceMsg, setSequenceMsg] = useState(null)
+
+  // ── Auto-connect + init robot on mount ─────────────────────────────────
+  useEffect(() => {
+    const autoInit = async () => {
+      try {
+        const res = await apiFetch('/api/map/status')
+        const s = res.ok ? await res.json() : null
+        if (!s || !s.connected) await apiFetch('/api/map/connect', { method: 'POST' })
+        if (!s || !s.camera_running) await apiFetch('/api/map/camstart', { method: 'POST' })
+        await apiFetch('/api/map/init', { method: 'POST' })
+      } catch { /* ignore */ }
+    }
+    autoInit()
+  }, [])
+
+  // ── Load speed from DB settings ───────────────────────────────────────
+  useEffect(() => {
+    const token = localStorage.getItem('access_token') || ''
+    apiFetch('/api/settings', {
+      headers: { 'Authorization': `Bearer ${token}` },
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data && data.sidebar_speed) setSpeed(Number(data.sidebar_speed))
+      })
+      .catch(() => {})
+  }, [])
+
+  // ── Poll real robot status from /api/map/status ──────────────────────────
+  const fetchStatus = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/map/status')
+      if (!res.ok) return
+      const data = await res.json()
+
+      setConnected(!!data.connected)
+
+      if (!frameDirtyRef.current) {
+        if (data.tool_index !== undefined && data.tool_index !== null) setToolIndex(data.tool_index)
+        if (data.user_index !== undefined && data.user_index !== null) setUserIndex(data.user_index)
+      }
+
+      if (data.sequence_running !== undefined) {
+        setSequenceRunning(!!data.sequence_running)
+        setSequenceIndex(data.sequence_index || 0)
+        setSequenceTotal(data.sequence_total || 0)
+        if (data.sequence_running && data.sequence_index > 0) {
+          const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
+          if (iframe && iframe.contentWindow) {
+            iframe.contentWindow.postMessage({ type: 'highlightGhost', index: data.sequence_index - 1 }, '*')
+          }
+        }
+      }
+
+      if (!getCoordinatesRef.current) return
+
+      const guarded = Date.now() < jogGuardRef.current
+
+      if (!guarded && Array.isArray(data.pose) && data.pose.length === 6) {
+        setPos({
+          X: +data.pose[0].toFixed(2),
+          Y: +data.pose[1].toFixed(2),
+          Z: +data.pose[2].toFixed(2),
+          RX: +data.pose[3].toFixed(2),
+          RY: +data.pose[4].toFixed(2),
+          RZ: +data.pose[5].toFixed(2),
+        })
+      }
+
+      if (!guarded && Array.isArray(data.angles) && data.angles.length === 6) {
+        setJoints({
+          J1: +data.angles[0].toFixed(2),
+          J2: +data.angles[1].toFixed(2),
+          J3: +data.angles[2].toFixed(2),
+          J4: +data.angles[3].toFixed(2),
+          J5: +data.angles[4].toFixed(2),
+          J6: +data.angles[5].toFixed(2),
+        })
+      }
+    } catch { /* ignore */ }
+  }, [])
+
+  useEffect(() => {
+    fetchStatus()
+    const interval = setInterval(fetchStatus, STATUS_POLL_MS)
+    return () => clearInterval(interval)
+  }, [fetchStatus])
+
+  // ── Sync real robot joints → 3D model iframe ─────────────────────────────
+  useEffect(() => {
+    if (!viewerReady || !getCoordinatesEnabled) return
+    const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
+    if (!iframe || !iframe.contentWindow) return
+    const jArr = [joints.J1, joints.J2, joints.J3, joints.J4, joints.J5, joints.J6]
+    iframe.contentWindow.postMessage({ type: 'setJoints', joints: jArr }, '*')
+  }, [joints, viewerReady, getCoordinatesEnabled])
+
+  // ── Receive 3D viewer TCP / Joint updates + Gizmo drag events ─
   useEffect(() => {
     const handleMessage = (e) => {
-      if (!e.data || e.data.type !== 'tcpUpdate') return
-      const { x, y, z, rx, ry, rz, joints: j } = e.data
-      setPos((prev) => ({
-        ...prev,
-        X:  x  ?? prev.X,
-        Y:  y  ?? prev.Y,
-        Z:  z  ?? prev.Z,
-        RX: rx ?? prev.RX,
-        RY: ry ?? prev.RY,
-        RZ: rz ?? prev.RZ,
-      }))
-      if (Array.isArray(j) && j.length === 6) {
-        setJoints({
-          J1: j[0], J2: j[1], J3: j[2],
-          J4: j[3], J5: j[4], J6: j[5],
-        })
+      if (!e.data) return
+
+      // Gizmo drag started — auto-pause real robot sync
+      if (e.data.type === 'gizmoDragStart') {
+        setGetCoordinatesEnabled(false)
+        return
+      }
+
+      // Gizmo drag released — capture the final IK-solved target pose
+      if (e.data.type === 'targetPoseUpdate') {
+        if (typeof e.data.x === 'number') {
+          setTargetPose({
+            x: +Number(e.data.x).toFixed(1),
+            y: +Number(e.data.y).toFixed(1),
+            z: +Number(e.data.z).toFixed(1),
+            rx: +Number(e.data.rx || 0).toFixed(1),
+            ry: +Number(e.data.ry || 0).toFixed(1),
+            rz: +Number(e.data.rz || 0).toFixed(1),
+            joints: Array.isArray(e.data.joints) ? e.data.joints : null,
+          })
+        }
+        return
+      }
+
+      // Multiple ghosts updated
+      if (e.data.type === 'ghostListUpdate') {
+        const list = Array.isArray(e.data.ghosts) ? e.data.ghosts : []
+        setGhostList(list)
+        setLatestGhost(e.data.latest || null)
+        const selIdx = typeof e.data.selectedIndex === 'number' && e.data.selectedIndex >= 0 && e.data.selectedIndex < list.length
+          ? e.data.selectedIndex
+          : (list.length > 0 ? list.length - 1 : null)
+        setSelectedGhostIndex(selIdx)
+        if (selIdx !== null && list[selIdx] && list[selIdx].pose) {
+          setGhostPose({
+            ...list[selIdx].pose,
+            joints: list[selIdx].joints,
+          })
+        } else if (e.data.latest && e.data.latest.pose) {
+          setGhostPose({
+            ...e.data.latest.pose,
+            joints: e.data.latest.joints,
+          })
+        } else {
+          setGhostPose(null)
+        }
+        return
+      }
+
+      // Single ghost fallback
+      if (e.data.type === 'ghostPoseUpdate') {
+        if (typeof e.data.x === 'number') {
+          setGhostPose({
+            x: +Number(e.data.x).toFixed(1),
+            y: +Number(e.data.y).toFixed(1),
+            z: +Number(e.data.z).toFixed(1),
+            rx: +Number(e.data.rx || 0).toFixed(1),
+            ry: +Number(e.data.ry || 0).toFixed(1),
+            rz: +Number(e.data.rz || 0).toFixed(1),
+            joints: Array.isArray(e.data.joints) ? e.data.joints : null,
+          })
+        }
+        return
+      }
+
+      // Ghost cleared
+      if (e.data.type === 'ghostCleared') {
+        setGhostList([])
+        setLatestGhost(null)
+        setGhostPose(null)
+        setSelectedGhostIndex(null)
+        return
+      }
+
+      // Legacy tcpUpdate — only update UI coords when auto-sync is off
+      if (e.data.type === 'tcpUpdate') {
+        if (!getCoordinatesRef.current) {
+          if (typeof e.data.x === 'number') {
+            setPos({
+              X: +Number(e.data.x).toFixed(2),
+              Y: +Number(e.data.y).toFixed(2),
+              Z: +Number(e.data.z).toFixed(2),
+              RX: +Number(e.data.rx || 0).toFixed(2),
+              RY: +Number(e.data.ry || 0).toFixed(2),
+              RZ: +Number(e.data.rz || 0).toFixed(2),
+            })
+          }
+          if (Array.isArray(e.data.joints) && e.data.joints.length === 6) {
+            setJoints({
+              J1: +Number(e.data.joints[0]).toFixed(2),
+              J2: +Number(e.data.joints[1]).toFixed(2),
+              J3: +Number(e.data.joints[2]).toFixed(2),
+              J4: +Number(e.data.joints[3]).toFixed(2),
+              J5: +Number(e.data.joints[4]).toFixed(2),
+              J6: +Number(e.data.joints[5]).toFixed(2),
+            })
+          }
+        }
       }
     }
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
   }, [])
 
+  // ── Global shortcut keys (R = Snap Ghost, C = Clear Ghosts) ──
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return
+      if (e.key === 'r' || e.key === 'R') {
+        const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
+        if (iframe && iframe.contentWindow) {
+          iframe.contentWindow.postMessage({ type: 'snapGhost' }, '*')
+        }
+      } else if (e.key === 'c' || e.key === 'C') {
+        const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
+        if (iframe && iframe.contentWindow) {
+          iframe.contentWindow.postMessage({ type: 'clearAllGhosts' }, '*')
+        }
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
+  const toggleGetCoordinates = () => {
+    setGetCoordinatesEnabled((prev) => {
+      const next = !prev
+      if (next) {
+        setTimeout(fetchStatus, 50)
+      }
+      return next
+    })
+  }
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
   const handleEmergency = () => {
-    // TODO: Call POST /api/robot/emergency-stop
+    apiFetch('/api/map/error', { method: 'POST' }).catch(() => { })
+    apiFetch('/api/map/move_sequence/stop', { method: 'POST' }).catch(() => { })
+    setSequenceRunning(false)
     alert('EMERGENCY STOP!')
   }
 
-  const handleMove = (axis, direction) => {
+  const handleApplyFrame = async () => {
+    try {
+      const res = await apiFetch('/api/map/frame', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tool_index: Number(toolIndex),
+          user_index: Number(userIndex),
+        }),
+      })
+      const data = await res.json().catch(() => null)
+      if (res.ok && data && data.ok !== false) {
+        setFrameMsg({ kind: 'ok', text: `Tool ${data.tool_index} / User ${data.user_index}` })
+        frameDirtyRef.current = false
+      } else {
+        setFrameMsg({ kind: 'error', text: (data && data.error) || 'Failed' })
+      }
+    } catch {
+      setFrameMsg({ kind: 'error', text: 'Failed' })
+    }
+    setTimeout(() => setFrameMsg(null), 3000)
+  }
+
+  // Track native fullscreen changes
+  useEffect(() => {
+    const onFsChange = () => setIsViewerFullscreen(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', onFsChange)
+    return () => document.removeEventListener('fullscreenchange', onFsChange)
+  }, [])
+
+  const handleViewerFullscreen = useCallback(async () => {
+    const el = viewerBoxRef.current
+    if (!el) return
+    if (!document.fullscreenElement) {
+      try { await el.requestFullscreen() } catch { /* ignore */ }
+    } else {
+      try { await document.exitFullscreen() } catch { /* ignore */ }
+    }
+  }, [])
+
+  const handleClearError = async () => {
+    try {
+      const res = await apiFetch('/api/map/error', { method: 'POST' })
+      const data = await res.json()
+      if (data.ok) {
+        setErrorStatus('ok')
+        setLastMoved('Clear Error')
+      } else {
+        setErrorStatus('error')
+      }
+    } catch {
+      setErrorStatus('error')
+    } finally {
+      setTimeout(() => setErrorStatus(null), 3000)
+    }
+  }
+
+  const handleInit = async () => {
+    if (initLoading) return
+    setInitLoading(true); setInitStatus(null)
+    try {
+      await apiFetch('/api/map/connect', { method: 'POST' })
+      const res = await apiFetch('/api/map/init', { method: 'POST' })
+      if (!res.ok) throw new Error()
+      setInitStatus('ok')
+      setLastMoved('Init')
+    } catch { setInitStatus('error') }
+    finally {
+      setInitLoading(false)
+      setTimeout(() => setInitStatus(null), 3000)
+    }
+  }
+
+  const handleGoHome = async () => {
+    if (homeLoading) return
+    setHomeLoading(true); setHomeStatus(null)
+    try {
+      const res = await apiFetch('/api/map/home', { method: 'POST' })
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error || 'Home move failed')
+      setHomeStatus('ok')
+      setLastMoved('Home')
+    } catch {
+      setHomeStatus('error')
+    } finally {
+      setHomeLoading(false)
+      setTimeout(() => setHomeStatus(null), 3000)
+    }
+  }
+
+  // ── Move to Gizmo target pose ──────────────────────────────────────────────
+  const handleMoveTo = useCallback(async () => {
+    if (!targetPose || !connected) return
+    setMoveToLoading(true)
+    setMoveToStatus(null)
+    setMoveToError(null)
+    try {
+      const body = {
+        mode: moveMode,
+        speed: Math.max(1, Math.min(100, speed || 20)),
+      }
+      if (moveMode === 'joint' && targetPose.joints) {
+        body.joints = targetPose.joints
+      } else {
+        body.x  = targetPose.x;  body.y  = targetPose.y;  body.z  = targetPose.z
+        body.rx = targetPose.rx; body.ry = targetPose.ry; body.rz = targetPose.rz
+      }
+      const res = await apiFetch('/api/map/move_to', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (data.ok) {
+        setMoveToStatus('ok')
+        setLastMoved('Move to Target')
+        // Resume auto-sync after brief delay so position readout updates
+        setTimeout(() => { setGetCoordinatesEnabled(true); setTimeout(fetchStatus, 800) }, 800)
+      } else {
+        setMoveToStatus('error')
+        setMoveToError(data.error || 'Move failed')
+      }
+    } catch (err) {
+      setMoveToStatus('error')
+      setMoveToError(String(err))
+    } finally {
+      setMoveToLoading(false)
+      setTimeout(() => setMoveToStatus(null), 3000)
+    }
+  }, [targetPose, connected, moveMode, speed, fetchStatus])
+
+  // ── Ghost selection & direct move handlers ─────────────────────────────────
+  const handleSelectGhost = (idx) => {
+    if (idx < 0 || idx >= ghostList.length) return
+    setSelectedGhostIndex(idx)
+    const target = ghostList[idx]
+    if (target && target.pose) {
+      setTargetPose({
+        ...target.pose,
+        joints: target.joints,
+      })
+      setGhostPose({
+        ...target.pose,
+        joints: target.joints,
+      })
+    }
+    const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
+    if (iframe && iframe.contentWindow) {
+      iframe.contentWindow.postMessage({ type: 'selectGhost', index: idx }, '*')
+    }
+  }
+
+  const handleDeleteGhost = (idx) => {
+    if (idx < 0 || idx >= ghostList.length) return
+    const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
+    if (iframe && iframe.contentWindow) {
+      iframe.contentWindow.postMessage({ type: 'deleteGhost', index: idx }, '*')
+    }
+  }
+
+  const handleMoveToGhost = async (idx) => {
+    if (!connected || idx < 0 || idx >= ghostList.length) return
+    const target = ghostList[idx]
+    if (!target) return
+    handleSelectGhost(idx)
+    setMoveToLoading(true)
+    setMoveToStatus(null)
+    setMoveToError(null)
+    try {
+      const body = {
+        mode: moveMode,
+        speed: Math.max(1, Math.min(100, speed || 20)),
+      }
+      if (moveMode === 'joint' && target.joints) {
+        body.joints = target.joints
+      } else {
+        body.x  = target.pose.x;  body.y  = target.pose.y;  body.z  = target.pose.z
+        body.rx = target.pose.rx; body.ry = target.pose.ry; body.rz = target.pose.rz
+      }
+      const res = await apiFetch('/api/map/move_to', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (data.ok) {
+        setMoveToStatus('ok')
+        setLastMoved(`Move to Ghost #${idx + 1}`)
+        setTimeout(() => { setGetCoordinatesEnabled(true); setTimeout(fetchStatus, 800) }, 800)
+      } else {
+        setMoveToStatus('error')
+        setMoveToError(data.error || 'Move failed')
+      }
+    } catch (err) {
+      setMoveToStatus('error')
+      setMoveToError(String(err))
+    } finally {
+      setMoveToLoading(false)
+      setTimeout(() => setMoveToStatus(null), 3000)
+    }
+  }
+
+  const handleStartSequence = async () => {
+    if (!connected || ghostList.length === 0 || sequenceRunning) return
+    setSequenceStatus(null)
+    setSequenceMsg(null)
+    try {
+      const points = ghostList.map(g => ({
+        x: g.pose ? g.pose.x : null,
+        y: g.pose ? g.pose.y : null,
+        z: g.pose ? g.pose.z : null,
+        rx: g.pose ? g.pose.rx : null,
+        ry: g.pose ? g.pose.ry : null,
+        rz: g.pose ? g.pose.rz : null,
+        joints: g.joints || null,
+      }))
+      const res = await apiFetch('/api/map/move_sequence', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          points,
+          mode: sequenceMode,
+          speed: Math.max(1, Math.min(100, speed || 20)),
+          pause_s: Number(sequencePause) || 0.5,
+        }),
+      })
+      const data = await res.json()
+      if (data.ok) {
+        setSequenceRunning(true)
+        setSequenceIndex(1)
+        setSequenceTotal(points.length)
+        setLastMoved(`Run Sequence (1..${points.length})`)
+      } else {
+        setSequenceStatus('error')
+        setSequenceMsg(data.error || 'Failed to start sequence')
+      }
+    } catch (err) {
+      setSequenceStatus('error')
+      setSequenceMsg(String(err))
+    }
+  }
+
+  const handleStopSequence = async () => {
+    try {
+      await apiFetch('/api/map/move_sequence/stop', { method: 'POST' })
+      setSequenceRunning(false)
+      setSequenceStatus('stopped')
+      setSequenceMsg('ลำดับการขยับถูกหยุดแล้ว')
+      setTimeout(() => setSequenceMsg(null), 3000)
+    } catch { /* ignore */ }
+  }
+
+  const handleMove = async (axis, direction) => {
+    if (!connected) return
     const delta = direction === '+' ? stepValue : -stepValue
     setLastMoved(`${axis}${direction}`)
-    if (axis.startsWith('J')) {
+    setJogError(null)
+    jogGuardRef.current = Date.now() + 700
+
+    const isJoint = axis.startsWith('J')
+    const url = isJoint ? '/api/map/jog_joint' : '/api/map/jog'
+    const body = isJoint
+      ? { joint: parseInt(axis.replace('J', '')), amount: delta, speed }
+      : { axis: axis.toLowerCase(), amount: delta, speed }
+
+    if (isJoint) {
       setJoints((prev) => ({ ...prev, [axis]: +(prev[axis] + delta).toFixed(2) }))
     } else {
       setPos((prev) => ({ ...prev, [axis]: +(prev[axis] + delta).toFixed(2) }))
     }
+
+    try {
+      const res = await apiFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || (data && data.ok === false)) {
+        setJogError((data && data.error) || 'Jog rejected')
+        setTimeout(() => setJogError(null), 3000)
+      }
+    } catch {
+      setJogError('Jog request failed')
+      setTimeout(() => setJogError(null), 3000)
+    }
+    setTimeout(fetchStatus, 800)
   }
 
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="app-layout">
-      <Sidebar />
+      <Sidebar onSpeedChange={setSpeed} />
       <div className="main-content">
         <TopBar title="Dobot Controller" onEmergency={handleEmergency} />
+
         <div className="page-content dobot-page">
+
+          {/* ── Top: Viewer + Control Panel side-by-side ── */}
           <div className="dobot-layout">
 
-            {/* ── Left: 3D Viewer Area ── */}
-            <div className="dobot-viewer-wrap">
-              <div className="dobot-3d-box" style={{ padding: 0, overflow: 'hidden' }}>
+            {/* Left — 3D Viewer (top) + Robot Log (bottom) */}
+            <div className="dobot-left-col">
+              <div ref={viewerBoxRef} className="dobot-3d-box">
                 <iframe
-                  src="/robot-viewer.html"
+                  src={`/robot-viewer.html?v=${viewerKey.current}`}
                   title="Robot Arm 3D Viewer"
-                  style={{
-                    width: '100%',
-                    height: '100%',
-                    border: 'none',
-                    display: 'block',
-                    borderRadius: '16px',
-                  }}
+                  style={{ width: '100%', height: '100%', border: 'none', display: 'block', borderRadius: '14px' }}
                   allow="accelerometer"
+                  onLoad={() => setViewerReady(true)}
                 />
                 <button
                   className="dobot-fullscreen-btn"
-                  title="Fullscreen"
-                  onClick={() => window.open('/robot-viewer.html', '_blank')}
-                >
-                  ⛶
-                </button>
+                  title={isViewerFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+                  onClick={handleViewerFullscreen}
+                >⛶</button>
+              </div>
+              <div className="dobot-left-log">
+                <LogPanel title="Robot Log" channel="robot" accentClass="log-panel-box--robot" />
               </div>
             </div>
 
-            {/* ── Right: Control Panel Box ── */}
+            {/* Right — Control Panel */}
             <div className="ctrl-box">
 
-              {/* Header */}
+              {/* ── Header ── */}
               <div className="ctrl-box-header">
                 <div className="ctrl-box-title-wrap">
                   <span className="ctrl-box-title">Control Panel</span>
                 </div>
-                {lastMoved && (
-                  <span className="ctrl-last-action">
-                    Last: <strong>{lastMoved}</strong>
+                <div className="ctrl-box-header-right">
+                  {jogError && (
+                    <span style={{ color: '#ef4444', fontSize: '12px', fontWeight: 600 }}>{jogError}</span>
+                  )}
+                  {lastMoved && (
+                    <span className="ctrl-last-action">Last: <strong>{lastMoved}</strong></span>
+                  )}
+                  <span
+                    style={{
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.4px',
+                      padding: '4px 10px',
+                      borderRadius: '12px',
+                      background: connected ? 'rgba(74, 222, 128, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                      color: connected ? '#4ade80' : '#ef4444',
+                      border: `1px solid ${connected ? 'rgba(74, 222, 128, 0.4)' : 'rgba(239, 68, 68, 0.4)'}`,
+                    }}
+                  >
+                    {connected ? 'Connected' : 'Disconnected'}
                   </span>
-                )}
+                  <button
+                    id="btn-toggle-get-coords"
+                    className={`init-btn ${getCoordinatesEnabled ? 'init-btn--toggle-active' : 'init-btn--toggle-paused'}`}
+                    onClick={toggleGetCoordinates}
+                    title={
+                      getCoordinatesEnabled
+                        ? 'Auto Get Robot Coordinates is ON. Click to pause/cancel so you can freely move the 3D robot arm.'
+                        : 'Auto Get Robot Coordinates is OFF (Paused). 3D robot arm can be moved freely. Click to resume syncing.'
+                    }
+                  >
+                    {getCoordinatesEnabled ? 'Get Pos: ON' : 'Get Pos: OFF'}
+                  </button>
+                  <button
+                    id="btn-clear-error"
+                    className={`init-btn init-btn--secondary${errorStatus === 'ok' ? ' init-btn--ok' : ''}${errorStatus === 'error' ? ' init-btn--error' : ''}`}
+                    onClick={handleClearError}
+                    title="Clear robot errors and reset alarms (/error)"
+                  >
+                    {errorStatus === 'ok' ? 'Cleared' : errorStatus === 'error' ? 'Error' : 'Clear Error'}
+                  </button>
+                  <button
+                    id="btn-init-robot"
+                    className={`init-btn${initLoading ? ' init-btn--loading' : ''}${initStatus === 'ok' ? ' init-btn--ok' : ''}${initStatus === 'error' ? ' init-btn--error' : ''}`}
+                    onClick={handleInit}
+                    disabled={initLoading}
+                    title="Connect and initialize / enable robot motors (/init)"
+                  >
+                    {initLoading ? <><span className="init-btn-spinner" /> Initing…</>
+                      : initStatus === 'ok' ? <>Ready</>
+                        : initStatus === 'error' ? <>Error</>
+                          : <>Init</>}
+                  </button>
+                  <button
+                    id="btn-go-home"
+                    className={`init-btn${homeLoading ? ' init-btn--loading' : ''}${homeStatus === 'ok' ? ' init-btn--ok' : ''}${homeStatus === 'error' ? ' init-btn--error' : ''}`}
+                    onClick={handleGoHome}
+                    disabled={homeLoading}
+                    title="Send robot to configured Home position (/home)"
+                  >
+                    {homeLoading ? <><span className="init-btn-spinner" /> Homing…</>
+                      : homeStatus === 'ok' ? <>Homed</>
+                        : homeStatus === 'error' ? <>Error</>
+                          : <>Home</>}
+                  </button>
+                </div>
               </div>
 
-              {/* Coordinate Readout */}
+              {/* ── Coordinate Readout ── */}
               <div className="coord-bar">
                 <div className="coord-group">
                   <div className="coord-group-header">
@@ -159,11 +867,11 @@ const DobotControllerPage = () => {
                 </div>
               </div>
 
-              {/* Step Value */}
+              {/* ── Step Value ── */}
               <div className="step-row">
                 <div className="step-row-label-wrap">
-                  <span className="step-row-label">Step Value</span>
-                  <span className="step-row-sub">Distance per jog</span>
+                  <span className="step-row-label">Step</span>
+                  <span className="step-row-sub">per jog</span>
                 </div>
                 <div className="step-pills-wrap">
                   {STEP_VALUES.map((val) => (
@@ -171,32 +879,475 @@ const DobotControllerPage = () => {
                       key={val}
                       className={`step-pill ${stepValue === val ? 'active' : ''}`}
                       onClick={() => setStepValue(val)}
-                    >
-                      {val}
-                    </button>
+                    >{val}</button>
                   ))}
                 </div>
               </div>
 
-              {/* Jog Panels */}
-              <div className="jog-dual">
-                <div className="jog-box">
-                  <div className="jog-box-header">
-                    <span className="jog-box-title">Cartesian Control</span>
-                  </div>
-                  <JogGroup axes={CARTESIAN_AXES} onMove={handleMove} />
+              {/* ── Frame (Tool / User) ── */}
+              <div className="step-row">
+                <div className="step-row-label-wrap">
+                  <span className="step-row-label">Frame</span>
+                  <span className="step-row-sub">Tool / User</span>
                 </div>
-                <div className="jog-box">
-                  <div className="jog-box-header">
-                    <span className="jog-box-title">Joint Control</span>
-                  </div>
-                  <JogGroup axes={JOINT_AXES} onMove={handleMove} />
+                <div className="frame-wrap">
+                  <label className="frame-field">
+                    <span>Tool</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="19"
+                      value={toolIndex}
+                      onChange={(e) => { frameDirtyRef.current = true; setToolIndex(e.target.value) }}
+                      disabled={!connected}
+                    />
+                  </label>
+                  <label className="frame-field">
+                    <span>User</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="9"
+                      value={userIndex}
+                      onChange={(e) => { frameDirtyRef.current = true; setUserIndex(e.target.value) }}
+                      disabled={!connected}
+                    />
+                  </label>
+                  <button className="frame-apply" onClick={handleApplyFrame} disabled={!connected}>
+                    Apply
+                  </button>
+                  {frameMsg && (
+                    <span className={`frame-msg frame-msg--${frameMsg.kind}`}>{frameMsg.text}</span>
+                  )}
                 </div>
               </div>
 
-            </div>
-          </div>
-        </div>
+              {/* ── Jog Panels ── */}
+                <div className="jog-dual">
+                <div className="jog-box">
+                  <div className="jog-box-header"><span className="jog-box-title">Cartesian</span></div>
+                  <JogGroup axes={CARTESIAN_AXES} onMove={handleMove} disabled={!connected} />
+                </div>
+                <div className="jog-box">
+                  <div className="jog-box-header"><span className="jog-box-title">Joint</span></div>
+                  <JogGroup axes={JOINT_AXES} onMove={handleMove} disabled={!connected} />
+                </div>
+              </div>
+
+            {/* ── Ghost Control Card (selector + list + sequence) ── */}
+              <div className="ghost-control-card">
+                {/* ── Ghost Pose Multi-Round Bar ── */}
+                <div className="ghost-pose-banner">
+                  <div className="ghost-pose-info">
+                    <span className="ghost-badge">เงาสีเทา</span>
+                    {ghostList.length > 0 ? (
+                      <span className="ghost-coords">
+                        บันทึก <strong>{ghostList.length}</strong> จุด (ล่าสุด: X:{latestGhost?.pose?.x} Y:{latestGhost?.pose?.y} Z:{latestGhost?.pose?.z})
+                      </span>
+                    ) : (
+                      <span className="ghost-empty-tip">
+                        กด <strong>Snap เงา (R)</strong> เพื่อบันทึกเงาใน 3D (ทำได้หลายจุด)
+                      </span>
+                    )}
+                  </div>
+                  <div className="ghost-actions">
+                    <button
+                      type="button"
+                      className="ghost-action-btn ghost-action-btn--snap"
+                      title="กด Snap เพื่อบันทึกเงาสีเทา ณ ตำแหน่งนี้ (กดได้หลายรอบตามต้องการ)"
+                      onClick={() => {
+                        const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
+                        if (iframe && iframe.contentWindow) {
+                          iframe.contentWindow.postMessage({ type: 'snapGhost' }, '*')
+                        }
+                      }}
+                    >
+                      Snap เงา (R)
+                    </button>
+                    {ghostList.length > 0 && (
+                      <button
+                        type="button"
+                        className="ghost-action-btn ghost-action-btn--clear"
+                        title="ลบเงาทั้งหมดออกจาก 3D"
+                        onClick={() => {
+                          const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
+                          if (iframe && iframe.contentWindow) {
+                            iframe.contentWindow.postMessage({ type: 'clearAllGhosts' }, '*')
+                          }
+                        }}
+                      >
+                        ลบเงาทั้งหมด ({ghostList.length})
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* ── Ghost Selector (Dropdown) ── */}
+                <div className="ghost-dropdown-row">
+                  <label className="ghost-dropdown-label">
+                    <span>เลือกเงาที่จะขยับ:</span>
+                    <select
+                      className="ghost-dropdown-select"
+                      value={selectedGhostIndex ?? ''}
+                      disabled={ghostList.length === 0}
+                      onChange={(e) => {
+                        if (e.target.value !== '') handleSelectGhost(Number(e.target.value))
+                      }}
+                    >
+                      {ghostList.length === 0 ? (
+                        <option value="">-- ยังไม่มีจุดเงา (กด Snap เงา ใน 3D ก่อน) --</option>
+                      ) : (
+                        <>
+                          <option value="" disabled>-- เลือกเงาจากลิสต์ --</option>
+                          {ghostList.map((g, idx) => (
+                            <option key={idx} value={idx}>
+                              เงา #{idx + 1} (X:{g.pose?.x} Y:{g.pose?.y} Z:{g.pose?.z})
+                            </option>
+                          ))}
+                        </>
+                      )}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    className="ghost-btn-move"
+                    disabled={selectedGhostIndex === null || ghostList.length === 0 || !connected || moveToLoading || sequenceRunning}
+                    onClick={() => handleMoveToGhost(selectedGhostIndex)}
+                    title="ขยับหุ่นยนต์ไปยังเงาที่เลือกทันที"
+                  >
+                    ขยับไปที่เงานี้
+                  </button>
+                </div>
+
+                {/* Chips Strip with Prev/Next (shown when ghosts exist) */}
+                {ghostList.length > 0 && (
+                  <div className="ghost-selector-bar">
+                    <button
+                      type="button"
+                      className="ghost-nav-btn"
+                      title="เลือกเงาก่อนหน้า"
+                      disabled={selectedGhostIndex === null || selectedGhostIndex <= 0}
+                      onClick={() => handleSelectGhost(Math.max(0, (selectedGhostIndex ?? 0) - 1))}
+                    >
+                      ◀
+                    </button>
+
+                    <div className="ghost-chips-list">
+                      {ghostList.map((g, idx) => (
+                        <button
+                          key={g.id || idx}
+                          type="button"
+                          className={`ghost-chip ${selectedGhostIndex === idx ? 'active' : ''}`}
+                          onClick={() => handleSelectGhost(idx)}
+                          title={`เลือกเงา #${idx + 1} (X:${g.pose?.x} Y:${g.pose?.y} Z:${g.pose?.z})`}
+                        >
+                          <span>#{idx + 1}</span>
+                          {selectedGhostIndex === idx && <span>✓</span>}
+                        </button>
+                      ))}
+                    </div>
+
+                    <button
+                      type="button"
+                      className="ghost-nav-btn"
+                      title="เลือกเงาถัดไป"
+                      disabled={selectedGhostIndex === null || selectedGhostIndex >= ghostList.length - 1}
+                      onClick={() => handleSelectGhost(Math.min(ghostList.length - 1, (selectedGhostIndex ?? 0) + 1))}
+                    >
+                      ▶
+                    </button>
+                  </div>
+                )}
+
+                {/* List View of All Ghosts (Always visible table container) */}
+                <div className="ghost-list-container">
+                  <div className="ghost-list-header">
+                    <span className="ghost-list-title">ตารางเงาทั้งหมด ({ghostList.length})</span>
+                    <span className="ghost-list-sub">
+                      {ghostList.length > 0 ? 'คลิกที่แถวเพื่อเลือก หรือกดปุ่มขยับ' : 'กด Snap เงา (R) เพื่อเพิ่มจุดลงในตาราง'}
+                    </span>
+                  </div>
+                  <div className="ghost-items-list">
+                    {ghostList.length === 0 ? (
+                      <div className="ghost-list-empty-row">
+                        ยังไม่มีจุดเงาที่บันทึก — กด <strong>Snap เงา (R)</strong> ด้านบน หรือกดแป้น <strong>R</strong> ในโมเดล 3D เพื่อบันทึกจุดเงาลงตารางนี้
+                      </div>
+                    ) : (
+                      ghostList.map((g, idx) => {
+                        const isSel = selectedGhostIndex === idx
+                        return (
+                          <div
+                            key={g.id || idx}
+                            className={`ghost-item-row ${isSel ? 'selected' : ''}`}
+                            onClick={() => handleSelectGhost(idx)}
+                            title={`เลือกเงา #${idx + 1}`}
+                          >
+                            <div className="ghost-item-info">
+                              <div className="ghost-item-name">
+                                <span>เงา #{idx + 1}</span>
+                                {isSel && <span className="ghost-item-active-badge">กำลังเลือก</span>}
+                              </div>
+                              <div className="ghost-item-coords">
+                                X: {g.pose?.x} | Y: {g.pose?.y} | Z: {g.pose?.z} mm
+                              </div>
+                            </div>
+                            <div className="ghost-item-actions" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                type="button"
+                                className="ghost-item-btn-move"
+                                disabled={!connected || moveToLoading || sequenceRunning}
+                                onClick={() => handleMoveToGhost(idx)}
+                                title={`ขยับหุ่นยนต์ไปยังเงา #${idx + 1}`}
+                              >
+                                ขยับ
+                              </button>
+                              <button
+                                type="button"
+                                className="ghost-item-btn-delete"
+                                onClick={() => handleDeleteGhost(idx)}
+                                title={`ลบเงา #${idx + 1}`}
+                              >
+                                ลบ
+                              </button>
+                            </div>
+                          </div>
+                        )
+                      })
+                    )}
+                  </div>
+                </div>
+
+                {/* Selected Ghost Details & Actions */}
+                {selectedGhostIndex !== null && ghostList[selectedGhostIndex] && (
+                  <div className="ghost-details-card">
+                    <div className="ghost-details-title">
+                      <span>เงา #{selectedGhostIndex + 1}</span>
+                      <span className="ghost-details-coords">
+                        X: {ghostList[selectedGhostIndex].pose?.x} | Y: {ghostList[selectedGhostIndex].pose?.y} | Z: {ghostList[selectedGhostIndex].pose?.z} mm
+                      </span>
+                    </div>
+                    <div className="ghost-details-actions">
+                      <button
+                        type="button"
+                        className="ghost-btn-move"
+                        disabled={!connected || moveToLoading || sequenceRunning}
+                        onClick={() => handleMoveToGhost(selectedGhostIndex)}
+                        title={`ขยับหุ่นยนต์ไปยังเงา #${selectedGhostIndex + 1} ทันที (${moveMode.toUpperCase()})`}
+                      >
+                        ขยับไปที่เงานี้
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost-action-btn ghost-action-btn--restore"
+                        onClick={() => handleSelectGhost(selectedGhostIndex)}
+                        title="ตั้งพิกัดเงานี้เป็นเป้าหมายในแผงควบคุม"
+                      >
+                        ตั้งเป็นเป้าหมาย
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost-btn-delete"
+                        onClick={() => handleDeleteGhost(selectedGhostIndex)}
+                        title={`ลบเงา #${selectedGhostIndex + 1} ออก`}
+                      >
+                        ลบเงานี้
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* ── Sequential Motion Panel (ขยับทุกเงา เรียงตามลำดับ) ── */}
+                {ghostList.length > 0 && (
+                  <div className="ghost-sequence-box">
+                    <div className="ghost-sequence-header">
+                      <div className="ghost-sequence-title">
+                        <span>ขยับทุกเงา เรียงตามลำดับ</span>
+                        <span style={{ fontSize: '10px', color: '#64748b', fontWeight: 'normal' }}>
+                          (1 → {ghostList.length})
+                        </span>
+                      </div>
+                      <div className="ghost-sequence-config">
+                        <label>โหมด:
+                          <select
+                            value={sequenceMode}
+                            onChange={(e) => setSequenceMode(e.target.value)}
+                            disabled={sequenceRunning}
+                            style={{ marginLeft: '4px' }}
+                          >
+                            <option value="movj">MovJ</option>
+                            <option value="movl">MovL</option>
+                            <option value="joint">Joint</option>
+                          </select>
+                        </label>
+                        <label style={{ marginLeft: '6px' }}>พักจุดละ:
+                          <select
+                            value={sequencePause}
+                            onChange={(e) => setSequencePause(Number(e.target.value))}
+                            disabled={sequenceRunning}
+                            style={{ marginLeft: '4px' }}
+                          >
+                            <option value={0.2}>0.2s</option>
+                            <option value={0.5}>0.5s</option>
+                            <option value={1.0}>1.0s</option>
+                            <option value={2.0}>2.0s</option>
+                          </select>
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Visual flow indicator */}
+                    <div className="ghost-sequence-flow">
+                      {ghostList.map((g, idx) => (
+                        <React.Fragment key={idx}>
+                          <span
+                            className={`ghost-flow-step ${
+                              sequenceRunning && sequenceIndex === idx + 1
+                                ? 'active'
+                                : sequenceRunning && sequenceIndex > idx + 1
+                                ? 'completed'
+                                : ''
+                            }`}
+                          >
+                            เงา #{idx + 1}
+                          </span>
+                          {idx < ghostList.length - 1 && (
+                            <span className="ghost-flow-arrow">→</span>
+                          )}
+                        </React.Fragment>
+                      ))}
+                    </div>
+
+                    {/* Actions & Progress */}
+                    <div className="ghost-sequence-actions">
+                      {!sequenceRunning ? (
+                        <button
+                          type="button"
+                          className="ghost-sequence-btn ghost-sequence-btn--start"
+                          disabled={!connected || ghostList.length === 0 || moveToLoading}
+                          onClick={handleStartSequence}
+                          title="สั่งหุ่นยนต์ขยับผ่านเงาทุกจุดตามลำดับ 1 ถึง N"
+                        >
+                          เริ่มขยับทุกเงา เรียงตามลำดับ ({ghostList.length} จุด)
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="ghost-sequence-btn ghost-sequence-btn--stop"
+                          onClick={handleStopSequence}
+                          title="หยุดการเคลื่อนที่เรียงลำดับทันที"
+                        >
+                          หยุดการขยับลำดับ (กำลังทำจุดที่ {sequenceIndex}/{sequenceTotal})
+                        </button>
+                      )}
+                    </div>
+
+                    {sequenceRunning && (
+                      <div className="sequence-progress-bar-container">
+                        <div
+                          className="sequence-progress-bar-fill"
+                          style={{ width: `${Math.min(100, Math.max(5, (sequenceIndex / (sequenceTotal || 1)) * 100))}%` }}
+                        />
+                      </div>
+                    )}
+
+                    {sequenceMsg && (
+                      <div className="sequence-status-text">{sequenceMsg}</div>
+                    )}
+                  </div>
+                )}
+              </div>{/* end ghost-control-card */}
+
+            {/* ── Target Pose & Move Card ── */}
+              <div className="target-pose-card">
+                <div className="target-pose-header">
+                  <span className="target-pose-title">เป้าหมายจากการลาก</span>
+                  {targetPose
+                    ? <span className="target-pose-ready">✓ พร้อมสั่ง</span>
+                    : <span className="target-pose-empty">ลาก Gizmo ใน 3D เพื่อตั้งเป้าหมาย</span>
+                  }
+                </div>
+
+                {targetPose && (
+                  <div className="target-pose-coords">
+                    <div className="tp-col">
+                      <div className="tp-label">X</div><div className="tp-val">{targetPose.x}</div>
+                      <div className="tp-diff">{(targetPose.x - pos.X).toFixed(1)}</div>
+                    </div>
+                    <div className="tp-col">
+                      <div className="tp-label">Y</div><div className="tp-val">{targetPose.y}</div>
+                      <div className="tp-diff">{(targetPose.y - pos.Y).toFixed(1)}</div>
+                    </div>
+                    <div className="tp-col">
+                      <div className="tp-label">Z</div><div className="tp-val">{targetPose.z}</div>
+                      <div className="tp-diff">{(targetPose.z - pos.Z).toFixed(1)}</div>
+                    </div>
+                    <div className="tp-col">
+                      <div className="tp-label">Rx</div><div className="tp-val">{targetPose.rx}</div>
+                      <div className="tp-diff">{(targetPose.rx - pos.RX).toFixed(1)}</div>
+                    </div>
+                    <div className="tp-col">
+                      <div className="tp-label">Ry</div><div className="tp-val">{targetPose.ry}</div>
+                      <div className="tp-diff">{(targetPose.ry - pos.RY).toFixed(1)}</div>
+                    </div>
+                    <div className="tp-col">
+                      <div className="tp-label">Rz</div><div className="tp-val">{targetPose.rz}</div>
+                      <div className="tp-diff">{(targetPose.rz - pos.RZ).toFixed(1)}</div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="target-pose-actions">
+                  <div className="move-mode-pills">
+                    {[['movj', 'MovJ'], ['movl', 'MovL'], ['joint', 'Joint']].map(([val, label]) => (
+                      <button
+                        key={val}
+                        className={`move-mode-pill ${moveMode === val ? 'active' : ''}`}
+                        onClick={() => setMoveMode(val)}
+                        title={val === 'movj' ? 'Joint interpolation (safer, recommended)' : val === 'movl' ? 'Linear Cartesian move' : 'Direct joint angles'}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="target-pose-btns">
+                    <button
+                      id="btn-move-to-target"
+                      className={`move-to-btn${
+                        moveToLoading ? ' move-to-btn--loading'
+                        : moveToStatus === 'ok' ? ' move-to-btn--ok'
+                        : moveToStatus === 'error' ? ' move-to-btn--error' : ''
+                      }`}
+                      onClick={handleMoveTo}
+                      disabled={!targetPose || !connected || moveToLoading}
+                      title={!connected ? 'Robot not connected' : !targetPose ? 'Drag Gizmo in 3D viewer first' : 'Send robot to target position'}
+                    >
+                      {moveToLoading ? <><span className="init-btn-spinner" /> Executing…</>
+                        : moveToStatus === 'ok' ? <>✓ Sent!</>
+                        : moveToStatus === 'error' ? <>✕ Error</>
+                        : <>▶ Move Robot to Target</>}
+                    </button>
+
+                    <button
+                      id="btn-reset-target"
+                      className="reset-target-btn"
+                      onClick={() => { setTargetPose(null); setGetCoordinatesEnabled(true); setTimeout(fetchStatus, 50) }}
+                      title="Clear target pose and resume auto position sync"
+                    >
+                      ↺ Reset
+                    </button>
+                  </div>
+
+                  {moveToError && (
+                    <div className="move-to-error">{moveToError}</div>
+                  )}
+                </div>
+              </div>
+
+            </div>{/* end ctrl-box */}
+          </div>{/* end dobot-layout */}
+
+        </div>{/* end dobot-page */}
       </div>
     </div>
   )

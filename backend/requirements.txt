@@ -2,3 +2,11 @@ fastapi
 uvicorn[standard]
 python-multipart
 python-dotenv
+opencv-python-headless
+numpy
+pyrealsense2
+sqlalchemy[asyncio]
+asyncpg
+passlib[bcrypt]
+bcrypt==4.0.1
+python-jose[cryptography]

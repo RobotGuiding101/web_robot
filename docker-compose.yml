@@ -8,6 +8,25 @@
 
 services:
 
+  # ── PostgreSQL ──────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: robot_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: robot_settings
+      POSTGRES_USER: robot
+      POSTGRES_PASSWORD: robot123
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U robot -d robot_settings"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   # ── Backend: FastAPI ────────────────────────────────
   backend:
     build:
@@ -15,13 +34,18 @@ services:
       dockerfile: Dockerfile
     container_name: robot_backend
     restart: unless-stopped
+    privileged: true
+    network_mode: host
     env_file:
       - ./backend/.env
-    ports:
-      - "8000:8000"       # เปิดให้เข้าถึงโดยตรงสำหรับ debug
+    environment:
+      DATABASE_URL: postgresql://robot:robot123@127.0.0.1:5432/robot_settings
     volumes:
-      - ./backend:/app    # hot-reload: mount source (dev only)
-    command: uvicorn main:app --reload --host 0.0.0.0 --port 8000
+      - ./backend:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   # ── Frontend: React + Vite → nginx ──────────────────
   frontend:
@@ -33,10 +57,12 @@ services:
         VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:8000}
     container_name: robot_frontend
     restart: unless-stopped
-    ports:
-      - "80:80"
+    network_mode: host
     depends_on:
       - backend
+
+volumes:
+  pgdata:
 
 networks:
   default:

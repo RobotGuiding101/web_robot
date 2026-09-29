@@ -1,7 +1,79 @@
-from fastapi import APIRouter, HTTPException
+"""routers/auth.py — Register / Login / Current-user with JWT + bcrypt."""
+import os
+from datetime import datetime, timedelta, timezone
+from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from passlib.context import CryptContext
+from jose import JWTError, jwt
+
+from database import get_db
+from models import User
 
 router = APIRouter()
+
+# ── config ───────────────────────────────────────────────────────────────────
+SECRET_KEY = os.environ.get("JWT_SECRET", "robot-arm-secret-change-me")
+ALGORITHM = "HS256"
+TOKEN_EXPIRE_HOURS = 72
+
+pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+def _create_token(user_id: str, username: str) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(hours=TOKEN_EXPIRE_HOURS)
+    return jwt.encode(
+        {"sub": user_id, "username": username, "exp": expire},
+        SECRET_KEY,
+        algorithm=ALGORITHM,
+    )
+
+
+_USER_CACHE: dict = {}
+USER_CACHE_TTL_S = 60.0
+
+
+async def get_current_user(
+    authorization: str = Header(None),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """FastAPI dependency — extracts current user from Bearer token.
+
+    Two things matter here for pool safety. The row is cached, so the 1-2s
+    status polls do not each checkout a connection. And the connection is
+    released before the handler runs: FastAPI keeps this dependency's session
+    alive for the whole request, and /api/map/video_feed streams for minutes,
+    so an MJPEG client used to hold a pooled connection "idle in transaction"
+    for its entire session and a few viewers exhausted the pool (2026-09-16)."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    token = authorization.split(" ", 1)[1]
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    now = datetime.now(timezone.utc).timestamp()
+    cached = _USER_CACHE.get(user_id)
+    if cached and cached[0] > now:
+        return cached[1]
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    await db.close()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    _USER_CACHE[user_id] = (now + USER_CACHE_TTL_S, user)
+    return user
+
+
+# ── schemas ──────────────────────────────────────────────────────────────────
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
 
 
 class LoginRequest(BaseModel):
@@ -9,20 +81,58 @@ class LoginRequest(BaseModel):
     password: str
 
 
-class LoginResponse(BaseModel):
+class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    username: str
 
 
-@router.post("/login", response_model=LoginResponse)
-def login(body: LoginRequest):
-    # TODO: Validate credentials against database / config
-    if body.username == "admin" and body.password == "admin":
-        return LoginResponse(access_token="dummy-token")
-    raise HTTPException(status_code=401, detail="Invalid credentials")
+class UserResponse(BaseModel):
+    id: str
+    username: str
 
 
-@router.post("/logout")
-def logout():
-    # TODO: Invalidate session / token
-    return {"message": "Logged out"}
+# ── routes ───────────────────────────────────────────────────────────────────
+@router.post("/register", response_model=TokenResponse)
+async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db),
+                   _current: User = Depends(get_current_user)):
+    """Create an account. Requires an existing logged-in user — public
+    self-registration is intentionally disabled (any account can control the
+    robot, so an open register endpoint would defeat the API auth)."""
+    if len(body.username) < 2:
+        raise HTTPException(400, "Username must be at least 2 characters")
+    if len(body.password) < 4:
+        raise HTTPException(400, "Password must be at least 4 characters")
+
+    existing = await db.execute(select(User).where(User.username == body.username))
+    if existing.scalar_one_or_none():
+        raise HTTPException(409, "Username already exists")
+
+    user = User(
+        username=body.username,
+        password_hash=pwd_ctx.hash(body.password),
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return TokenResponse(
+        access_token=_create_token(user.id, user.username),
+        username=user.username,
+    )
+
+
+@router.post("/login", response_model=TokenResponse)
+async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.username == body.username))
+    user = result.scalar_one_or_none()
+    if not user or not pwd_ctx.verify(body.password, user.password_hash):
+        raise HTTPException(401, "Invalid credentials")
+    return TokenResponse(
+        access_token=_create_token(user.id, user.username),
+        username=user.username,
+    )
+
+
+@router.get("/me", response_model=UserResponse)
+async def me(user: User = Depends(get_current_user)):
+    return UserResponse(id=user.id, username=user.username)

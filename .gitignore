@@ -1,0 +1,23 @@
+STRUCTURE.md
+
+# Pi5 connection info (contains credentials)
+PI5.md
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Tooling / editor
+.omo/
+.vscode/
+
+# Node
+node_modules/
+dist/
+
+# Env files — เก็บเฉพาะ *.example (ห้าม commit ค่าจริง/ความลับ)
+.env
+.env.*
+!.env.example
+.maps_point.env
+!.maps_point.env.example
