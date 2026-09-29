@@ -72,6 +72,26 @@ const CameraViewPage = () => {
     apiFetch('/api/map/emergency', { method: 'POST' }).catch(() => { })
   }
 
+  const handleGoHome = async () => {
+    if (!status.connected || homeLoading) return
+    setHomeLoading(true)
+    setHomeMsg(null)
+    try {
+      const res = await apiFetch('/api/map/home', { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.ok === false) {
+        setHomeMsg({ type: 'error', text: data.error || 'Home command failed' })
+      } else {
+        setHomeMsg({ type: 'success', text: 'กำลังเคลื่อนที่ไปยังตำแหน่ง Home' })
+      }
+    } catch {
+      setHomeMsg({ type: 'error', text: 'ไม่สามารถส่งคำสั่ง Home ได้' })
+    } finally {
+      setHomeLoading(false)
+      setTimeout(() => setHomeMsg(null), 3500)
+    }
+  }
+
   const handleModeChange = async (newMode) => {
     if (cameraMode === newMode || modeLoading) return
     setModeLoading(true)

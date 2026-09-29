@@ -9,23 +9,19 @@ import {
 } from 'fabric'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
-import { setStreamMode } from '../components/CameraStream'
 
 // ─── Tool constants ────────────────────────────────────────────────────────────
 const TOOLS = {
   SELECT:  'select',
   PEN:     'pen',
   LINE:    'line',
-  RECT:    'rect',
-  CIRCLE:  'circle',
+
 }
 
 const TOOL_META = [
   { id: TOOLS.SELECT, label: 'Select',  icon: '↖' },
   { id: TOOLS.PEN,    label: 'Pen',     icon: '✎' },
   { id: TOOLS.LINE,   label: 'Line',    icon: '╱' },
-  { id: TOOLS.RECT,   label: 'Rect',    icon: '▭' },
-  { id: TOOLS.CIRCLE, label: 'Circle',  icon: '◯' },
 ]
 
 const PRESET_COLORS = [
@@ -37,69 +33,38 @@ const STROKE_WIDTHS = [1, 2, 4, 8, 16]
 
 // ─── Teach / Grid panel constants ─────────────────────────────────────────────
 const POSE_LABELS  = ['X', 'Y', 'Z', 'Rx', 'Ry', 'Rz']
+const JOG_POS_AXES = ['x', 'y', 'z']
+const JOG_ROT_AXES = ['rx', 'ry', 'rz']
+const JOG_JOINT_AXES = [1, 2, 3, 4, 5, 6]
+const JOG_SPEED    = 10
+
+const axisLabel = (a) => a.charAt(0).toUpperCase() + a.slice(1)
 const clampInt  = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(Number(v) || lo)))
 
+const JogPillRow = ({ label, onMinus, onPlus, disabled, titleMinus, titlePlus }) => (
+  <div className="jog-row">
+    <button className="jog-pill jog-pill--minus" onClick={onMinus} disabled={disabled} title={titleMinus}>
+      <span className="jog-axis-badge">{label}</span>
+      <span className="jog-sign">−</span>
+    </button>
+    <button className="jog-pill jog-pill--plus" onClick={onPlus} disabled={disabled} title={titlePlus}>
+      <span className="jog-axis-badge">{label}</span>
+      <span className="jog-sign">+</span>
+    </button>
+  </div>
+)
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-// Do NOT read points back from obj.path: PencilBrush emits a smoothed bezier
-// (M + Q… + L), so command-reading keeps only 2 points per stroke. Capturing
-// each mousemove instead is what preserves the shape. Value: [u, v] fractions.
-const _freehandPoints = new WeakMap()
-
-// loadFromJSON rebuilds new Path objects, so _freehandPoints loses every
-// stroke. Each history snapshot also stores the samples in path order, and
-// _rekeyFreehandPoints() re-attaches them by that index after a load.
-function _snapshotFreehand(fc) {
-  return fc.getObjects()
-    .filter((o) => o.type === 'path')
-    .map((o) => _freehandPoints.get(o) || null)
-}
-
-function _rekeyFreehandPoints(fc, stored) {
-  const paths = fc.getObjects().filter((o) => o.type === 'path')
-  paths.forEach((o, i) => {
-    const pts = stored && stored[i]
-    if (pts && pts.length >= 2) _freehandPoints.set(o, pts)
+function getCanvasPathData(fc) {
+  return fc.getObjects().map((obj) => {
+    const type = obj.type
+    const base = { type, left: obj.left, top: obj.top }
+    if (type === 'path')    return { ...base, path: obj.path, stroke: obj.stroke, strokeWidth: obj.strokeWidth }
+    if (type === 'line')    return { ...base, x1: obj.x1, y1: obj.y1, x2: obj.x2, y2: obj.y2, stroke: obj.stroke, strokeWidth: obj.strokeWidth }
+    if (type === 'rect')    return { ...base, width: obj.width, height: obj.height, stroke: obj.stroke, strokeWidth: obj.strokeWidth, fill: obj.fill }
+    if (type === 'ellipse') return { ...base, rx: obj.rx, ry: obj.ry, stroke: obj.stroke, strokeWidth: obj.strokeWidth, fill: obj.fill }
+    return base
   })
-}
-
-// Inverse of planegrid.grid_pose's bilinear (u,v) -> plane map. Given a point
-// p and a quad's four corners in canvas px (c00=(u0,v0), c10=(u1,v0),
-// c01=(u0,v1), c11=(u1,v1)), returns [u, v] so a stroke drawn on the rendered
-// grid-shape quad maps back to exactly the (u,v) the robot should draw at.
-function inverseBilinear(p, c00, c10, c01, c11) {
-  const cross = (ax, ay, bx, by) => ax * by - ay * bx
-  const ex = c00[0] - c10[0] - c01[0] + c11[0]
-  const ey = c00[1] - c10[1] - c01[1] + c11[1]
-  const fx = c10[0] - c00[0], fy = c10[1] - c00[1]
-  const gx = c01[0] - c00[0], gy = c01[1] - c00[1]
-  const ddx = p[0] - c00[0], ddy = p[1] - c00[1]
-  if (Math.abs(ex) < 1e-9 && Math.abs(ey) < 1e-9) {
-    // parallelogram — pure affine solve
-    const det = cross(fx, fy, gx, gy)
-    if (Math.abs(det) < 1e-12) return [0, 0]
-    return [cross(ddx, ddy, gx, gy) / det, cross(fx, fy, ddx, ddy) / det]
-  }
-  const k1 = cross(ddx, ddy, gx, gy)     // (p-c00) x g
-  const k2 = cross(ddx, ddy, fx, fy)     // (p-c00) x f
-  const a1 = cross(fx, fy, gx, gy)       // f x g
-  const a2 = cross(ex, ey, gx, gy)       // e x g
-  const b2 = cross(ex, ey, fx, fy)       // e x f
-  const A = -a1 * a2
-  const B = -a1 * a1 + k1 * b2 - k2 * a2
-  const C = -k2 * a1
-  let v
-  if (Math.abs(A) < 1e-12) {
-    v = Math.abs(B) < 1e-12 ? 0 : -C / B
-  } else {
-    const disc = B * B - 4 * A * C
-    if (disc < 0) return [0, 0]
-    const s = Math.sqrt(disc)
-    const v1 = (-B + s) / (2 * A), v2 = (-B - s) / (2 * A)
-    v = (v1 >= -0.001 && v1 <= 1.001) ? v1 : v2
-  }
-  const denom = a1 + v * a2
-  const u = Math.abs(denom) < 1e-12 ? 0 : k1 / denom
-  return [u, v]
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
@@ -107,15 +72,12 @@ const DrawingModePage = () => {
   const canvasElRef   = useRef(null)
   const dmViewportRef = useRef(null)
   const fabricRef     = useRef(null)
-  const toUvRef       = useRef(null)
   const isDrawingRef  = useRef(false)
   const tempObjRef    = useRef(null)
   const startPtRef    = useRef({ x: 0, y: 0 })
   const mouseDownRef  = useRef(null)
   const mouseMoveRef  = useRef(null)
   const mouseUpRef    = useRef(null)
-  const pendingFreehandSamples = useRef(null)
-  const pathCreatedRef = useRef(null)
 
   const [activeTool,  setActiveTool]  = useState(TOOLS.PEN)
   const [strokeColor, setStrokeColor] = useState('#1a2f45')
@@ -127,16 +89,16 @@ const DrawingModePage = () => {
   const [objectCount, setObjectCount] = useState(0)
   const [isSending,   setIsSending]   = useState(false)
 
-  // 3D Robot Model
+  // 3D Robot Model Floating Viewer
   const viewerKey = useRef(Date.now())
   const [is3DMinimized, setIs3DMinimized] = useState(false)
-  const [is3DExpanded, setIs3DExpanded]   = useState(true)
+  const [is3DExpanded, setIs3DExpanded]   = useState(false)
 
-  // Teach / Grid Panel
+  // Teach / Grid Floating Panel
   const [isTeachMinimized, setIsTeachMinimized] = useState(false)
   const [teachStatus, setTeachStatus]           = useState(null)
-  const [cameraMode, setCameraMode]             = useState('rgb')
-  const [modeLoading, setModeLoading]           = useState(false)
+  const [posStep, setPosStep]                   = useState(5)
+  const [rotStep, setRotStep]                   = useState(2)
   const [gridRows, setGridRows]                 = useState(2)
   const [gridCols, setGridCols]                 = useState(2)
   const [teachMsg, setTeachMsg]                 = useState(null)
@@ -145,7 +107,12 @@ const DrawingModePage = () => {
   const [markClickMode, setMarkClickMode]       = useState('mark')
   const [alignBusy, setAlignBusy]               = useState(false)
   const [markGeom, setMarkGeom]                 = useState(null)
-  const [vpSize, setVpSize]                     = useState({ w: 0, h: 0 })
+  const [jointStep, setJointStep]               = useState(2)
+  const [jogBusy, setJogBusy]                   = useState(false)
+  const [toolIndex, setToolIndex]               = useState(0)
+  const [userIndex, setUserIndex]               = useState(0)
+  const [frameMsg, setFrameMsg]                 = useState(null)
+  const frameDirtyRef = useRef(false)
 
   // Refs for latest state values (avoid stale closures)
   const strokeColorRef = useRef(strokeColor)
@@ -160,18 +127,14 @@ const DrawingModePage = () => {
   // History stacks
   const historyRef    = useRef([])
   const historyIdxRef = useRef(-1)
-  const historyFreehandRef = useRef([])
 
   // ── Save state to history ──────────────────────────────────────────────────
   const saveHistory = useCallback(() => {
     const fc = fabricRef.current
     if (!fc) return
     const json = fc.toJSON()
-    const freehand = _snapshotFreehand(fc)
     historyRef.current = historyRef.current.slice(0, historyIdxRef.current + 1)
     historyRef.current.push(json)
-    historyFreehandRef.current = historyFreehandRef.current.slice(0, historyIdxRef.current + 1)
-    historyFreehandRef.current.push(freehand)
     historyIdxRef.current = historyRef.current.length - 1
     setCanUndo(historyIdxRef.current > 0)
     setCanRedo(false)
@@ -197,7 +160,6 @@ const DrawingModePage = () => {
 
     // Initial history snapshot
     historyRef.current = [fc.toJSON()]
-    historyFreehandRef.current = [null]
     historyIdxRef.current = 0
 
     fc.on('object:added',   updateCounts)
@@ -227,7 +189,8 @@ const DrawingModePage = () => {
     if (mouseDownRef.current) { fc.off('mouse:down', mouseDownRef.current); mouseDownRef.current = null }
     if (mouseMoveRef.current) { fc.off('mouse:move', mouseMoveRef.current); mouseMoveRef.current = null }
     if (mouseUpRef.current)   { fc.off('mouse:up',   mouseUpRef.current);   mouseUpRef.current   = null }
-    if (pathCreatedRef.current) { fc.off('path:created', pathCreatedRef.current); pathCreatedRef.current = null }
+    // also remove path:created listener
+    fc.off('path:created')
   }, [])
 
   // ── Apply Tool ─────────────────────────────────────────────────────────────
@@ -253,35 +216,8 @@ const DrawingModePage = () => {
       fc.freeDrawingBrush.color = strokeColor
       fc.freeDrawingBrush.width = strokeWidth
 
-      const onPenDown = (opt) => {
-        const p = fc.getScenePoint(opt.e)
-        pendingFreehandSamples.current = [p]
-      }
-      const onPenMove = (opt) => {
-        const samples = pendingFreehandSamples.current
-        if (!samples) return
-        const p = fc.getScenePoint(opt.e)
-        const last = samples[samples.length - 1]
-        if (last && Math.hypot(p.x - last.x, p.y - last.y) < 0.5) return
-        samples.push(p)
-      }
-      const onPathCreated = (e) => {
-        const samples = pendingFreehandSamples.current || []
-        pendingFreehandSamples.current = null
-        if (e.path && samples.length >= 2) {
-          // Map straight through the rendered grid-shape quad -> (u,v).
-          _freehandPoints.set(e.path, samples.map((p) => (
-            toUvRef.current ? toUvRef.current(p.x, p.y)
-                            : [p.x / fc.getWidth(), p.y / fc.getHeight()])))
-        }
-        saveHistory()
-      }
-      fc.on('mouse:down', onPenDown)
-      fc.on('mouse:move', onPenMove)
+      const onPathCreated = () => saveHistory()
       fc.on('path:created', onPathCreated)
-      mouseDownRef.current = onPenDown
-      mouseMoveRef.current = onPenMove
-      pathCreatedRef.current = onPathCreated
       return
     }
 
@@ -404,7 +340,6 @@ const DrawingModePage = () => {
     if (!fc || historyIdxRef.current <= 0) return
     historyIdxRef.current -= 1
     fc.loadFromJSON(historyRef.current[historyIdxRef.current]).then(() => {
-      _rekeyFreehandPoints(fc, historyFreehandRef.current[historyIdxRef.current])
       fc.renderAll()
       setCanUndo(historyIdxRef.current > 0)
       setCanRedo(true)
@@ -418,7 +353,6 @@ const DrawingModePage = () => {
     if (!fc || historyIdxRef.current >= historyRef.current.length - 1) return
     historyIdxRef.current += 1
     fc.loadFromJSON(historyRef.current[historyIdxRef.current]).then(() => {
-      _rekeyFreehandPoints(fc, historyFreehandRef.current[historyIdxRef.current])
       fc.renderAll()
       setCanUndo(true)
       setCanRedo(historyIdxRef.current < historyRef.current.length - 1)
@@ -462,55 +396,31 @@ const DrawingModePage = () => {
   }, [])
 
   // ── Send to Robot ─────────────────────────────────────────────────────────
-  // Three distinct pixel spaces: getScenePoint() gives CANVAS-space (527-wide
-  // backing store), the camera <img> is CSS-scaled to the viewport (422-wide),
-  // and the backend needs fractions of the CAMERA IMAGE (640x360). Collapsing
-  // any of these steps yields a ~25% stretch/offset.
   const sendToRobot = useCallback(async () => {
     const fc = fabricRef.current
     if (!fc) return
-    const objs = fc.getObjects()
-    if (objs.length === 0) { setStatus('⚠ No objects to send'); return }
+    const pathData = getCanvasPathData(fc)
+    if (pathData.length === 0) { setStatus('⚠ No objects to send'); return }
     setIsSending(true)
     setStatus('Sending to robot…')
     try {
-      // (u,v) is derived from the rendered grid-shape quad, so anything drawn
-      // on the quad maps 1:1 onto the taught plane (planegrid.grid_pose).
-      const toUv = (x, y) => (toUvRef.current
-        ? toUvRef.current(x, y)
-        : [x / fc.getWidth(), y / fc.getHeight()])
+      // Normalize pixel coords to [0,1] for backend grid_pose()
+      const cw = fc.getWidth()
+      const ch = fc.getHeight()
 
-      const strokes = []
-      for (const obj of objs) {
-        if (obj.type === 'path') {
-          const pts = _freehandPoints.get(obj)
-          if (pts && pts.length >= 2) strokes.push({ tool: 'pen', points: pts })
-          continue
+      const strokes = pathData.map((obj) => {
+        const points = []
+        if (obj.type === 'path' && obj.path) {
+          obj.path.forEach((cmd) => {
+            if (cmd[0] === 'M' || cmd[0] === 'L') {
+              points.push([cmd[1] / cw, cmd[2] / ch])
+            }
+          })
+        } else if (obj.type === 'line') {
+          points.push([obj.x1 / cw, obj.y1 / ch], [obj.x2 / cw, obj.y2 / ch])
         }
-        if (obj.type === 'line') {
-          strokes.push({ tool: 'line', points: [toUv(obj.x1, obj.y1), toUv(obj.x2, obj.y2)] })
-          continue
-        }
-        if (obj.type === 'rect') {
-          const x1 = obj.left
-          const y1 = obj.top
-          const x2 = obj.left + obj.width
-          const y2 = obj.top + obj.height
-          strokes.push({ tool: 'rect', points: [toUv(x1, y1), toUv(x2, y1), toUv(x2, y2), toUv(x1, y2), toUv(x1, y1)] })
-          continue
-        }
-        if (obj.type === 'ellipse') {
-          const cx = obj.left + obj.rx
-          const cy = obj.top + obj.ry
-          const n = 36
-          const points = []
-          for (let i = 0; i <= n; i++) {
-            const a = (i / n) * Math.PI * 2
-            points.push(toUv(cx + obj.rx * Math.cos(a), cy + obj.ry * Math.sin(a)))
-          }
-          strokes.push({ tool: 'circle', points })
-        }
-      }
+        return { tool: 'pen', points }
+      }).filter(s => s.points.length > 0)
 
       if (strokes.length === 0) {
         setStatus('⚠ No drawable paths found')
@@ -546,10 +456,9 @@ const DrawingModePage = () => {
 
   // ── Emergency Stop ────────────────────────────────────────────────────────
   const handleEmergency = () => {
-    apiFetch('/api/map/emergency', { method: 'POST' }).catch(() => {})
-    apiFetch('/api/map/draw/stop', { method: 'POST' }).catch(() => {})
-    apiFetch('/api/map/align/stop', { method: 'POST' }).catch(() => {})
+    apiFetch('/api/map/error', { method: 'POST' }).catch(() => {})
     setStatus('EMERGENCY STOP sent')
+    alert('EMERGENCY STOP!')
   }
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
@@ -585,33 +494,12 @@ const DrawingModePage = () => {
       if (!res.ok) return
       const data = await res.json()
       setTeachStatus(data)
-      if (data.camera_mode) {
-        setCameraMode(data.camera_mode)
+      if (!frameDirtyRef.current) {
+        if (data.tool_index !== undefined && data.tool_index !== null) setToolIndex(data.tool_index)
+        if (data.user_index !== undefined && data.user_index !== null) setUserIndex(data.user_index)
       }
     } catch { /* ignore */ }
   }, [])
-
-  const handleModeChange = useCallback(async (newMode) => {
-    if (cameraMode === newMode || modeLoading) return
-    setModeLoading(true)
-    try {
-      const res = await apiFetch('/api/camera/mode', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: newMode }),
-      })
-      if (res.ok) {
-        const data = await res.json()
-        if (data.ok) {
-          setCameraMode(data.mode)
-          setStreamMode(data.mode)
-        }
-      }
-    } catch { /* ignore */ }
-    finally {
-      setModeLoading(false)
-    }
-  }, [cameraMode, modeLoading])
 
   useEffect(() => {
     fetchTeachStatus()
@@ -629,6 +517,30 @@ const DrawingModePage = () => {
   useEffect(() => () => {
     if (teachMsgTimerRef.current) clearTimeout(teachMsgTimerRef.current)
   }, [])
+
+  // ── Teach / Grid: jog ────────────────────────────────────────────────────
+  const handleJog = useCallback(async (axis, sign) => {
+    if (!teachStatus || !teachStatus.connected) return
+    const rawStep = axis.startsWith('r') ? rotStep : posStep
+    const amount = sign * Math.max(0.1, Number(rawStep) || 0.1)
+    setJogBusy(true)
+    try {
+      const res = await apiFetch('/api/map/jog', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ axis, amount, speed: JOG_SPEED }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || (data && data.ok === false)) {
+        showTeachMsg((data && data.error) || 'Jog rejected', 'error')
+      }
+    } catch {
+      showTeachMsg('Jog request failed', 'error')
+    } finally {
+      setJogBusy(false)
+    }
+    setTimeout(fetchTeachStatus, 500)
+  }, [teachStatus, posStep, rotStep, showTeachMsg, fetchTeachStatus])
 
   // ── Teach / Grid: set grid size ──────────────────────────────────────────
   const handleSetGrid = useCallback(async () => {
@@ -705,44 +617,6 @@ const DrawingModePage = () => {
   const canMark     = !!(markReady && markGeom && markMode)
   const fmtMark     = (v, d = 2) => (v === null || v === undefined ? '—' : Number(v).toFixed(d))
 
-  // The drawable region is the taught grid's ACTUAL shape (grid_shape_2d = the
-  // marked corners projected onto the fitted plane), fitted into the viewport.
-  // toUvRef maps a stroke point on that quad back to (u,v) for grid_pose.
-  const gridShape = teachStatus && teachStatus.grid_shape_2d
-  const gridQuad = (() => {
-    if (!Array.isArray(gridShape) || gridShape.length < 2 || !vpSize.w) return null
-    const rows = gridShape.length, cols = gridShape[0].length
-    if (!cols || cols < 2) return null
-    const pts = gridShape.flat()
-    const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1])
-    const minX = Math.min(...xs), maxX = Math.max(...xs)
-    const minY = Math.min(...ys), maxY = Math.max(...ys)
-    const pad = 44
-    const spanX = Math.max(maxX - minX, 1e-6), spanY = Math.max(maxY - minY, 1e-6)
-    const scale = Math.min((vpSize.w - 2 * pad) / spanX, (vpSize.h - 2 * pad) / spanY)
-    const offX = pad + (vpSize.w - 2 * pad - spanX * scale) / 2
-    const offY = pad + (vpSize.h - 2 * pad - spanY * scale) / 2
-    const toC = ([x, y]) => [offX + (x - minX) * scale, offY + (y - minY) * scale]
-    return {
-      rows, cols, shape: gridShape, toC,
-      c00: toC(gridShape[0][0]), c10: toC(gridShape[0][cols - 1]),
-      c01: toC(gridShape[rows - 1][0]), c11: toC(gridShape[rows - 1][cols - 1]),
-    }
-  })()
-
-  useEffect(() => {
-    toUvRef.current = (x, y) => {
-      if (gridQuad) {
-        const [u, v] = inverseBilinear([x, y], gridQuad.c00, gridQuad.c10, gridQuad.c01, gridQuad.c11)
-        return [Math.max(0, Math.min(1, u)), Math.max(0, Math.min(1, v))]
-      }
-      const fc = fabricRef.current
-      const w = fc ? fc.getWidth() : 1
-      const h = fc ? fc.getHeight() : 1
-      return [x / w, y / h]
-    }
-  }, [gridQuad])
-
   const measureMark = useCallback(() => {
     const el = document.getElementById('global-camera-stream')
     const vp = dmViewportRef.current
@@ -765,32 +639,15 @@ const DrawingModePage = () => {
     setMarkGeom(m ? { sw: m.sw, sh: m.sh, scale: m.scale, left: m.left, top: m.top } : null)
   }, [measureMark])
 
-  const onViewportChange = useCallback(() => {
-    computeMarkGeom()
-    const vp = dmViewportRef.current
-    if (vp) setVpSize({ w: vp.clientWidth, h: vp.clientHeight })
-  }, [computeMarkGeom])
-
   useEffect(() => {
-    onViewportChange()
-    const t = setTimeout(onViewportChange, 400)
-    window.addEventListener('resize', onViewportChange)
+    computeMarkGeom()
+    const t = setTimeout(computeMarkGeom, 400)
+    window.addEventListener('resize', computeMarkGeom)
     return () => {
       clearTimeout(t)
-      window.removeEventListener('resize', onViewportChange)
+      window.removeEventListener('resize', computeMarkGeom)
     }
-  }, [onViewportChange, markCamW, markCamH, markMode])
-
-  // Collapsing the teach panel resizes the viewport without a window resize
-  // event, which would leave markGeom / vpSize (mark markers + grid overlay)
-  // stale.
-  useEffect(() => {
-    const vp = dmViewportRef.current
-    if (!vp || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => onViewportChange())
-    ro.observe(vp)
-    return () => ro.disconnect()
-  }, [onViewportChange])
+  }, [computeMarkGeom, markCamW, markCamH, markMode])
 
   const handleMarkClick = useCallback(async (e) => {
     if (!markMode) return
@@ -843,6 +700,61 @@ const DrawingModePage = () => {
       setAlignBusy(false)
       fetchTeachStatus()
     }
+  }, [showTeachMsg, fetchTeachStatus])
+
+  const handleJogJoint = useCallback(async (joint, sign) => {
+    if (!teachStatus || !teachStatus.connected) return
+    const amount = sign * Math.max(0.1, Number(jointStep) || 0.1)
+    setJogBusy(true)
+    try {
+      const res = await apiFetch('/api/map/jog_joint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ joint, amount, speed: JOG_SPEED }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || (data && data.ok === false)) {
+        showTeachMsg((data && data.error) || 'Joint jog rejected', 'error')
+      }
+    } catch {
+      showTeachMsg('Joint jog request failed', 'error')
+    } finally {
+      setJogBusy(false)
+    }
+    setTimeout(fetchTeachStatus, 500)
+  }, [teachStatus, jointStep, showTeachMsg, fetchTeachStatus])
+
+  const handleApplyFrame = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/map/frame', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tool_index: Number(toolIndex), user_index: Number(userIndex) }),
+      })
+      const data = await res.json().catch(() => null)
+      if (res.ok && data && data.ok !== false) {
+        setFrameMsg({ kind: 'ok', text: `Tool ${data.tool_index} / User ${data.user_index}` })
+        frameDirtyRef.current = false
+      } else {
+        setFrameMsg({ kind: 'error', text: (data && data.error) || 'Frame failed' })
+      }
+    } catch {
+      setFrameMsg({ kind: 'error', text: 'Frame request failed' })
+    }
+    setTimeout(() => setFrameMsg(null), 3000)
+    fetchTeachStatus()
+  }, [toolIndex, userIndex, fetchTeachStatus])
+
+  const robotAction = useCallback(async (url, okText) => {
+    try {
+      const res = await apiFetch(url, { method: 'POST' })
+      const data = await res.json().catch(() => null)
+      if (res.ok && data && data.ok !== false) showTeachMsg(okText)
+      else showTeachMsg((data && data.error) || 'Request failed', 'error')
+    } catch {
+      showTeachMsg('Request failed', 'error')
+    }
+    fetchTeachStatus()
   }, [showTeachMsg, fetchTeachStatus])
 
   const handleAutoFillGrid = useCallback(async () => {
@@ -912,6 +824,7 @@ const DrawingModePage = () => {
 
   // ── Teach / Grid: derived view data ──────────────────────────────────────
   const teachConnected = !!(teachStatus && teachStatus.connected)
+  const teachPose      = (teachStatus && Array.isArray(teachStatus.pose)) ? teachStatus.pose : null
   const gRows          = (teachStatus && teachStatus.grid_rows) || gridRows
   const gCols          = (teachStatus && teachStatus.grid_cols) || gridCols
   const gridPoints     = teachStatus ? teachStatus.grid_points    : null
@@ -925,7 +838,7 @@ const DrawingModePage = () => {
     })
   }
 
-  // Grid shape preview geometry
+  // Grid shape preview geometry — port of the legacy 200x200 / 20px-padding scaling
   let gridShapeEls = null
   if (Array.isArray(gridShape2d) && gridShape2d.length > 0) {
     const byKey = {}
@@ -993,159 +906,6 @@ const DrawingModePage = () => {
             {/* ── Camera + Canvas overlay (fills all remaining space) ── */}
             <div className="dm-viewport" ref={dmViewportRef}>
 
-              {/* Status indicator & Active Mode Tag (Top-Left) */}
-              <div
-                style={{
-                  position: 'absolute',
-                  top: '14px',
-                  left: '14px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  zIndex: 10,
-                }}
-              >
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    background: 'rgba(0, 0, 0, 0.7)',
-                    borderRadius: '20px',
-                    padding: '5px 14px',
-                    fontSize: '12px',
-                    color: '#fff',
-                    backdropFilter: 'blur(8px)',
-                    border: '1px solid rgba(255, 255, 255, 0.12)',
-                  }}
-                >
-                  <span
-                    style={{
-                      width: '8px',
-                      height: '8px',
-                      borderRadius: '50%',
-                      background: (teachStatus && teachStatus.camera_running) ? '#4ade80' : '#22c55e',
-                      boxShadow: '0 0 8px #4ade80',
-                    }}
-                  />
-                  LIVE
-                </div>
-
-                <div
-                  style={{
-                    background:
-                      cameraMode === 'rgb'
-                        ? 'rgba(37, 99, 235, 0.8)'
-                        : cameraMode === 'depth'
-                          ? 'rgba(220, 38, 38, 0.8)'
-                          : 'rgba(75, 85, 99, 0.8)',
-                    borderRadius: '20px',
-                    padding: '5px 12px',
-                    fontSize: '11px',
-                    fontWeight: '700',
-                    color: '#fff',
-                    backdropFilter: 'blur(8px)',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.6px',
-                    border: '1px solid rgba(255, 255, 255, 0.15)',
-                  }}
-                >
-                  {cameraMode}
-                </div>
-              </div>
-
-              {/* Controls inside camera: Segmented Mode Switcher (Top-Right) */}
-              <div
-                style={{
-                  position: 'absolute',
-                  top: '14px',
-                  right: '14px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '10px',
-                  zIndex: 10,
-                }}
-              >
-                <div
-                  style={{
-                    display: 'flex',
-                    background: 'rgba(0, 0, 0, 0.7)',
-                    borderRadius: '10px',
-                    padding: '3px',
-                    backdropFilter: 'blur(8px)',
-                    border: '1px solid rgba(255, 255, 255, 0.15)',
-                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handleModeChange('rgb')
-                    }}
-                    disabled={modeLoading}
-                    style={{
-                      background: cameraMode === 'rgb' ? '#2563eb' : 'transparent',
-                      color: cameraMode === 'rgb' ? '#fff' : '#aaa',
-                      border: 'none',
-                      borderRadius: '7px',
-                      padding: '6px 14px',
-                      fontSize: '13px',
-                      fontWeight: cameraMode === 'rgb' ? '700' : '500',
-                      cursor: modeLoading ? 'not-allowed' : 'pointer',
-                      transition: 'all 0.18s ease',
-                    }}
-                    title="Switch to RGB Color"
-                  >
-                    RGB
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handleModeChange('gray')
-                    }}
-                    disabled={modeLoading}
-                    style={{
-                      background: cameraMode === 'gray' ? '#4b5563' : 'transparent',
-                      color: cameraMode === 'gray' ? '#fff' : '#aaa',
-                      border: 'none',
-                      borderRadius: '7px',
-                      padding: '6px 14px',
-                      fontSize: '13px',
-                      fontWeight: cameraMode === 'gray' ? '700' : '500',
-                      cursor: modeLoading ? 'not-allowed' : 'pointer',
-                      transition: 'all 0.18s ease',
-                    }}
-                    title="Switch to Grayscale"
-                  >
-                    Gray
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handleModeChange('depth')
-                    }}
-                    disabled={modeLoading}
-                    style={{
-                      background: cameraMode === 'depth' ? '#dc2626' : 'transparent',
-                      color: cameraMode === 'depth' ? '#fff' : '#aaa',
-                      border: 'none',
-                      borderRadius: '7px',
-                      padding: '6px 14px',
-                      fontSize: '13px',
-                      fontWeight: cameraMode === 'depth' ? '700' : '500',
-                      cursor: modeLoading ? 'not-allowed' : 'pointer',
-                      transition: 'all 0.18s ease',
-                    }}
-                    title="Switch to Depth Heatmap"
-                  >
-                    Depth
-                  </button>
-                </div>
-              </div>
-
               {/* Fallback label when camera is offline */}
               <div className="dm-camera-offline">
                 <span>Camera 1 — offline</span>
@@ -1187,300 +947,496 @@ const DrawingModePage = () => {
                 </div>
               ))}
 
-              {/* Grid overlay: the drawable region is the taught grid's ACTUAL
-                  shape (grid_shape_2d fitted into the viewport). Draw on this
-                  quad and it maps 1:1 to the plane via toUvRef. A dashed
-                  full-viewport box shows until the grid is fully marked. */}
-              {vpSize.w > 0 && (() => {
-                if (!gridQuad) {
-                  const poly = [[0, 0], [1, 0], [1, 1], [0, 1]]
-                    .map(([u, v]) => [u * vpSize.w, v * vpSize.h]
-                      .map((n) => n.toFixed(1)).join(',')).join(' ')
-                  return (
-                    <svg className="dm-grid-overlay">
-                      <polygon points={poly} fill="rgba(148,163,184,0.05)"
-                        stroke="#94a3b8" strokeWidth={1.5} strokeDasharray="7 5" />
-                    </svg>
-                  )
-                }
-                const { shape, rows, cols, toC } = gridQuad
-                const lines = []
-                for (let i = 0; i < rows; i++) {
-                  lines.push(<polyline key={`gr-${i}`} points={
-                    shape[i].map((p) => { const [x, y] = toC(p); return `${x.toFixed(1)},${y.toFixed(1)}` }).join(' ')
-                  } />)
-                }
-                for (let j = 0; j < cols; j++) {
-                  lines.push(<polyline key={`gc-${j}`} points={
-                    shape.map((row) => { const [x, y] = toC(row[j]); return `${x.toFixed(1)},${y.toFixed(1)}` }).join(' ')
-                  } />)
-                }
-                const cornerLabels = [
-                  ['R1C1', 0, 0, 'start', 5, -6],
-                  [`R1C${cols}`, 0, cols - 1, 'end', -5, -6],
-                  [`R${rows}C1`, rows - 1, 0, 'start', 5, 14],
-                  [`R${rows}C${cols}`, rows - 1, cols - 1, 'end', -5, 14],
-                ].map(([t, i, j, anchor, dx, dy]) => {
-                  const [x, y] = toC(shape[i][j])
-                  return (
-                    <text key={t} x={x + dx} y={y + dy} textAnchor={anchor}
-                      fill="#22c55e" fontSize={11} fontWeight={700}>{t}</text>
-                  )
-                })
-                const outerPts = [shape[0][0], shape[0][cols - 1], shape[rows - 1][cols - 1], shape[rows - 1][0]]
-                  .map((p) => { const [x, y] = toC(p); return `${x.toFixed(1)},${y.toFixed(1)}` }).join(' ')
-                return (
-                  <svg className="dm-grid-overlay">
-                    <polygon points={outerPts} fill="rgba(34,197,94,0.08)"
-                      stroke="#22c55e" strokeWidth={2} />
-                    <g stroke="#22c55e" strokeWidth={1} opacity={0.6} fill="none">{lines}</g>
-                    {cornerLabels}
-                  </svg>
-                )
-              })()}
-
-            </div>
-
-            {/* ── Right panel: toggle tab + content ── */}
-            <div className={`dm-teach-col${isTeachMinimized ? ' dm-teach-col--minimized' : ''}`}>
-
-              {/* Toggle tab — sticks to left edge, collapses/opens entire panel */}
-              <button
-                className="dm-teach-collapse-tab"
-                onClick={() => setIsTeachMinimized((v) => !v)}
-                title={isTeachMinimized ? 'เปิดเมนู' : 'พับเมนู'}
+              {/* ── Floating 3D Robot Arm Model (Top-Right) ── */}
+              <div
+                className={`dm-3d-floating${is3DMinimized ? ' dm-3d-floating--minimized' : ''}${is3DExpanded ? ' dm-3d-floating--expanded' : ''}`}
               >
-                <svg
-                  width="12" height="12" viewBox="0 0 24 24"
-                  fill="none" stroke="currentColor" strokeWidth="2.5"
-                  strokeLinecap="round" strokeLinejoin="round"
-                  style={{ transition: 'transform 0.25s', transform: isTeachMinimized ? 'rotate(180deg)' : 'rotate(0deg)' }}
-                >
-                  <polyline points="15 18 9 12 15 6" />
-                </svg>
-              </button>
-
-              {!isTeachMinimized && (
-                <div className="dm-teach-body">
-
-                  {/* ── 3D Robot Arm ── */}
-                  <div className="dm-teach-section dm-teach-3d-section">
-                    <div className="dm-teach-3d-header">
-                      <div className="dm-teach-3d-title-wrap">
+                {is3DMinimized ? (
+                  <button
+                    className="dm-3d-minimized-btn"
+                    onClick={() => setIs3DMinimized(false)}
+                    title="Show 3D Robot Model"
+                  >
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+                      <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+                      <line x1="12" y1="22.08" x2="12" y2="12" />
+                    </svg>
+                  </button>
+                ) : (
+                  <>
+                    {/* Header bar */}
+                    <div className="dm-3d-header">
+                      <div className="dm-3d-title-wrap">
                         <span className="dm-3d-title-dot" />
                         <span className="dm-3d-title-text">3D Robot Arm</span>
                       </div>
-                    </div>
-                    {is3DExpanded && (
-                      <div className="dm-teach-3d-frame-wrap">
-                        <iframe
-                          src={`/robot-viewer.html?v=${viewerKey.current}&mode=display`}
-                          title="Robot Arm 3D Viewer"
-                          className="dm-3d-frame"
-                          allow="accelerometer"
-                        />
+                      <div className="dm-3d-actions">
+                        <button
+                          className="dm-3d-btn"
+                          onClick={() => setIs3DExpanded(!is3DExpanded)}
+                          title={is3DExpanded ? 'Compact size' : 'Expand size'}
+                        >
+                          {is3DExpanded ? (
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="4 14 10 14 10 20" />
+                              <polyline points="20 10 14 10 14 4" />
+                              <line x1="14" y1="10" x2="21" y2="3" />
+                              <line x1="3" y1="21" x2="10" y2="14" />
+                            </svg>
+                          ) : (
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="15 3 21 3 21 9" />
+                              <polyline points="9 21 3 21 3 15" />
+                              <line x1="21" y1="3" x2="14" y2="10" />
+                              <line x1="3" y1="21" x2="10" y2="14" />
+                            </svg>
+                          )}
+                        </button>
+                        <button
+                          className="dm-3d-btn dm-3d-btn--close"
+                          onClick={() => setIs3DMinimized(true)}
+                          title="Minimize"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18" />
+                            <line x1="6" y1="6" x2="18" y2="18" />
+                          </svg>
+                        </button>
                       </div>
-                    )}
-                  </div>
-
-                  {/* ── Align Points ── */}
-                  <div className="dm-teach-section">
-                    <div className="dm-teach-label-row">
-                      <span className="ctrl-section-head">Align Points</span>
-                      <button
-                        className={`dm-mark-toggle${markMode ? ' active' : ''}`}
-                        onClick={() => setMarkMode((v) => !v)}
-                        disabled={!markReady}
-                      >
-                        {markMode ? 'Mark ON' : 'Mark OFF'}
-                      </button>
                     </div>
 
-                    <div className="dm-mark-modes">
-                      <button
-                        className={`dm-mark-mode${markClickMode === 'mark' ? ' active' : ''}`}
-                        onClick={() => setMarkClickMode('mark')}
-                        disabled={!markReady}
-                      >
-                        Mark
-                      </button>
-                      <button
-                        className={`dm-mark-mode${markClickMode === 'goto' ? ' active' : ''}`}
-                        onClick={() => setMarkClickMode('goto')}
-                        disabled={!markReady}
-                      >
-                        Goto
-                      </button>
+                    {/* 3D Model iframe */}
+                    <div className="dm-3d-frame-wrap">
+                      <iframe
+                        src={`/robot-viewer.html?v=${viewerKey.current}&mode=display`}
+                        title="Robot Arm 3D Viewer"
+                        className="dm-3d-frame"
+                        allow="accelerometer"
+                      />
                     </div>
-
-                    <div className="dm-mark-hint">
-                      {!markReady
-                        ? 'Robot / Camera ไม่พร้อมใช้งาน'
-                        : markMode
-                          ? (markClickMode === 'mark'
-                            ? 'คลิกบนภาพ 4 จุด (มุมวัตถุ) แล้วกด Align · วาดภาพถูกปิดชั่วคราว'
-                            : 'คลิกบนภาพ = สั่งหุ่นไปจุดนั้น')
-                          : 'กด Mark ON แล้วคลิกจุดบนภาพ'}
-                    </div>
-
-                    <div className="dm-mark-actions">
-                      <button
-                        className="dm-mark-btn"
-                        onClick={() => alignAction('/api/map/reset_points', 'Points cleared')}
-                        disabled={!markReady || alignBusy}
-                      >
-                        Reset
-                      </button>
-                      <button
-                        className="dm-mark-btn dm-mark-btn--primary"
-                        onClick={() => alignAction('/api/map/align', 'Align started')}
-                        disabled={!markReady || alignBusy || !!(teachStatus && teachStatus.align_running) || markPoints.length < 4}
-                      >
-                        Align
-                      </button>
-                      <button
-                        className="dm-mark-btn dm-mark-btn--danger"
-                        onClick={() => alignAction('/api/map/align/stop', 'Stop requested')}
-                        disabled={!markReady || alignBusy || !(teachStatus && teachStatus.align_running)}
-                      >
-                        Stop
-                      </button>
-                    </div>
-
-                    <div className="dm-mark-readout">
-                      <span>points</span><b>{markPoints.length}/4</b>
-                      <span>align</span><b>{teachStatus && teachStatus.align_running ? 'running' : 'idle'}</b>
-                      <span>tilt</span><b>{fmtMark(teachStatus && teachStatus.last_tilt)}°</b>
-                      <span>rmse</span><b>{fmtMark(teachStatus && teachStatus.last_rmse)} mm</b>
-                    </div>
-                  </div>
-
-                  {/* ── Grid ── */}
-                  <div className="dm-teach-section">
-                    <div className="ctrl-section-head">Grid (N×M taught points)</div>
-                    <div className="dm-teach-grid-size-row">
-                      <label className="dm-teach-grid-field">
-                        <span>Rows</span>
-                        <input
-                          type="number"
-                          className="dm-teach-grid-input"
-                          value={gridRows}
-                          min={2}
-                          max={7}
-                          onChange={(e) => setGridRows(clampInt(e.target.value, 2, 7))}
-                        />
-                      </label>
-                      <label className="dm-teach-grid-field">
-                        <span>Cols</span>
-                        <input
-                          type="number"
-                          className="dm-teach-grid-input"
-                          value={gridCols}
-                          min={2}
-                          max={7}
-                          onChange={(e) => setGridCols(clampInt(e.target.value, 2, 7))}
-                        />
-                      </label>
-                    </div>
-                    <div className="dm-teach-grid-actions">
-                      <button
-                        className="dm-teach-action-btn"
-                        disabled={!teachConnected}
-                        title={teachConnected ? 'Apply grid size' : 'Robot not connected'}
-                        onClick={handleSetGrid}
-                      >Set Grid</button>
-                      <button
-                        className="dm-teach-action-btn dm-teach-action-btn--danger"
-                        disabled={!teachConnected}
-                        title={teachConnected ? 'Clear all taught points' : 'Robot not connected'}
-                        onClick={handleResetGrid}
-                      >Reset Grid</button>
-                    </div>
-                    <button
-                      className="dm-teach-autofill-btn"
-                      disabled={!teachConnected || markPoints.length < 4}
-                      title={markPoints.length < 4
-                        ? 'Mark 4 corner points on the image (Align Points) first'
-                        : 'Jog Z down until the pen touches the surface FIRST, then click — the grid inherits the current Z'}
-                      onClick={handleAutoFillGrid}
-                    >
-                      Auto-fill grid from 4 mark points
-                    </button>
-                    <button
-                      className="dm-teach-surfacez-btn"
-                      disabled={!teachConnected || markedCount === 0}
-                      title="Compute the surface Z from the LIVE camera depth (run Align first) and drop the grid onto it — no jogging. The next Send descends ~that far."
-                      onClick={handleGridSurfaceZ}
-                    >
-                      {`↧ Grid Z = measured surface (auto)${teachStatus && teachStatus.last_center_depth ? ` · depth ${Number(teachStatus.last_center_depth).toFixed(0)}mm` : ''}`}
-                    </button>
-                    <button
-                      className="dm-teach-setz-btn"
-                      disabled={!teachConnected || markedCount === 0}
-                      title="Jog Z down until the pen touches the surface FIRST, then press — keeps the grid X/Y and takes this Z"
-                      onClick={handleSetGridZ}
-                    >
-                      ↧ Grid Z = current Z  (jog to surface first)
-                    </button>
-                    {teachStatus && typeof teachStatus.z_surface === 'number' && (
-                      <button
-                        className="dm-teach-surfacez-btn"
-                        disabled={!teachConnected || markedCount === 0}
-                        title="Apply the surface Z configured in backend/.maps_point.env (Z_SURFACE) to every grid cell — no jogging needed"
-                        onClick={handleSetGridZSurface}
-                      >
-                        {`↧ Grid Z = surface (${teachStatus.z_surface.toFixed(1)}mm, configured)`}
-                      </button>
-                    )}
-                    <div className="dm-teach-hint">
-                      jog Z ลงให้ปากกาแตะผิวงานก่อน แล้วกด Auto-fill · หรือ jog ไปมุมจริงแล้วกดปุ่มช่องนั้น
-                    </div>
-                    <div className="dm-teach-cells" style={{ gridTemplateColumns: `repeat(${gCols}, 1fr)` }}>
-                      {Array.from({ length: gRows }).map((_, i) =>
-                        Array.from({ length: gCols }).map((_, j) => {
-                          const marked = !!(gridPoints && gridPoints[i] && gridPoints[i][j])
-                          return (
-                            <button
-                              key={`${i}-${j}`}
-                              className={`dm-teach-cell${marked ? ' dm-teach-cell--marked' : ''}`}
-                              disabled={!teachConnected}
-                              title={teachConnected ? `Record current pose into R${i + 1}C${j + 1}` : 'Robot not connected'}
-                              onClick={() => handleMarkCell(i + 1, j + 1)}
-                            >
-                              {`R${i + 1}C${j + 1}`}
-                            </button>
-                          )
-                        })
-                      )}
-                    </div>
-                    <div className={`dm-teach-grid-status${gridValidate && Array.isArray(gridValidate.warnings) && gridValidate.warnings.length ? ' dm-teach-grid-status--warn' : ''}`}>
-                      {`grid ${gRows}x${gCols} — ${markedCount}/${gRows * gCols} marked`}
-                      {gridPoints && gridPoints[0] && gridPoints[0][0] &&
-                        ` · Z=${Number(gridPoints[0][0][2]).toFixed(1)}mm`}
-                      {gridValidate && gridValidate.span_mm !== undefined &&
-                        ` · span=${Number(gridValidate.span_mm).toFixed(1)}mm`}
-                      {gridValidate && ` · rmse=${gridValidate.rmse_mm}mm`}
-                      {gridValidate && Array.isArray(gridValidate.warnings) && gridValidate.warnings.length > 0 &&
-                        ` · ${gridValidate.warnings.join('; ')}`}
-                    </div>
-                    <svg viewBox="0 0 200 200" className="dm-teach-shape-svg">
-                      {gridShapeEls || (
-                        <text x="100" y="104" textAnchor="middle" className="dm-teach-shape-empty">
-                          mark all 4 corners
-                        </text>
-                      )}
-                    </svg>
-                  </div>
-
-                  {/* Inline action message */}
-                  {teachMsg && (
-                    <div className={`dm-teach-msg dm-teach-msg--${teachMsg.kind}`}>
-                      {teachMsg.text}
-                    </div>
-                  )}
-                </div>
-              )}
+                  </>
+                )}
+              </div>
             </div>
+
+              <div
+                className={`dm-teach-col${isTeachMinimized ? ' dm-teach-col--minimized' : ''}`}
+              >
+                {isTeachMinimized ? (
+                  <button
+                    className="dm-teach-minimized-btn"
+                    onClick={() => setIsTeachMinimized(false)}
+                    title="Show Teach / Grid panel"
+                  >
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="3" width="18" height="18" rx="2" />
+                      <line x1="9" y1="3" x2="9" y2="21" />
+                      <line x1="15" y1="3" x2="15" y2="21" />
+                      <line x1="3" y1="9" x2="21" y2="9" />
+                      <line x1="3" y1="15" x2="21" y2="15" />
+                    </svg>
+                  </button>
+                ) : (
+                  <>
+                    {/* Header bar */}
+                    <div className="dm-teach-header">
+                      <div className="dm-teach-title-wrap">
+                        <span className={`dm-teach-title-dot${teachConnected ? '' : ' dm-teach-title-dot--off'}`} />
+                        <span className="dm-teach-title-text">Teach / Grid</span>
+                      </div>
+                      <div className="dm-teach-actions">
+                        <button
+                          className="dm-teach-btn dm-teach-btn--close"
+                          onClick={() => setIsTeachMinimized(true)}
+                          title="Minimize"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18" />
+                            <line x1="6" y1="6" x2="18" y2="18" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="dm-teach-body">
+                      {/* Live pose readout */}
+                      <div className="dm-teach-pose">
+                        {teachConnected && teachPose && teachPose.length === 6 ? (
+                          POSE_LABELS.map((lbl, i) => (
+                            <div className="dm-teach-pose-item" key={lbl}>
+                              <span className="dm-teach-pose-label">{lbl}</span>
+                              <span className="dm-teach-pose-value">{Number(teachPose[i]).toFixed(1)}</span>
+                            </div>
+                          ))
+                        ) : (
+                          <span className="dm-teach-offline">not connected</span>
+                        )}
+                      </div>
+
+                      <div className="dm-teach-section">
+                        <div className="ctrl-section-head">Robot / Camera</div>
+                        <div className="dm-teach-btn-grid">
+                          <button
+                            className="dm-teach-sm-btn"
+                            disabled={!teachStatus}
+                            onClick={() => robotAction('/api/map/connect', 'Robot connected')}
+                          >Connect</button>
+                          <button
+                            className="dm-teach-sm-btn"
+                            disabled={!teachStatus}
+                            onClick={() => robotAction('/api/map/init', 'Robot init sent')}
+                          >Init</button>
+                          <button
+                            className="dm-teach-sm-btn"
+                            disabled={!teachStatus}
+                            onClick={() => robotAction('/api/map/camstart', 'Camera started')}
+                          >Camera</button>
+                          <button
+                            className={`dm-teach-sm-btn${teachStatus && teachStatus.heatmap_mode ? ' active' : ''}`}
+                            disabled={!teachStatus}
+                            onClick={() => robotAction('/api/map/heatmap/toggle', 'Heatmap toggled')}
+                          >Heatmap</button>
+                        </div>
+                      </div>
+
+                      <div className="dm-teach-section">
+                        <div className="ctrl-section-head">Frame</div>
+                        <div className="frame-wrap">
+                          <label className="frame-field">
+                            <span>Tool</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max="19"
+                              value={toolIndex}
+                              onChange={(e) => { frameDirtyRef.current = true; setToolIndex(e.target.value) }}
+                              disabled={!teachConnected}
+                            />
+                          </label>
+                          <label className="frame-field">
+                            <span>User</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max="9"
+                              value={userIndex}
+                              onChange={(e) => { frameDirtyRef.current = true; setUserIndex(e.target.value) }}
+                              disabled={!teachConnected}
+                            />
+                          </label>
+                          <button className="frame-apply" onClick={handleApplyFrame} disabled={!teachConnected}>
+                            Apply
+                          </button>
+                        </div>
+                        {frameMsg && (
+                          <span className={`frame-msg frame-msg--${frameMsg.kind}`}>{frameMsg.text}</span>
+                        )}
+                      </div>
+
+                      <div className="dm-teach-section">
+                        <div className="dm-teach-label-row">
+                          <span className="ctrl-section-head">Align Points</span>
+                          <button
+                            className={`dm-mark-toggle${markMode ? ' active' : ''}`}
+                            onClick={() => setMarkMode((v) => !v)}
+                            disabled={!markReady}
+                          >
+                            {markMode ? 'Mark ON' : 'Mark OFF'}
+                          </button>
+                        </div>
+
+                        <div className="dm-mark-modes">
+                          <button
+                            className={`dm-mark-mode${markClickMode === 'mark' ? ' active' : ''}`}
+                            onClick={() => setMarkClickMode('mark')}
+                            disabled={!markReady}
+                          >
+                            Mark
+                          </button>
+                          <button
+                            className={`dm-mark-mode${markClickMode === 'goto' ? ' active' : ''}`}
+                            onClick={() => setMarkClickMode('goto')}
+                            disabled={!markReady}
+                          >
+                            Goto
+                          </button>
+                        </div>
+
+                        <div className="dm-mark-hint">
+                          {!markReady
+                            ? 'Robot / Camera ไม่พร้อมใช้งาน'
+                            : markMode
+                              ? (markClickMode === 'mark'
+                                ? 'คลิกบนภาพ 4 จุด (มุมวัตถุ) แล้วกด Align · วาดภาพถูกปิดชั่วคราว'
+                                : 'คลิกบนภาพ = สั่งหุ่นไปจุดนั้น')
+                              : 'กด Mark ON แล้วคลิกจุดบนภาพ'}
+                        </div>
+
+                        <div className="dm-mark-actions">
+                          <button
+                            className="dm-mark-btn"
+                            onClick={() => alignAction('/api/map/reset_points', 'Points cleared')}
+                            disabled={!markReady || alignBusy}
+                          >
+                            Reset
+                          </button>
+                          <button
+                            className="dm-mark-btn dm-mark-btn--primary"
+                            onClick={() => alignAction('/api/map/align', 'Align started')}
+                            disabled={!markReady || alignBusy || !!(teachStatus && teachStatus.align_running) || markPoints.length < 4}
+                          >
+                            Align
+                          </button>
+                          <button
+                            className="dm-mark-btn dm-mark-btn--danger"
+                            onClick={() => alignAction('/api/map/align/stop', 'Stop requested')}
+                            disabled={!markReady || alignBusy || !(teachStatus && teachStatus.align_running)}
+                          >
+                            Stop
+                          </button>
+                        </div>
+
+                        <div className="dm-mark-readout">
+                          <span>points</span><b>{markPoints.length}/4</b>
+                          <span>align</span><b>{teachStatus && teachStatus.align_running ? 'running' : 'idle'}</b>
+                          <span>tilt</span><b>{fmtMark(teachStatus && teachStatus.last_tilt)}°</b>
+                          <span>rmse</span><b>{fmtMark(teachStatus && teachStatus.last_rmse)} mm</b>
+                        </div>
+                      </div>
+
+                      <div className="dm-teach-section">
+                        <div className="ctrl-section-head">Jog — Position (mm)</div>
+                        <label className="dm-teach-step-inline">
+                          Step
+                          <input
+                            type="number"
+                            className="dm-teach-step-input"
+                            value={posStep}
+                            min={0.1}
+                            step={0.5}
+                            onChange={(e) => setPosStep(Math.max(0.1, Number(e.target.value) || 0.1))}
+                          />
+                          mm
+                        </label>
+                        <div className="jog-panel">
+                          {JOG_POS_AXES.map((axis) => (
+                            <JogPillRow
+                              key={axis}
+                              label={axisLabel(axis)}
+                              disabled={!teachConnected || jogBusy}
+                              titleMinus={`Jog ${axisLabel(axis)} −${posStep}mm`}
+                              titlePlus={`Jog ${axisLabel(axis)} +${posStep}mm`}
+                              onMinus={() => handleJog(axis, -1)}
+                              onPlus={() => handleJog(axis, 1)}
+                            />
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="dm-teach-section">
+                        <div className="ctrl-section-head">Jog — Orientation (deg)</div>
+                        <label className="dm-teach-step-inline">
+                          Step
+                          <input
+                            type="number"
+                            className="dm-teach-step-input"
+                            value={rotStep}
+                            min={0.1}
+                            step={0.5}
+                            onChange={(e) => setRotStep(Math.max(0.1, Number(e.target.value) || 0.1))}
+                          />
+                          deg
+                        </label>
+                        <div className="jog-panel">
+                          {JOG_ROT_AXES.map((axis) => (
+                            <JogPillRow
+                              key={axis}
+                              label={axisLabel(axis)}
+                              disabled={!teachConnected || jogBusy}
+                              titleMinus={`Jog ${axisLabel(axis)} −${rotStep}deg`}
+                              titlePlus={`Jog ${axisLabel(axis)} +${rotStep}deg`}
+                              onMinus={() => handleJog(axis, -1)}
+                              onPlus={() => handleJog(axis, 1)}
+                            />
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="dm-teach-section">
+                        <div className="ctrl-section-head">Jog — Joints (deg)</div>
+                        <label className="dm-teach-step-inline">
+                          Step
+                          <input
+                            type="number"
+                            className="dm-teach-step-input"
+                            value={jointStep}
+                            min={0.1}
+                            step={0.5}
+                            onChange={(e) => setJointStep(Math.max(0.1, Number(e.target.value) || 0.1))}
+                          />
+                          deg
+                        </label>
+                        <div className="jog-panel">
+                          {JOG_JOINT_AXES.map((j) => (
+                            <JogPillRow
+                              key={j}
+                              label={`J${j}`}
+                              disabled={!teachConnected || jogBusy}
+                              titleMinus={`Jog J${j} −${jointStep}deg`}
+                              titlePlus={`Jog J${j} +${jointStep}deg`}
+                              onMinus={() => handleJogJoint(j, -1)}
+                              onPlus={() => handleJogJoint(j, 1)}
+                            />
+                          ))}
+                        </div>
+                        <div className="dm-teach-joints">
+                          {teachStatus && Array.isArray(teachStatus.angles) && teachStatus.angles.length === 6
+                            ? teachStatus.angles.map((a, i) => (
+                              <span key={i}>{`J${i + 1} ${Number(a).toFixed(1)}`}</span>
+                            ))
+                            : <span>J1-J6 —</span>}
+                        </div>
+                      </div>
+
+                      <div className="dm-teach-section">
+                        <div className="ctrl-section-head">Grid (N×M taught points)</div>
+                        <div className="dm-teach-grid-size-row">
+                          <label className="dm-teach-grid-field">
+                            <span>Rows</span>
+                            <input
+                              type="number"
+                              className="dm-teach-grid-input"
+                              value={gridRows}
+                              min={2}
+                              max={7}
+                              onChange={(e) => setGridRows(clampInt(e.target.value, 2, 7))}
+                            />
+                          </label>
+                          <label className="dm-teach-grid-field">
+                            <span>Cols</span>
+                            <input
+                              type="number"
+                              className="dm-teach-grid-input"
+                              value={gridCols}
+                              min={2}
+                              max={7}
+                              onChange={(e) => setGridCols(clampInt(e.target.value, 2, 7))}
+                            />
+                          </label>
+                        </div>
+                        <div className="dm-teach-grid-actions">
+                          <button
+                            className="dm-teach-action-btn"
+                            disabled={!teachConnected}
+                            title={teachConnected ? 'Apply grid size' : 'Robot not connected'}
+                            onClick={handleSetGrid}
+                          >Set Grid</button>
+                          <button
+                            className="dm-teach-action-btn dm-teach-action-btn--danger"
+                            disabled={!teachConnected}
+                            title={teachConnected ? 'Clear all taught points' : 'Robot not connected'}
+                            onClick={handleResetGrid}
+                          >Reset Grid</button>
+                        </div>
+                        <button
+                          className="dm-teach-autofill-btn"
+                          disabled={!teachConnected || markPoints.length < 4}
+                          title={markPoints.length < 4
+                            ? 'Mark 4 corner points on the image (Align Points) first'
+                            : 'Jog Z down until the pen touches the surface FIRST, then click — the grid inherits the current Z'}
+                          onClick={handleAutoFillGrid}
+                        >
+                          Auto-fill grid from 4 mark points
+                        </button>
+                        <button
+                          className="dm-teach-surfacez-btn"
+                          disabled={!teachConnected || markedCount === 0}
+                          title="Compute the surface Z from the LIVE camera depth (run Align first) and drop the grid onto it — no jogging. The next Send descends ~that far."
+                          onClick={handleGridSurfaceZ}
+                        >
+                          {`↧ Grid Z = measured surface (auto)${teachStatus && teachStatus.last_center_depth ? ` · depth ${Number(teachStatus.last_center_depth).toFixed(0)}mm` : ''}`}
+                        </button>
+                        <button
+                          className="dm-teach-setz-btn"
+                          disabled={!teachConnected || markedCount === 0}
+                          title="Jog Z down until the pen touches the surface FIRST, then press — keeps the grid X/Y and takes this Z"
+                          onClick={handleSetGridZ}
+                        >
+                          ↧ Grid Z = current Z  (jog to surface first)
+                        </button>
+                        {teachStatus && typeof teachStatus.z_surface === 'number' && (
+                          <button
+                            className="dm-teach-surfacez-btn"
+                            disabled={!teachConnected || markedCount === 0}
+                            title="Apply the surface Z configured in backend/.maps_point.env (Z_SURFACE) to every grid cell — no jogging needed"
+                            onClick={handleSetGridZSurface}
+                          >
+                            {`↧ Grid Z = surface (${teachStatus.z_surface.toFixed(1)}mm, configured)`}
+                          </button>
+                        )}
+                        <div className="dm-teach-hint">
+                          jog Z ลงให้ปากกาแตะผิวงานก่อน แล้วกด Auto-fill · หรือ jog ไปมุมจริงแล้วกดปุ่มช่องนั้น
+                        </div>
+                        <div className="dm-teach-cells" style={{ gridTemplateColumns: `repeat(${gCols}, 1fr)` }}>
+                          {Array.from({ length: gRows }).map((_, i) =>
+                            Array.from({ length: gCols }).map((_, j) => {
+                              const marked = !!(gridPoints && gridPoints[i] && gridPoints[i][j])
+                              return (
+                                <button
+                                  key={`${i}-${j}`}
+                                  className={`dm-teach-cell${marked ? ' dm-teach-cell--marked' : ''}`}
+                                  disabled={!teachConnected}
+                                  title={teachConnected ? `Record current pose into R${i + 1}C${j + 1}` : 'Robot not connected'}
+                                  onClick={() => handleMarkCell(i + 1, j + 1)}
+                                >
+                                  {`R${i + 1}C${j + 1}`}
+                                </button>
+                              )
+                            })
+                          )}
+                        </div>
+                        <div className={`dm-teach-grid-status${gridValidate && Array.isArray(gridValidate.warnings) && gridValidate.warnings.length ? ' dm-teach-grid-status--warn' : ''}`}>
+                          {`grid ${gRows}x${gCols} — ${markedCount}/${gRows * gCols} marked`}
+                          {gridPoints && gridPoints[0] && gridPoints[0][0] &&
+                            ` · Z=${Number(gridPoints[0][0][2]).toFixed(1)}mm`}
+                          {gridValidate && gridValidate.span_mm !== undefined &&
+                            ` · span=${Number(gridValidate.span_mm).toFixed(1)}mm`}
+                          {gridValidate && ` · rmse=${gridValidate.rmse_mm}mm`}
+                          {gridValidate && Array.isArray(gridValidate.warnings) && gridValidate.warnings.length > 0 &&
+                            ` · ${gridValidate.warnings.join('; ')}`}
+                        </div>
+                        <svg viewBox="0 0 200 200" className="dm-teach-shape-svg">
+                          {gridShapeEls || (
+                            <text x="100" y="104" textAnchor="middle" className="dm-teach-shape-empty">
+                              mark all 4 corners
+                            </text>
+                          )}
+                        </svg>
+                      </div>
+
+                      <div className="dm-teach-section">
+                        <div className="ctrl-section-head">Status</div>
+                        <div className="dm-teach-state">
+                          <span className={`dm-teach-state-mode${teachConnected ? '' : ' dm-teach-state-mode--off'}`}>
+                            {teachStatus ? teachStatus.robot_mode_label : '—'}
+                          </span>
+                          <span className="dm-teach-state-text">
+                            {teachStatus && teachStatus.status ? teachStatus.status : '—'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Inline action message */}
+                      {teachMsg && (
+                        <div className={`dm-teach-msg dm-teach-msg--${teachMsg.kind}`}>
+                          {teachMsg.text}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
 
             {/* ── Bottom Toolbar ── */}
