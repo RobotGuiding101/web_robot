@@ -260,9 +260,9 @@ def _grid_fully_marked() -> bool:
 
 STREAM_FPS = 30
 STREAM_FPS_IDLE = 30
-STREAM_W = 640
-STREAM_H = 360
-STREAM_JPEG_QUALITY = 70
+STREAM_W = 848
+STREAM_H = 480
+STREAM_JPEG_QUALITY = 85
 
 
 def _colorize_depth(df):
