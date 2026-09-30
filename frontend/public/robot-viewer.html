@@ -347,7 +347,7 @@
         link3.position.set(0, 0.43, 0);
         link4.position.set(0, 0.35, 0.1);
         link5.position.set(0, 0.1, 0);
-        link6.position.set(0.105, 0, 0);
+        link6.position.set(0, 0, 0.1);
 
         // ===== 3. Load .dae Models =====
         const loader = new THREE.ColladaLoader();
@@ -391,12 +391,12 @@
         }, undefined, onModelLoaded);
 
         loader.load('models/Link5.dae', (c) => {
-            c.scene.rotation.set(deg(90), deg(180), deg(90));
+            c.scene.rotation.set(deg(-90), deg(0), deg(180));
             link5.add(c.scene); onModelLoaded();
         }, undefined, onModelLoaded);
 
         loader.load('models/Link6.dae', (c) => {
-            c.scene.rotation.set(deg(180), deg(-90), deg(90));
+            c.scene.rotation.set(deg(180), deg(0), deg(90));
             c.scene.traverse((child) => {
                 if (child.isMesh) {
                     child.material = child.material.clone();
@@ -499,8 +499,8 @@
             { seg: link2, axis: 'z', min: deg(-90), max: deg(90), weight: 1.0 },
             { seg: link3, axis: 'z', min: deg(-150), max: deg(150), weight: 1.0 },
             { seg: link4, axis: 'z', min: deg(-180), max: deg(180), weight: 0.9 },
-            { seg: link5, axis: 'x', min: deg(-180), max: deg(180), weight: 0.8 },
-            { seg: link6, axis: 'y', min: deg(-180), max: deg(180), weight: 0.7 },
+            { seg: link5, axis: 'y', min: deg(-180), max: deg(180), weight: 0.8 },
+            { seg: link6, axis: 'z', min: deg(-180), max: deg(180), weight: 0.7 },
         ];
 
         const _effPos = new THREE.Vector3();
@@ -566,36 +566,30 @@
 
         // Wrist orientation helpers
         const _gizmoEuler = new THREE.Euler();
-        const _link5WorldQ = new THREE.Quaternion();
-        const _link5ParentQ = new THREE.Quaternion();
-        const _link6WorldQ = new THREE.Quaternion();
-        const _link6ParentQ = new THREE.Quaternion();
-        const _targetQ = new THREE.Quaternion();
-        const _localQ = new THREE.Quaternion();
 
         function solveIKWithOrientation(targetPos, targetQuat) {
             // 1. Position IK (CCD on Link1..Link6)
             solveIK(targetPos);
-            // 2. Orientation: drive Link5 (x) and Link6 (y) to match Gizmo quaternion
+            // 2. Orientation: drive Link5 (axis=Y) and Link6 (axis=Z) to match Gizmo quaternion
             _gizmoEuler.setFromQuaternion(targetQuat, 'XYZ');
 
-            // Link5 axis is X
+            // Link5 axis is Y
             {
-                const desired = _gizmoEuler.x;
+                const desired = _gizmoEuler.y;
                 const { min, max } = ikJoints[4];
-                link5.rotation.x = THREE.MathUtils.clamp(desired, min, max);
-                link5.rotation.y = 0;
+                link5.rotation.y = THREE.MathUtils.clamp(desired, min, max);
+                link5.rotation.x = 0;
                 link5.rotation.z = 0;
                 link5.updateMatrixWorld(true);
             }
 
-            // Link6 axis is Y
+            // Link6 axis is Z
             {
-                const desired = _gizmoEuler.y;
+                const desired = _gizmoEuler.z;
                 const { min, max } = ikJoints[5];
-                link6.rotation.y = THREE.MathUtils.clamp(desired, min, max);
+                link6.rotation.z = THREE.MathUtils.clamp(desired, min, max);
                 link6.rotation.x = 0;
-                link6.rotation.z = 0;
+                link6.rotation.y = 0;
                 link6.updateMatrixWorld(true);
             }
         }
@@ -622,20 +616,25 @@
             endEffector.getWorldQuaternion(_tpQuat);
             _tpEuler.setFromQuaternion(_tpQuat);
 
-            const mmX = +(_tcpPos.x * 1000).toFixed(1);
-            const mmY = +(_tcpPos.y * 1000).toFixed(1);
-            const mmZ = +(_tcpPos.z * 1000).toFixed(1);
-            const rx  = +_rad2degFn(_tpEuler.x).toFixed(1);
-            const ry  = +_rad2degFn(_tpEuler.y).toFixed(1);
-            const rz  = +_rad2degFn(_tpEuler.z).toFixed(1);
+            const safeCoord = (val, fb = 0) => {
+                const n = Number(val);
+                return (!isNaN(n) && isFinite(n)) ? +n.toFixed(1) : fb;
+            };
+
+            const mmX = safeCoord(_tcpPos.x * 1000);
+            const mmY = safeCoord(_tcpPos.y * 1000);
+            const mmZ = safeCoord(_tcpPos.z * 1000);
+            const rx  = safeCoord(_rad2degFn(_tpEuler.x));
+            const ry  = safeCoord(_rad2degFn(_tpEuler.y));
+            const rz  = safeCoord(_rad2degFn(_tpEuler.z));
 
             const joints = [
-                +_rad2degFn(link1.rotation.y).toFixed(2),
-                +_rad2degFn(link2.rotation.z).toFixed(2),
-                +_rad2degFn(link3.rotation.z).toFixed(2),
-                +_rad2degFn(link4.rotation.z).toFixed(2),
-                +_rad2degFn(link5.rotation.x).toFixed(2),
-                +_rad2degFn(link6.rotation.y).toFixed(2),
+                safeCoord(_rad2degFn(link1.rotation.y)),
+                safeCoord(_rad2degFn(link2.rotation.z)),
+                safeCoord(_rad2degFn(link3.rotation.z)),
+                safeCoord(_rad2degFn(link4.rotation.z)),
+                safeCoord(_rad2degFn(link5.rotation.y)),
+                safeCoord(_rad2degFn(link6.rotation.z)),
             ];
 
             window.parent.postMessage({
@@ -772,7 +771,11 @@
             }
         }
 
-        function captureGhostArm() {
+        // Cache latest real robot pose & joints passed from parent
+        let latestRealPose = null;
+        let latestRealJoints = null;
+
+        function captureGhostArm(customPose, customJoints) {
             if (loadedCount < totalModels) return;
 
             // Ensure transforms are up to date
@@ -791,28 +794,59 @@
                 }
             });
 
-            // Save ghost joints (degrees)
-            const joints = [
-                +_rad2degFn(link1.rotation.y).toFixed(2),
-                +_rad2degFn(link2.rotation.z).toFixed(2),
-                +_rad2degFn(link3.rotation.z).toFixed(2),
-                +_rad2degFn(link4.rotation.z).toFixed(2),
-                +_rad2degFn(link5.rotation.x).toFixed(2),
-                +_rad2degFn(link6.rotation.y).toFixed(2),
-            ];
+            // Save ghost joints (degrees): prioritize real robot joints
+            let joints = customJoints || latestRealJoints;
+            if (!joints || !Array.isArray(joints) || joints.length < 6) {
+                joints = [
+                    +_rad2degFn(link1.rotation.y).toFixed(2),
+                    +_rad2degFn(link2.rotation.z).toFixed(2),
+                    +_rad2degFn(link3.rotation.z).toFixed(2),
+                    +_rad2degFn(link4.rotation.z).toFixed(2),
+                    +_rad2degFn(link5.rotation.y).toFixed(2),
+                    +_rad2degFn(link6.rotation.z).toFixed(2),
+                ];
+            } else {
+                joints = joints.map(v => +Number(v).toFixed(2));
+            }
 
-            // Save ghost TCP pose
-            endEffector.getWorldPosition(_tcpPos);
-            endEffector.getWorldQuaternion(_tpQuat);
-            _tpEuler.setFromQuaternion(_tpQuat);
-            const pose = {
-                x: +(_tcpPos.x * 1000).toFixed(1),
-                y: +(_tcpPos.y * 1000).toFixed(1),
-                z: +(_tcpPos.z * 1000).toFixed(1),
-                rx: +_rad2degFn(_tpEuler.x).toFixed(1),
-                ry: +_rad2degFn(_tpEuler.y).toFixed(1),
-                rz: +_rad2degFn(_tpEuler.z).toFixed(1),
+            // Save ghost TCP pose: prioritize REAL robot coordinates!
+            let pose = customPose || latestRealPose;
+            const parseCoord = (obj, keyL, keyU, fallback = 0) => {
+                if (!obj) return fallback;
+                const v = obj[keyL] !== undefined ? obj[keyL] : obj[keyU];
+                const n = Number(v);
+                return (!isNaN(n) && isFinite(n)) ? +n.toFixed(1) : fallback;
             };
+
+            const rawX = pose ? parseCoord(pose, 'x', 'X', null) : null;
+            if (rawX === null) {
+                endEffector.getWorldPosition(_tcpPos);
+                endEffector.getWorldQuaternion(_tpQuat);
+                _tpEuler.setFromQuaternion(_tpQuat);
+                const safeNum = (v, fb = 0) => {
+                    const n = Number(v);
+                    return (!isNaN(n) && isFinite(n)) ? +n.toFixed(1) : fb;
+                };
+                pose = {
+                    x: safeNum(_tcpPos.x * 1000),
+                    y: safeNum(_tcpPos.y * 1000),
+                    z: safeNum(_tcpPos.z * 1000),
+                    rx: safeNum(_rad2degFn(_tpEuler.x)),
+                    ry: safeNum(_rad2degFn(_tpEuler.y)),
+                    rz: safeNum(_rad2degFn(_tpEuler.z)),
+                };
+            } else {
+                endEffector.getWorldPosition(_tcpPos);
+                const fallbackZ = (!isNaN(Number(_tcpPos.z)) && isFinite(Number(_tcpPos.z))) ? +(_tcpPos.z * 1000).toFixed(1) : 0;
+                pose = {
+                    x: rawX,
+                    y: parseCoord(pose, 'y', 'Y', 0),
+                    z: parseCoord(pose, 'z', 'Z', fallbackZ),
+                    rx: parseCoord(pose, 'rx', 'RX', 0),
+                    ry: parseCoord(pose, 'ry', 'RY', 0),
+                    rz: parseCoord(pose, 'rz', 'RZ', 0),
+                };
+            }
 
             // Subtle dark-grey tip sphere marker
             const ghostTip = new THREE.Mesh(
@@ -863,11 +897,28 @@
             link2.rotation.z = deg(j[1]);
             link3.rotation.z = deg(j[2]);
             link4.rotation.z = deg(j[3]);
-            link5.rotation.x = deg(j[4]);
-            link6.rotation.y = deg(j[5]);
+            link5.rotation.y = deg(j[4]);
+            link5.rotation.x = 0;
+            link5.rotation.z = 0;
+            link6.rotation.z = deg(j[5]);
+            link6.rotation.x = 0;
+            link6.rotation.y = 0;
             link1.updateMatrixWorld(true);
             syncTargetToTip();
-            _postTargetPose();
+            if (target.pose) {
+                window.parent.postMessage({
+                    type: 'targetPoseUpdate',
+                    x: target.pose.x,
+                    y: target.pose.y,
+                    z: target.pose.z,
+                    rx: target.pose.rx,
+                    ry: target.pose.ry,
+                    rz: target.pose.rz,
+                    joints: target.joints,
+                }, '*');
+            } else {
+                _postTargetPose();
+            }
             highlightGhost(idx);
         }
 
@@ -879,13 +930,27 @@
             restoreGhostPose(targetIndex);
         }
 
-        function handleSnap() {
-            // 1. Capture current arm as a new transparent grey ghost
-            captureGhostArm();
+        function handleSnap(overridePose, overrideJoints) {
+            // 1. Capture current arm as a new transparent grey ghost using real coordinates
+            captureGhostArm(overridePose, overrideJoints);
             // 2. Snap Gizmo back to arm tip
             syncTargetToTip();
             // 3. Send target pose update
-            _postTargetPose();
+            const targetGhost = ghostList.length > 0 ? ghostList[ghostList.length - 1] : null;
+            if (targetGhost && targetGhost.pose) {
+                window.parent.postMessage({
+                    type: 'targetPoseUpdate',
+                    x: targetGhost.pose.x,
+                    y: targetGhost.pose.y,
+                    z: targetGhost.pose.z,
+                    rx: targetGhost.pose.rx,
+                    ry: targetGhost.pose.ry,
+                    rz: targetGhost.pose.rz,
+                    joints: targetGhost.joints,
+                }, '*');
+            } else {
+                _postTargetPose();
+            }
         }
 
         // ===== 6. Expose joint control & ghost control to parent React app via postMessage =====
@@ -894,17 +959,23 @@
             if (e.data.type === 'setJoints') {
                 const j = e.data.joints; // array [j1..j6] in degrees
                 if (!Array.isArray(j) || j.length < 6) return;
+                if (e.data.realPose) latestRealPose = e.data.realPose;
+                latestRealJoints = j.slice(0, 6);
                 link1.rotation.y = deg(j[0]);
                 link2.rotation.z = deg(j[1]);
                 link3.rotation.z = deg(j[2]);
                 link4.rotation.z = deg(j[3]);
-                link5.rotation.x = deg(j[4]);
-                link6.rotation.y = deg(j[5]);
+                link5.rotation.y = deg(j[4]);
+                link5.rotation.x = 0;
+                link5.rotation.z = 0;
+                link6.rotation.z = deg(j[5]);
+                link6.rotation.x = 0;
+                link6.rotation.y = 0;
                 link1.updateMatrixWorld(true);
                 ikMode = false;
                 syncTargetToTip();
             } else if (e.data.type === 'snapGhost') {
-                handleSnap();
+                handleSnap(e.data.realPose, e.data.realJoints);
             } else if (e.data.type === 'clearGhost' || e.data.type === 'clearAllGhosts') {
                 clearAllGhosts();
             } else if (e.data.type === 'removeLastGhost') {
@@ -969,8 +1040,8 @@
                     +_rad2deg(link2.rotation.z).toFixed(2),
                     +_rad2deg(link3.rotation.z).toFixed(2),
                     +_rad2deg(link4.rotation.z).toFixed(2),
-                    +_rad2deg(link5.rotation.x).toFixed(2),
-                    +_rad2deg(link6.rotation.y).toFixed(2),
+                    +_rad2deg(link5.rotation.y).toFixed(2),
+                    +_rad2deg(link6.rotation.z).toFixed(2),
                 ];
 
                 window.parent.postMessage({
