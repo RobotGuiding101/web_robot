@@ -22,6 +22,31 @@
             height: 100vh;
         }
 
+        #floor-rotate {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            display: flex;
+            gap: 6px;
+            z-index: 40;
+        }
+
+        #floor-rotate button {
+            width: 34px;
+            height: 34px;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.6);
+            color: #fff;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            cursor: pointer;
+            font-size: 16px;
+            line-height: 1;
+        }
+
+        #floor-rotate button:hover {
+            background: rgba(0, 0, 0, 0.8);
+        }
+
         #loading-overlay {
             position: absolute;
             inset: 0;
@@ -200,6 +225,10 @@
     </div>
     <div id="canvas-container"></div>
 
+    <div id="floor-rotate" title="หมุนวิดีโอพื้น">
+        <button id="floor-rot-ccw" title="หมุนพื้นวิดีโอซ้าย 90°">⟲</button>
+        <button id="floor-rot-cw" title="หมุนพื้นวิดีโอขวา 90°">⟳</button>
+    </div>
 
     <script>
         // Check view/display mode from URL query (?mode=display or ?display=1)
@@ -324,6 +353,18 @@
         groundPlane.position.y = 0.001;
         groundPlane.renderOrder = -1;
         scene.add(groundPlane);
+
+        let floorRotDeg = 0;
+        camTexture.center.set(0.5, 0.5);
+        function rotateFloor(delta) {
+            floorRotDeg = (((floorRotDeg + delta) % 360) + 360) % 360;
+            camTexture.rotation = (floorRotDeg * Math.PI) / 180;
+            camTexture.needsUpdate = true;
+        }
+        const frCcw = document.getElementById('floor-rot-ccw');
+        const frCw = document.getElementById('floor-rot-cw');
+        if (frCcw) frCcw.addEventListener('click', () => rotateFloor(-90));
+        if (frCw) frCw.addEventListener('click', () => rotateFloor(90));
 
         // ===== 2. Robot Hierarchy =====
         const robotBase = new THREE.Group();
