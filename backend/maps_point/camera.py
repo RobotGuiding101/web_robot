@@ -62,6 +62,9 @@ def _list_devices_rs():
     return out
 
 
+RECONNECT_AFTER = 3
+
+
 class Camera:
     def __init__(self):
         self.pipe       = None
@@ -84,6 +87,7 @@ class Camera:
         self._capture_thread = None
         self._capture_stop_event = threading.Event()
         self._frame_count = 0
+        self._err_streak = 0
         # Rolling-median cache, keyed by the frame counter it was built from.
         self._stacked_frame = None
         self._stacked_key = None
@@ -204,14 +208,83 @@ class Camera:
                     with self._color_lock:
                         self._color_buf = np.asanyarray(cf.get_data()).copy()
                 self._frame_count += 1
+                self._err_streak = 0
             except Exception as e:
                 if self._capture_stop_event.is_set():
                     break
                 if "before start" in str(e):
                     log(f"  [Cam] capture thread: pipeline not started, stopping")
                     break
-                log(f"  [Cam] capture error: {e}")
+                self._err_streak += 1
+                log(f"  [Cam] capture error ({self._err_streak}): {e}")
+                if self._err_streak >= RECONNECT_AFTER:
+                    self._err_streak = 0
+                    if self._capture_stop_event.is_set():
+                        break
+                    if self._reopen_pipeline():
+                        log("  [Cam] pipeline reopened after USB drop")
+                    else:
+                        log("  [Cam] pipeline reopen failed; retrying")
+                        sleep(2.0)
                 sleep(0.01)
+
+    def _reopen_pipeline(self) -> bool:
+        """Rebuild the RealSense pipeline after repeated frame timeouts.
+
+        Runs inside the capture thread, so it must NOT call stop()/start()
+        (those join/restart this very thread); it only swaps rs.pipeline in
+        place and returns True once frames flow again.
+        """
+        try:
+            if self.pipe is not None:
+                self.pipe.stop()
+        except Exception:
+            pass
+        self.pipe = None
+
+        def _make_cfg(with_imu: bool):
+            c = rs.config()
+            if self.serial:
+                c.enable_device(self.serial)
+            c.enable_stream(rs.stream.depth, self.w, self.h, rs.format.z16, 30)
+            c.enable_stream(rs.stream.color, self.w, self.h, rs.format.bgr8, 30)
+            if with_imu:
+                c.enable_stream(rs.stream.accel)
+            return c
+
+        new_pipe, prof = None, None
+        for with_imu in (True, False):
+            pipe = rs.pipeline()
+            try:
+                prof = pipe.start(_make_cfg(with_imu))
+                new_pipe = pipe
+                self._has_imu = with_imu
+                break
+            except Exception:
+                try:
+                    pipe.stop()
+                except Exception:
+                    pass
+        if new_pipe is None:
+            return False
+
+        self.pipe = new_pipe
+        try:
+            self._align = rs.align(rs.stream.color)
+            ci = prof.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
+            self.intrinsics = {"fx": ci.fx, "fy": ci.fy, "cx": ci.ppx, "cy": ci.ppy}
+            self.w = ci.width
+            self.h = ci.height
+            for _ in range(15):
+                self.pipe.wait_for_frames()
+        except Exception:
+            try:
+                self.pipe.stop()
+            except Exception:
+                pass
+            self.pipe = None
+            return False
+        return True
 
     def get_latest_accel(self):
         """Most recent accelerometer sample (ax,ay,az in m/s^2, D455 IMU
