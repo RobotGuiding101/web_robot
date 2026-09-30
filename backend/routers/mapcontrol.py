@@ -26,6 +26,7 @@ from maps_point.robot import Robot, RobotMoveError
 from maps_point.camera import Camera
 from maps_point.align import AppState, do_align, start_tracking_thread
 from maps_point.motion import do_goto, pixel_to_world_xy
+from maps_point import floorcalib
 from maps_point.planegrid import do_draw, validate_grid, project_grid_2d, bilinear_cell, grid_pose
 from maps_point.render import draw_overlay
 
@@ -445,6 +446,96 @@ def api_goto(body: GotoBody):
     threading.Thread(target=do_goto, args=(robot, cam, state, body.x, body.y),
                      daemon=True).start()
     return {"ok": True}
+
+
+# ── floor calibration (fixed overhead camera → robot XY homography) ──────────
+class FloorPointBody(BaseModel):
+    u: float
+    v: float
+
+
+class FloorGotoBody(BaseModel):
+    u: float
+    v: float
+    lift: float = 0.0
+
+
+class FloorZBody(BaseModel):
+    z: float
+
+
+def _floor_status():
+    pairs, h, fz = floorcalib.load()
+    return {
+        "ok": True,
+        "calibrated": h is not None,
+        "count": len(pairs),
+        "min_points": floorcalib.MIN_POINTS,
+        "points": [{"u": u, "v": v, "X": X, "Y": Y} for (u, v), (X, Y) in pairs],
+        "rmse_mm": None if h is None else floorcalib.reprojection_rmse(h, pairs),
+        "floor_z": fz,
+        "H": None if h is None else h.tolist(),
+        "H_inv": None if h is None else floorcalib.invert(h),
+    }
+
+
+@router.get("/floorcalib")
+def api_floorcalib_status():
+    return _floor_status()
+
+
+@router.post("/floorcalib/point")
+def api_floorcalib_add(body: FloorPointBody):
+    if not robot.connected:
+        return {"ok": False, "error": "robot not connected"}
+    robot.ensure_frame()
+    X, Y, Z = robot.get_pose()[:3]
+    pairs, _h, _fz = floorcalib.load()
+    pairs = [p for p in pairs if abs(p[0][0] - body.u) > 1 or abs(p[0][1] - body.v) > 1]
+    pairs.append(((float(body.u), float(body.v)), (X, Y)))
+    h = floorcalib.compute_homography(pairs)
+    floorcalib.save(pairs, h, floor_z=Z)
+    return _floor_status()
+
+
+@router.post("/floorcalib/reset")
+def api_floorcalib_reset():
+    floorcalib.save([], None, None)
+    return _floor_status()
+
+
+@router.post("/floorcalib/floorz")
+def api_floorcalib_setz(body: FloorZBody):
+    pairs, h, _fz = floorcalib.load()
+    floorcalib.save(pairs, h, floor_z=body.z)
+    return _floor_status()
+
+
+def _do_floor_goto(X: float, Y: float, fz, lift: float):
+    try:
+        robot.ensure_frame()
+        cur = robot.get_pose()
+        tZ = (fz if fz is not None else cur[2]) + lift
+        robot.movl(X, Y, tZ, cur[3], cur[4], cur[5])
+        state.status = f"floor-goto done ({X:.1f}, {Y:.1f}, {tZ:.1f})"
+    except RobotMoveError as e:
+        state.status = f"floor-goto rejected — {e}"
+    log(f"  [Floor] {state.status}")
+
+
+@router.post("/floorcalib/goto")
+def api_floorcalib_goto(body: FloorGotoBody):
+    if not robot.connected:
+        return {"ok": False, "error": "robot not connected"}
+    _pairs, h, fz = floorcalib.load()
+    if h is None:
+        return {"ok": False, "error": "not calibrated (need >= 4 points)"}
+    xy = floorcalib.apply_homography(h, body.u, body.v)
+    if xy is None:
+        return {"ok": False, "error": "pixel maps to infinity"}
+    threading.Thread(target=_do_floor_goto, args=(xy[0], xy[1], fz, body.lift),
+                     daemon=True).start()
+    return {"ok": True, "target": {"X": xy[0], "Y": xy[1]}}
 
 
 @router.post("/reset_points")
