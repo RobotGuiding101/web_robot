@@ -509,6 +509,15 @@ const DrawingModePage = () => {
     return () => clearInterval(interval)
   }, [fetchTeachStatus])
 
+  useEffect(() => {
+    const angles = teachStatus && Array.isArray(teachStatus.angles) ? teachStatus.angles : null
+    if (!angles || angles.length !== 6) return
+    const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
+    if (!iframe || !iframe.contentWindow) return
+    iframe.contentWindow.postMessage(
+      { type: 'setJoints', joints: angles.map((v) => Number(v)) }, '*')
+  }, [teachStatus])
+
   // ── Teach / Grid: transient inline message (auto-clear ~3s) ──────────────
   const showTeachMsg = useCallback((text, kind = 'ok') => {
     setTeachMsg({ text, kind })
