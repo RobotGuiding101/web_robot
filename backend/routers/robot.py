@@ -24,8 +24,15 @@ def move_robot(body: MoveRequest):
 
 @router.post("/emergency-stop")
 def emergency_stop():
-    # TODO: Send emergency stop signal to robot
-    return {"status": "emergency_stop_triggered"}
+    from routers.mapcontrol import robot, sequence_stop, state
+    sequence_stop.set()
+    state.align_stop.set()
+    state.draw_stop.set()
+    state.align_running = False
+    state.draw_running = False
+    if robot.connected:
+        robot.emergency_stop()
+    return {"status": "emergency_stop_triggered", "ok": True}
 
 
 @router.post("/draw")

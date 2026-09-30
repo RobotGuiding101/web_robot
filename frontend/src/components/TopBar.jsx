@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react'
+import { apiFetch } from '../lib/api'
 
 const TopBar = ({ title, onEmergency }) => {
   const [ip, setIp] = useState(
     () => localStorage.getItem('robot_ip') || '192.168.10.110'
   )
+  const [emergencyActive, setEmergencyActive] = useState(false)
 
   useEffect(() => {
     const onIpChange = () => {
@@ -19,6 +21,23 @@ const TopBar = ({ title, onEmergency }) => {
     }
   }, [])
 
+  const handleEmergencyClick = async () => {
+    setEmergencyActive(true)
+    try {
+      await Promise.allSettled([
+        apiFetch('/api/map/emergency', { method: 'POST' }),
+        apiFetch('/api/robot/emergency-stop', { method: 'POST' }),
+        apiFetch('/api/map/move_sequence/stop', { method: 'POST' }),
+      ])
+    } catch { /* ignore */ }
+
+    if (typeof onEmergency === 'function') {
+      try { onEmergency() } catch { /* ignore */ }
+    }
+
+    setTimeout(() => setEmergencyActive(false), 3000)
+  }
+
   return (
     <div className="topbar">
       <span className="page-title">{title}</span>
@@ -28,8 +47,12 @@ const TopBar = ({ title, onEmergency }) => {
           <span className="topbar-ip-label">IP:</span>
           <span className="topbar-ip-val">{ip}</span>
         </div>
-        <button className="emergency-btn" onClick={onEmergency}>
-          EMERGENCY
+        <button
+          className={`emergency-btn ${emergencyActive ? 'emergency-btn--active' : ''}`}
+          onClick={handleEmergencyClick}
+          title="Emergency Stop: Halt robot immediately and cancel all queued commands"
+        >
+          {emergencyActive ? 'STOPPING...' : 'EMERGENCY'}
         </button>
       </div>
     </div>
