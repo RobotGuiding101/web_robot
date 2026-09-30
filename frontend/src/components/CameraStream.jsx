@@ -15,6 +15,14 @@ export function setStreamMode(mode) {
   modeListeners.forEach((fn) => fn(streamMode))
 }
 
+let streamRotation = 0
+const rotationListeners = new Set()
+
+export function setStreamRotation(deg) {
+  streamRotation = (((Math.round(deg / 90) * 90) % 360) + 360) % 360
+  rotationListeners.forEach((fn) => fn(streamRotation))
+}
+
 function findSeq(buf, seq, from) {
   const n = seq.length
   const limit = buf.length - n
@@ -42,11 +50,18 @@ const CameraStream = ({ id, src = '/api/map/video_feed', withMode = true, mode: 
   const mode = fixedMode !== undefined ? fixedMode : sharedMode
   const cbRef = useRef({ onError, onFrame })
   cbRef.current = { onError, onFrame }
+  const rotRef = useRef(streamRotation)
 
   useEffect(() => {
     const fn = (m) => setSharedMode(m)
     modeListeners.add(fn)
     return () => { modeListeners.delete(fn) }
+  }, [])
+
+  useEffect(() => {
+    const fn = (r) => { rotRef.current = r }
+    rotationListeners.add(fn)
+    return () => { rotationListeners.delete(fn) }
   }, [])
 
   useEffect(() => {
@@ -76,11 +91,23 @@ const CameraStream = ({ id, src = '/api/map/video_feed', withMode = true, mode: 
           pending = null
           try {
             const bmp = await createImageBitmap(new Blob([jpeg], { type: 'image/jpeg' }))
-            if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
-              canvas.width = bmp.width
-              canvas.height = bmp.height
+            const rot = rotRef.current
+            const swap = rot === 90 || rot === 270
+            const cw = swap ? bmp.height : bmp.width
+            const ch = swap ? bmp.width : bmp.height
+            if (canvas.width !== cw || canvas.height !== ch) {
+              canvas.width = cw
+              canvas.height = ch
             }
-            ctx.drawImage(bmp, 0, 0)
+            if (rot === 0) {
+              ctx.drawImage(bmp, 0, 0)
+            } else {
+              ctx.save()
+              ctx.translate(cw / 2, ch / 2)
+              ctx.rotate((rot * Math.PI) / 180)
+              ctx.drawImage(bmp, -bmp.width / 2, -bmp.height / 2)
+              ctx.restore()
+            }
             bmp.close()
             if (!gotFrame) { gotFrame = true; if (cbRef.current.onFrame) cbRef.current.onFrame() }
           } catch { /* skip malformed frame */ }

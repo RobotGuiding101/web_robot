@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { apiFetch } from '../lib/api'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
-import CameraStream, { setStreamMode } from '../components/CameraStream'
+import CameraStream, { setStreamMode, setStreamRotation } from '../components/CameraStream'
 
 const CameraViewPage = () => {
   const [status, setStatus] = useState({ connected: false, camera_running: false })
@@ -19,6 +19,13 @@ const CameraViewPage = () => {
   const cameraBoxRef = useRef(null)
   const [homeLoading, setHomeLoading] = useState(false)
   const [homeMsg, setHomeMsg] = useState(null)
+  const [videoRotation, setVideoRotation] = useState(0)
+
+  const rotateVideo = (delta) => {
+    const next = (((videoRotation + delta) % 360) + 360) % 360
+    setVideoRotation(next)
+    setStreamRotation(next)
+  }
 
   // Poll robot/camera status
   useEffect(() => {
@@ -258,6 +265,31 @@ const CameraViewPage = () => {
                   zIndex: 10,
                 }}
               >
+                <button
+                  type="button"
+                  title={`หมุนภาพซ้าย 90° (ตอนนี้ ${videoRotation}°)`}
+                  onClick={() => rotateVideo(-90)}
+                  style={{
+                    width: '30px', height: '30px', borderRadius: '8px',
+                    background: 'rgba(0, 0, 0, 0.7)', color: '#fff',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    backdropFilter: 'blur(8px)', cursor: 'pointer',
+                    fontSize: '15px', lineHeight: 1,
+                  }}
+                >⟲</button>
+                <button
+                  type="button"
+                  title={`หมุนภาพขวา 90° (ตอนนี้ ${videoRotation}°)`}
+                  onClick={() => rotateVideo(90)}
+                  style={{
+                    width: '30px', height: '30px', borderRadius: '8px',
+                    background: 'rgba(0, 0, 0, 0.7)', color: '#fff',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    backdropFilter: 'blur(8px)', cursor: 'pointer',
+                    fontSize: '15px', lineHeight: 1,
+                  }}
+                >⟳</button>
+
                 {/* Segmented Mode Switcher inside camera */}
                 <div
                   style={{
