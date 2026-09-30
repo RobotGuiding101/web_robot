@@ -122,6 +122,10 @@ const CameraStream = ({ id, src = '/api/map/video_feed', withMode = true, mode: 
         if (!stopped) reconnectTimer = setTimeout(readLoop, 2000)
         return
       }
+      if (!canvas.offsetWidth && !canvas.offsetHeight) {
+        if (!stopped) reconnectTimer = setTimeout(readLoop, 500)
+        return
+      }
       controller = new AbortController()
       const signal = controller.signal
       lastFrameAt = performance.now()
