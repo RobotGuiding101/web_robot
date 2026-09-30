@@ -23,3 +23,6 @@ dist/
 !.env.example
 .maps_point.env
 !.maps_point.env.example
+
+# Floor calibration (runtime)
+backend/floor_calib.json
