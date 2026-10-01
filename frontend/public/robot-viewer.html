@@ -140,6 +140,7 @@
             gap: 6px;
             z-index: 30;
             font-family: system-ui, -apple-system, sans-serif;
+            flex-wrap: wrap;
         }
 
         .gizmo-btn {
@@ -181,23 +182,36 @@
         .gizmo-btn.active .kbd {
             background: rgba(255,255,255,0.25);
         }
-        .gizmo-btn-snap {
-            border-color: rgba(249,115,22,0.4);
-            color: #c2410c;
+        /* ── Gizmo Guide Badge ── */
+        .gizmo-guide {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            padding: 5px 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(0,0,0,0.12);
+            background: rgba(255,255,255,0.92);
+            backdrop-filter: blur(8px);
+            color: #1e293b;
+            font-size: 11px;
+            font-weight: 600;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+            user-select: none;
         }
-        .gizmo-btn-snap:hover {
-            background: rgba(255,237,213,0.95);
-            border-color: #f97316;
-            color: #c2410c;
+        .guide-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 3px;
+            vertical-align: middle;
         }
-        .gizmo-btn-clear {
-            border-color: rgba(239, 68, 68, 0.4);
-            color: #b91c1c;
-        }
-        .gizmo-btn-clear:hover {
-            background: rgba(254, 226, 226, 0.95);
-            border-color: #ef4444;
-            color: #991b1b;
+        .dot-xyz { background: #3b82f6; box-shadow: 0 0 5px #3b82f6; }
+        .dot-j4  { background: #ef4444; box-shadow: 0 0 5px #ef4444; }
+        .dot-j5  { background: #10b981; box-shadow: 0 0 5px #10b981; }
+        .guide-sep {
+            color: #cbd5e1;
+            font-weight: 300;
         }
 
         /* Touch: make canvas fill properly on iPad */
@@ -231,15 +245,9 @@
         <div class="spinner"></div>
         <span>กำลังโหลดโมเดล...</span>
     </div>
-    <!-- Gizmo Mode Toolbar -->
+    <!-- Gizmo Toolbar -->
     <div id="gizmo-toolbar">
-        <button id="btn-mode-move" class="gizmo-btn active" title="Move mode — drag arrows/planes to translate (W)">
-            ✥ Move <span class="kbd">W</span>
-        </button>
-        <button id="btn-mode-rotate" class="gizmo-btn" title="Rotate mode — drag arcs to rotate end-effector (E)">
-            ↺ Rotate <span class="kbd">E</span>
-        </button>
-        <button id="btn-snap" class="gizmo-btn gizmo-btn-snap" title="Snap Gizmo back to arm tip & capture Ghost Shadow (R)">
+        <button id="btn-snap" class="gizmo-btn gizmo-btn-snap" title="Snap Gizmo back to arm tip &amp; capture Ghost Shadow (R)">
             ⊙ Snap เงา <span class="kbd">R</span>
         </button>
         <button id="btn-clear-ghost" class="gizmo-btn gizmo-btn-clear" style="display:none;" title="Clear ghost shadow (C)">
@@ -247,9 +255,9 @@
         </button>
     </div>
 
-    <div id="hint">
-        <span>W</span>=ขยับ &nbsp;|&nbsp; <span>E</span>=หมุน &nbsp;|&nbsp; <span>R</span>=Snap เงา &nbsp;|&nbsp; ลากแกนเพื่อจัดตำแหน่ง
-    </div>
+    <!-- Floating tooltip for joint angle during hover / drag -->
+    <div id="joint-tooltip" style="position:fixed;display:none;pointer-events:none;z-index:9999;background:rgba(15,23,42,0.92);backdrop-filter:blur(6px);color:#fff;font:11px/1.4 system-ui,sans-serif;font-weight:600;padding:5px 9px;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.18);"></div>
+
     <div id="canvas-container"></div>
 
     <div id="mount-tune">
@@ -1130,73 +1138,296 @@
         targetMesh.add(ring);
 
         let transformControls = null;
-        let gizmoMode = 'translate'; // 'translate' | 'rotate'
 
-        function setGizmoMode(mode) {
-            if (!transformControls) return;
-            gizmoMode = mode;
-            transformControls.setMode(mode);
-            const bm = document.getElementById('btn-mode-move');
-            if (bm) bm.classList.toggle('active', mode === 'translate');
-            const br = document.getElementById('btn-mode-rotate');
-            if (br) br.classList.toggle('active', mode === 'rotate');
+        // ── 5. Unified End-Effector Gizmo: XYZ Move + Curved Arrows for J4/J5 ──
+        // Container group for curved rotation arrows (J4 Red, J5 Green)
+        const curvedGizmoGroup = new THREE.Group();
+        scene.add(curvedGizmoGroup);
+
+        // Helper to construct a 3D curved rotation arrow (Torus arc + Cone arrowhead + invisible pick torus)
+        function createCurvedArrow(radius, arcAngle, colorHex) {
+            const group = new THREE.Group();
+            const tubeRadius = 0.0075; // Thicker, richer line
+
+            // 1. Visible Torus arc with 100% solid, bright vibrant color (no lighting shading)
+            const torusGeo = new THREE.TorusGeometry(radius, tubeRadius, 20, 64, arcAngle);
+            const mat = new THREE.MeshBasicMaterial({
+                color: colorHex,
+                depthTest: false,
+                depthWrite: false,
+            });
+            const torusMesh = new THREE.Mesh(torusGeo, mat);
+            torusMesh.renderOrder = 999;
+            group.add(torusMesh);
+
+            // 2. Cone arrowhead at the end of the arc
+            const coneRadius = tubeRadius * 2.8;
+            const coneHeight = 0.028;
+            const coneGeo = new THREE.ConeGeometry(coneRadius, coneHeight, 20);
+            // Tangent at arcAngle: (-sin, cos, 0)
+            const tangent = new THREE.Vector3(-Math.sin(arcAngle), Math.cos(arcAngle), 0).normalize();
+            const coneMat = new THREE.MeshBasicMaterial({
+                color: colorHex,
+                depthTest: false,
+                depthWrite: false,
+            });
+            const coneMesh = new THREE.Mesh(coneGeo, coneMat);
+            coneMesh.renderOrder = 999;
+            coneMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tangent);
+            coneMesh.position.set(radius * Math.cos(arcAngle), radius * Math.sin(arcAngle), 0);
+            group.add(coneMesh);
+
+            // 3. Invisible thick hit mesh for easy mouse raycasting
+            const hitGeo = new THREE.TorusGeometry(radius, 0.026, 8, 32, arcAngle);
+            const hitMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
+            const hitMesh = new THREE.Mesh(hitGeo, hitMat);
+            group.add(hitMesh);
+
+            return { group, torusMesh, coneMesh, hitMesh, mat, coneMat };
         }
 
-        // Disable orbit while dragging
+        // Red curved arrow for J4 (Pitch/Tilt) - radius 0.105m, vivid scarlet red
+        const j4ArrowData = createCurvedArrow(0.105, Math.PI * 0.78, 0xff0044);
+        const j4ArrowGroup = j4ArrowData.group;
+        const j4HitMesh = j4ArrowData.hitMesh;
+        const j4Mat = j4ArrowData.mat;
+        const j4ConeMat = j4ArrowData.coneMat;
+        curvedGizmoGroup.add(j4ArrowGroup);
+
+        // Green curved arrow for J5 (Roll/Yaw) - radius 0.125m, vivid emerald green
+        const j5ArrowData = createCurvedArrow(0.125, Math.PI * 0.78, 0x00e676);
+        const j5ArrowGroup = j5ArrowData.group;
+        const j5HitMesh = j5ArrowData.hitMesh;
+        const j5Mat = j5ArrowData.mat;
+        const j5ConeMat = j5ArrowData.coneMat;
+        curvedGizmoGroup.add(j5ArrowGroup);
+
+        const _q4Tmp = new THREE.Quaternion();
+        const _q5Tmp = new THREE.Quaternion();
+        const _zAxis4 = new THREE.Vector3();
+        const _yAxis5 = new THREE.Vector3();
+        const _unitZ = new THREE.Vector3(0, 0, 1);
+
+        function _updateCurvedArrows() {
+            if (isDisplayOnly || !curvedGizmoGroup) return;
+
+            // Follow targetMesh position (center of XYZ gizmo)
+            targetMesh.getWorldPosition(curvedGizmoGroup.position);
+
+            // J4 (Red): normal is link4's local Z axis transformed to world space
+            link4.getWorldQuaternion(_q4Tmp);
+            _zAxis4.set(0, 0, 1).applyQuaternion(_q4Tmp).normalize();
+            j4ArrowGroup.quaternion.setFromUnitVectors(_unitZ, _zAxis4);
+
+            // J5 (Green): normal is link5's local Y axis transformed to world space
+            link5.getWorldQuaternion(_q5Tmp);
+            _yAxis5.set(0, 1, 0).applyQuaternion(_q5Tmp).normalize();
+            j5ArrowGroup.quaternion.setFromUnitVectors(_unitZ, _yAxis5);
+        }
+
         let ikMode = false;
         let isDragging = false;
+        let activeDragJoint = null;
+        let dragStartAngle = 0;
+        let dragStartPointerAngle = 0;
+        const _centerScreenPx = new THREE.Vector2();
+        const _tipWorldPos = new THREE.Vector3();
+        const _tipNdc = new THREE.Vector3();
+        const _curvedRaycaster = new THREE.Raycaster();
+        const _curvedMouse = new THREE.Vector2();
+
+        const _ttEl = document.getElementById('joint-tooltip');
+        function _showJointTooltip(text, x, y) {
+            if (!_ttEl) return;
+            _ttEl.textContent = text;
+            _ttEl.style.display = 'block';
+            _ttEl.style.left = (x + 14) + 'px';
+            _ttEl.style.top = (y + 14) + 'px';
+        }
+        function _hideJointTooltip() {
+            if (_ttEl) _ttEl.style.display = 'none';
+        }
+
+        function _calcCenterScreenPx() {
+            targetMesh.getWorldPosition(_tipWorldPos);
+            _tipNdc.copy(_tipWorldPos).project(camera);
+            const rect = renderer.domElement.getBoundingClientRect();
+            _centerScreenPx.x = ((_tipNdc.x + 1) * 0.5) * rect.width + rect.left;
+            _centerScreenPx.y = ((-_tipNdc.y + 1) * 0.5) * rect.height + rect.top;
+        }
+
+        function onCurvedPointerDown(e) {
+            if (e.button !== 0 || isDisplayOnly) return;
+            const rect = renderer.domElement.getBoundingClientRect();
+            _curvedMouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            _curvedMouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+            _curvedRaycaster.setFromCamera(_curvedMouse, camera);
+            const hits = _curvedRaycaster.intersectObjects([j4HitMesh, j5HitMesh], false);
+            if (hits.length > 0) {
+                const hitObj = hits[0].object;
+                activeDragJoint = (hitObj === j4HitMesh) ? 'j4' : 'j5';
+                cameraControls.enabled = false;
+                if (transformControls) transformControls.enabled = false;
+
+                _calcCenterScreenPx();
+                dragStartPointerAngle = Math.atan2(e.clientY - _centerScreenPx.y, e.clientX - _centerScreenPx.x);
+                dragStartAngle = (activeDragJoint === 'j4') ? link4.rotation.z : link5.rotation.y;
+
+                renderer.domElement.style.cursor = 'grabbing';
+                window.parent.postMessage({ type: 'gizmoDragStart' }, '*');
+
+                e.stopImmediatePropagation();
+                e.preventDefault();
+            }
+        }
+
+        function onCurvedPointerMove(e) {
+            if (activeDragJoint) {
+                const curAngle = Math.atan2(e.clientY - _centerScreenPx.y, e.clientX - _centerScreenPx.x);
+                let delta = curAngle - dragStartPointerAngle;
+                while (delta > Math.PI) delta -= Math.PI * 2;
+                while (delta < -Math.PI) delta += Math.PI * 2;
+
+                const camDir = new THREE.Vector3();
+                camera.getWorldDirection(camDir);
+
+                if (activeDragJoint === 'j4') {
+                    link4.getWorldQuaternion(_q4Tmp);
+                    _zAxis4.set(0, 0, 1).applyQuaternion(_q4Tmp).normalize();
+                    const sign = (_zAxis4.dot(camDir) > 0) ? -1 : 1;
+                    const { min, max } = ikJoints[3];
+                    const nextAng = THREE.MathUtils.clamp(dragStartAngle + delta * sign, min, max);
+                    link4.rotation.z = nextAng;
+                    link4.rotation.x = 0; link4.rotation.y = 0;
+                    link4.updateMatrixWorld(true);
+
+                    const degVal = THREE.MathUtils.radToDeg(nextAng).toFixed(1);
+                    _showJointTooltip(`J4 (แดง): ${degVal}°`, e.clientX, e.clientY);
+                } else if (activeDragJoint === 'j5') {
+                    link5.getWorldQuaternion(_q5Tmp);
+                    _yAxis5.set(0, 1, 0).applyQuaternion(_q5Tmp).normalize();
+                    const sign = (_yAxis5.dot(camDir) > 0) ? -1 : 1;
+                    const { min, max } = ikJoints[4];
+                    const nextAng = THREE.MathUtils.clamp(dragStartAngle + delta * sign, min, max);
+                    link5.rotation.y = nextAng;
+                    link5.rotation.x = 0; link5.rotation.z = 0;
+                    link5.updateMatrixWorld(true);
+
+                    const degVal = THREE.MathUtils.radToDeg(nextAng).toFixed(1);
+                    _showJointTooltip(`J5 (เขียว): ${degVal}°`, e.clientX, e.clientY);
+                }
+
+                // Snap targetMesh position to new end-effector tip position
+                endEffector.getWorldPosition(targetMesh.position);
+                targetMesh.updateMatrixWorld(true);
+                if (transformControls) transformControls.updateMatrixWorld();
+
+                _updateCurvedArrows();
+                _postTargetPose();
+                e.preventDefault();
+                return;
+            }
+
+            if (isDisplayOnly) return;
+            const rect = renderer.domElement.getBoundingClientRect();
+            _curvedMouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            _curvedMouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+            _curvedRaycaster.setFromCamera(_curvedMouse, camera);
+            const hits = _curvedRaycaster.intersectObjects([j4HitMesh, j5HitMesh], false);
+            if (hits.length > 0) {
+                const hitObj = hits[0].object;
+                if (hitObj === j4HitMesh) {
+                    j4Mat.color.setHex(0xff5277);
+                    j4ConeMat.color.setHex(0xff5277);
+                    j5Mat.color.setHex(0x00e676);
+                    j5ConeMat.color.setHex(0x00e676);
+                    renderer.domElement.style.cursor = 'grab';
+                    const deg = THREE.MathUtils.radToDeg(link4.rotation.z).toFixed(1);
+                    _showJointTooltip(`หมุน J4: ${deg}°`, e.clientX, e.clientY);
+                } else {
+                    j5Mat.color.setHex(0x69f0ae);
+                    j5ConeMat.color.setHex(0x69f0ae);
+                    j4Mat.color.setHex(0xff0044);
+                    j4ConeMat.color.setHex(0xff0044);
+                    renderer.domElement.style.cursor = 'grab';
+                    const deg = THREE.MathUtils.radToDeg(link5.rotation.y).toFixed(1);
+                    _showJointTooltip(`หมุน J5: ${deg}°`, e.clientX, e.clientY);
+                }
+            } else {
+                j4Mat.color.setHex(0xff0044);
+                j4ConeMat.color.setHex(0xff0044);
+                j5Mat.color.setHex(0x00e676);
+                j5ConeMat.color.setHex(0x00e676);
+                _hideJointTooltip();
+                if (!transformControls || !transformControls.dragging) {
+                    renderer.domElement.style.cursor = '';
+                }
+            }
+        }
+
+        function onCurvedPointerUp(e) {
+            if (activeDragJoint) {
+                activeDragJoint = null;
+                cameraControls.enabled = true;
+                if (transformControls) transformControls.enabled = true;
+                renderer.domElement.style.cursor = '';
+                _hideJointTooltip();
+                syncTargetToTip();
+                _updateCurvedArrows();
+                _postTargetPose();
+            }
+        }
 
         if (!isDisplayOnly) {
             // Position sphere at end-effector
             scene.add(targetMesh);
 
-            // TransformControls
+            // ── Main TransformControls (translate IK for J1-J3) ──
             transformControls = new THREE.TransformControls(camera, renderer.domElement);
             transformControls.setMode('translate');
             transformControls.setSize(0.75);
             transformControls.attach(targetMesh);
             scene.add(transformControls);
 
-            const bm = document.getElementById('btn-mode-move');
-            if (bm) bm.addEventListener('click', () => setGizmoMode('translate'));
-            const br = document.getElementById('btn-mode-rotate');
-            if (br) br.addEventListener('click', () => setGizmoMode('rotate'));
+            transformControls.addEventListener('dragging-changed', (e) => {
+                cameraControls.enabled = !e.value;
+                isDragging = e.value;
+                if (e.value) {
+                    ikMode = true;
+                    window.parent.postMessage({ type: 'gizmoDragStart' }, '*');
+                } else {
+                    ikMode = false;
+                    _postTargetPose();
+                    _updateCurvedArrows();
+                }
+            });
+
+            transformControls.addEventListener('change', () => {
+                if (!transformControls.dragging) return;
+                // CCD IK toward targetMesh position (solves J1..J3 only)
+                solveIK(targetMesh.position);
+                _updateCurvedArrows();
+            });
+
+            // Pointer event listeners on canvas for the curved rotation arrows
+            const dom = renderer.domElement;
+            dom.addEventListener('pointerdown', onCurvedPointerDown, true);
+            window.addEventListener('pointermove', onCurvedPointerMove, { passive: false });
+            window.addEventListener('pointerup', onCurvedPointerUp, { passive: false });
+            window.addEventListener('pointercancel', onCurvedPointerUp, { passive: false });
+
+            // Toolbar buttons
             const bs = document.getElementById('btn-snap');
             if (bs) bs.addEventListener('click', handleSnap);
             const btnClearGhost = document.getElementById('btn-clear-ghost');
             if (btnClearGhost) btnClearGhost.addEventListener('click', clearAllGhosts);
 
             window.addEventListener('keydown', (e) => {
-                // Avoid triggering when typing in input fields
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-                if (e.key === 'w' || e.key === 'W') setGizmoMode('translate');
-                if (e.key === 'e' || e.key === 'E') setGizmoMode('rotate');
                 if (e.key === 'r' || e.key === 'R') handleSnap();
                 if (e.key === 'c' || e.key === 'C') clearAllGhosts();
-            });
-
-            transformControls.addEventListener('dragging-changed', (e) => {
-                cameraControls.enabled = !e.value;
-                isDragging = e.value;
-                if (e.value) {
-                    ikMode = true;
-                    // Notify parent: dragging started — pause auto sync
-                    window.parent.postMessage({ type: 'gizmoDragStart' }, '*');
-                } else {
-                    // Notify parent: drag ended — send final target pose
-                    _postTargetPose();
-                }
-            });
-
-            transformControls.addEventListener('change', () => {
-                if (!transformControls.dragging) return;
-                ikMode = true;
-                if (gizmoMode === 'translate') {
-                    solveIK(targetMesh.position);
-                } else {
-                    // Rotate mode: apply the Gizmo's orientation to Link5/Link6 (wrist)
-                    solveIKWithOrientation(targetMesh.position, targetMesh.quaternion);
-                }
             });
         }
 
@@ -1259,48 +1490,24 @@
         }
 
         function solveIK(targetPos) {
-            const ITERATIONS = 25;
-            const TOLERANCE  = 0.0015;
-            const DAMPING    = 0.65;
+            // Solve using ONLY J1..J3 (base + arm). J4, J5, J6 remain fixed during IK Move XYZ
+            // to prevent the 3D wrist model from breaking or twisting unnaturally.
+            // J4 and J5 are rotated separately in 'Wrist J4/J5' mode (shortcut E).
+            const IK_ARM_JOINTS = 3; // J1 (0), J2 (1), J3 (2)
+            const ITERATIONS    = 35;
+            const TOLERANCE     = 0.0015;
+            const DAMPING       = 0.70;
             for (let iter = 0; iter < ITERATIONS; iter++) {
                 endEffector.getWorldPosition(_effPos);
                 if (_effPos.distanceTo(targetPos) < TOLERANCE) break;
-                for (let i = ikJoints.length - 1; i >= 0; i--) {
+                for (let i = IK_ARM_JOINTS - 1; i >= 0; i--) {
                     const { seg, axis, min, max, weight } = ikJoints[i];
                     _ccdStep(seg, axis, min, max, weight, targetPos, TOLERANCE, DAMPING);
                 }
             }
         }
 
-        // Wrist orientation helpers
-        const _gizmoEuler = new THREE.Euler();
-
-        function solveIKWithOrientation(targetPos, targetQuat) {
-            // 1. Position IK (CCD on Link1..Link6)
-            solveIK(targetPos);
-            // 2. Orientation: drive Link5 (axis=Y) and Link6 (axis=Z) to match Gizmo quaternion
-            _gizmoEuler.setFromQuaternion(targetQuat, 'XYZ');
-
-            // Link5 axis is Y
-            {
-                const desired = _gizmoEuler.y;
-                const { min, max } = ikJoints[4];
-                link5.rotation.y = THREE.MathUtils.clamp(desired, min, max);
-                link5.rotation.x = 0;
-                link5.rotation.z = 0;
-                link5.updateMatrixWorld(true);
-            }
-
-            // Link6 axis is Z
-            {
-                const desired = _gizmoEuler.z;
-                const { min, max } = ikJoints[5];
-                link6.rotation.z = THREE.MathUtils.clamp(desired, min, max);
-                link6.rotation.x = 0;
-                link6.rotation.y = 0;
-                link6.updateMatrixWorld(true);
-            }
-        }
+        // (solveIKWithOrientation removed — wrist is now handled by wristControls delta)
 
         // Sync target sphere to end-effector tip on first load / drag release
         function syncTargetToTip() {
@@ -1312,6 +1519,7 @@
             targetMesh.updateMatrixWorld(true);
             if (transformControls) transformControls.updateMatrixWorld();
             ikMode = false;
+            _updateCurvedArrows();
         }
 
         // ── Send current target pose to parent React app ──
@@ -1445,15 +1653,6 @@
                     btnClear.innerHTML = `ลบเงา (${ghostList.length}) <span class="kbd">C</span>`;
                 } else {
                     btnClear.style.display = 'none';
-                }
-            }
-
-            const hint = document.getElementById('hint');
-            if (hint) {
-                if (ghostList.length > 0) {
-                    hint.innerHTML = `<span>มีเงาสีเทา ${ghostList.length} จุด</span> &nbsp;|&nbsp; <span>R</span>=Snap เงาเพิ่ม &nbsp;|&nbsp; <span>C</span>=ลบเงา &nbsp;|&nbsp; <span>W</span>/<span>E</span>=ขยับ/หมุน`;
-                } else {
-                    hint.innerHTML = `<span>W</span>=ขยับ &nbsp;|&nbsp; <span>E</span>=หมุน &nbsp;|&nbsp; <span>R</span>=Snap เงา &nbsp;|&nbsp; ลากแกนเพื่อจัดตำแหน่ง`;
                 }
             }
         }
@@ -1719,10 +1918,10 @@
                 firstFrame = false;
             }
 
-            // Run IK every frame while dragging
-            if (ikMode && !isDisplayOnly) {
-                solveIK(targetMesh.position);
+            // Ring billboard & curved arrows follow gizmo
+            if (!isDisplayOnly) {
                 ring.lookAt(camera.position);
+                _updateCurvedArrows();
             }
 
             // Read TCP position (metres → mm) and send to parent React app ~10x/sec
