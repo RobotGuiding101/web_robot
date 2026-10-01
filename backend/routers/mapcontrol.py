@@ -7,20 +7,22 @@ Module-level globals (robot/cam/state + the continuous tracking thread)
 mirror maps_point/main.py's setup exactly.
 """
 import math
+import struct
 import threading
 import time
 from typing import Optional
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from maps_point.config import (ROBOT_IP, ROBOT_MODE_LABELS,
                                DRAW_GRID_MAX_ROWS, DRAW_GRID_MAX_COLS,
                                DRAW_MIN_GRID_SPAN_MM, Z_SURFACE,
-                               CAM_TIP_OFFSET_MM, DRAW_SURFACE_GAP_MM)
+                               CAM_TIP_OFFSET_MM, DRAW_SURFACE_GAP_MM,
+                               MIN_DEPTH_MM)
 from maps_point.logs import log, server_ring, robot_ring
 from maps_point.robot import Robot, RobotMoveError
 from maps_point.camera import Camera
@@ -265,12 +267,23 @@ STREAM_H = 405
 STREAM_JPEG_QUALITY = 85
 
 
+_DEPTH_CMAP = getattr(cv2, "COLORMAP_TURBO", cv2.COLORMAP_JET)
+
+
 def _colorize_depth(df):
-    vmax = int(df.max())
-    if vmax <= 0:
-        vmax = 1
-    norm = cv2.convertScaleAbs(df, alpha=255.0 / vmax)
-    return cv2.applyColorMap(norm, cv2.COLORMAP_JET)
+    valid = df > 0
+    if not valid.any():
+        return np.zeros((df.shape[0], df.shape[1], 3), np.uint8)
+    vals = df[valid]
+    lo = float(np.percentile(vals, 2))
+    hi = float(np.percentile(vals, 98))
+    if hi - lo < 50.0:
+        hi = lo + 50.0
+    norm = np.clip((df.astype(np.float32) - lo) * (255.0 / (hi - lo)), 0, 255).astype(np.uint8)
+    norm[~valid] = 0
+    out = cv2.applyColorMap(norm, _DEPTH_CMAP)
+    out[~valid] = (0, 0, 0)
+    return out
 
 
 _ENC_LOCK = threading.Lock()
@@ -374,6 +387,108 @@ def video_feed(mode: Optional[str] = None):
     return StreamingResponse(_mjpeg_generator(mode=mode),
                              media_type="multipart/x-mixed-replace; boundary=frame",
                              headers=_STREAM_HEADERS)
+
+
+DEPTH_FRAME_W = 212
+DEPTH_FRAME_H = 120
+DEPTH_FRAME_MAX_MM = 4000.0
+
+
+@router.get("/camera_intrinsics")
+def api_camera_intrinsics():
+    intr = cam.intrinsics or {}
+    return {
+        "fx": intr.get("fx"),
+        "fy": intr.get("fy"),
+        "cx": intr.get("cx"),
+        "cy": intr.get("cy"),
+        "w": cam.w,
+        "h": cam.h,
+    }
+
+
+@router.get("/depth_frame")
+def api_depth_frame():
+    cf, df = cam.get_latest_frames_ref()
+    if df is None:
+        return Response(status_code=503)
+    d = cv2.resize(df, (DEPTH_FRAME_W, DEPTH_FRAME_H), interpolation=cv2.INTER_NEAREST)
+    d = d.astype(np.float32)
+    valid = d > 0
+    if not valid.any():
+        return Response(status_code=503)
+    norm = np.clip(d / DEPTH_FRAME_MAX_MM, 0.0, 1.0)
+    img = (norm * 255.0).astype(np.uint8)
+    img[~valid] = 0
+    ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+    if not ok:
+        return Response(status_code=503)
+    return Response(content=buf.tobytes(), media_type="image/jpeg", headers=_STREAM_HEADERS)
+
+
+@router.get("/pointcloud")
+def api_pointcloud():
+    pos, col = cam.get_latest_pointcloud()
+    if pos is None or pos.shape[0] == 0:
+        return Response(status_code=503)
+    mm = np.clip(pos * 1000.0, -32767.0, 32767.0).astype("<i2")
+    rgb = np.ascontiguousarray(col, dtype=np.uint8)
+    body = struct.pack("<I", mm.shape[0]) + mm.tobytes() + rgb.tobytes()
+    return Response(content=body, media_type="application/octet-stream",
+                    headers=_STREAM_HEADERS)
+
+
+class AlignIcpBody(BaseModel):
+    source: list          # [[x,y,z], ...] to be moved
+    target: list          # [[x,y,z], ...] reference
+    iters: int = 30
+    max_dist: float = 0.05
+
+
+def _icp_align(src, dst, iters=30, max_dist=0.05):
+    """Rigid point-to-point ICP (Umeyama / SVD). Both arrays must already be
+    in a common frame. Returns a 4x4 float64 transform T with src@T aligned
+    onto dst, or None when there is too little overlap."""
+    src = np.asarray(src, dtype=np.float64)
+    dst = np.asarray(dst, dtype=np.float64)
+    if src.ndim != 2 or dst.ndim != 2 or src.shape[0] < 10 or dst.shape[0] < 10:
+        return None
+    cur = src.copy()
+    n = cur.shape[0]
+    T = np.eye(4)
+    for _ in range(iters):
+        diff = cur[:, None, :] - dst[None, :, :]
+        d2 = np.einsum("ijk,ijk->ij", diff, diff)
+        idx = d2.argmin(axis=1)
+        dmin = np.sqrt(d2[np.arange(n), idx])
+        keep = dmin < max_dist
+        if int(keep.sum()) < 20:
+            break
+        P = cur[keep]
+        Q = dst[idx[keep]]
+        pc = P.mean(axis=0)
+        qc = Q.mean(axis=0)
+        H = (P - pc).T @ (Q - qc)
+        U, _S, Vt = np.linalg.svd(H)
+        R = Vt.T @ U.T
+        if np.linalg.det(R) < 0:
+            Vt[-1, :] *= -1
+            R = Vt.T @ U.T
+        t = qc - R @ pc
+        cur = (R @ cur.T).T + t
+        dT = np.eye(4)
+        dT[:3, :3] = R
+        dT[:3, 3] = t
+        T = dT @ T
+    return T
+
+
+@router.post("/align_icp")
+def api_align_icp(body: AlignIcpBody):
+    T = _icp_align(body.source, body.target, iters=body.iters, max_dist=body.max_dist)
+    if T is None:
+        return {"ok": False, "error": "not enough overlap between the two clouds"}
+    return {"ok": True, "transform": T.T.reshape(-1).tolist()}
 
 
 # ── robot / camera lifecycle ─────────────────────────────────────────────────
