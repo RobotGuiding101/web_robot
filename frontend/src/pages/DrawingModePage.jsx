@@ -94,6 +94,10 @@ const DrawingModePage = () => {
   const [is3DMinimized, setIs3DMinimized] = useState(false)
   const [is3DExpanded, setIs3DExpanded] = useState(false)
 
+  // Camera mode switcher
+  const [cameraMode,  setCameraMode]  = useState('rgb')
+  const [modeLoading, setModeLoading] = useState(false)
+
   // Teach / Grid Floating Panel
   const [panelTab, setPanelTab] = useState('align') // 'align' | 'grid' | 'jog' | 'all'
   const [jogMode, setJogMode] = useState('pos')   // 'pos' | 'rot' | 'joint'
@@ -115,6 +119,13 @@ const DrawingModePage = () => {
   const [userIndex, setUserIndex] = useState(0)
   const [frameMsg, setFrameMsg] = useState(null)
   const frameDirtyRef = useRef(false)
+
+  // ── Clear Error / Init / Home ─────────────────────────────────────────────
+  const [errorStatus, setErrorStatus] = useState(null) // 'ok' | 'error' | null
+  const [initLoading, setInitLoading] = useState(false)
+  const [initStatus,  setInitStatus]  = useState(null)
+  const [homeLoading, setHomeLoading] = useState(false)
+  const [homeStatus,  setHomeStatus]  = useState(null)
 
   // Refs for latest state values (avoid stale closures)
   const strokeColorRef = useRef(strokeColor)
@@ -456,6 +467,24 @@ const DrawingModePage = () => {
     }
   }, [])
 
+  // ── Camera mode switcher ──────────────────────────────────────────────────
+  const handleModeChange = useCallback(async (newMode) => {
+    if (cameraMode === newMode || modeLoading) return
+    setModeLoading(true)
+    try {
+      const res = await apiFetch('/api/camera/mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: newMode }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        if (data.ok) setCameraMode(data.mode)
+      }
+    } catch { /* ignore */ }
+    finally { setModeLoading(false) }
+  }, [cameraMode, modeLoading])
+
   // ── Emergency Stop ────────────────────────────────────────────────────────
   const handleEmergency = () => {
     apiFetch('/api/map/error', { method: 'POST' }).catch(() => { })
@@ -756,6 +785,49 @@ const DrawingModePage = () => {
     fetchTeachStatus()
   }, [toolIndex, userIndex, fetchTeachStatus])
 
+  // ── Clear Error / Init / Home callbacks ───────────────────────────────────
+  const handleClearError = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/map/error', { method: 'POST' })
+      const data = await res.json()
+      setErrorStatus(data.ok ? 'ok' : 'error')
+    } catch { setErrorStatus('error') }
+    finally { setTimeout(() => setErrorStatus(null), 3000) }
+    fetchTeachStatus()
+  }, [fetchTeachStatus])
+
+  const handleInit = useCallback(async () => {
+    if (initLoading) return
+    setInitLoading(true); setInitStatus(null)
+    try {
+      await apiFetch('/api/map/connect', { method: 'POST' })
+      const res = await apiFetch('/api/map/init', { method: 'POST' })
+      if (!res.ok) throw new Error()
+      setInitStatus('ok')
+    } catch { setInitStatus('error') }
+    finally {
+      setInitLoading(false)
+      setTimeout(() => setInitStatus(null), 3000)
+      fetchTeachStatus()
+    }
+  }, [initLoading, fetchTeachStatus])
+
+  const handleGoHome = useCallback(async () => {
+    if (homeLoading) return
+    setHomeLoading(true); setHomeStatus(null)
+    try {
+      const res = await apiFetch('/api/map/home', { method: 'POST' })
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error || 'Home move failed')
+      setHomeStatus('ok')
+    } catch { setHomeStatus('error') }
+    finally {
+      setHomeLoading(false)
+      setTimeout(() => setHomeStatus(null), 3000)
+      fetchTeachStatus()
+    }
+  }, [homeLoading, fetchTeachStatus])
+
   const robotAction = useCallback(async (url, okText) => {
     try {
       const res = await apiFetch(url, { method: 'POST' })
@@ -958,6 +1030,50 @@ const DrawingModePage = () => {
                   </div>
                 ))}
 
+                {/* ── Camera Mode Switcher (Top-Right) ── */}
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '14px',
+                    right: '14px',
+                    zIndex: 20,
+                    display: 'flex',
+                    background: 'rgba(0,0,0,0.68)',
+                    borderRadius: '10px',
+                    padding: '3px',
+                    backdropFilter: 'blur(8px)',
+                    border: '1px solid rgba(255,255,255,0.15)',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                  }}
+                >
+                  {[
+                    { id: 'rgb',   label: 'RGB',   active: '#2563eb' },
+                    { id: 'gray',  label: 'Gray',  active: '#4b5563' },
+                    { id: 'depth', label: 'Depth', active: '#dc2626' },
+                  ].map(({ id, label, active }) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => handleModeChange(id)}
+                      disabled={modeLoading}
+                      style={{
+                        background: cameraMode === id ? active : 'transparent',
+                        color: cameraMode === id ? '#fff' : '#aaa',
+                        border: 'none',
+                        borderRadius: '7px',
+                        padding: '6px 14px',
+                        fontSize: '13px',
+                        fontWeight: cameraMode === id ? 700 : 500,
+                        cursor: modeLoading ? 'not-allowed' : 'pointer',
+                        transition: 'all 0.18s ease',
+                      }}
+                      title={`Switch to ${label}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
                 {/* ── Floating 3D Robot Arm Model (Bottom-Left) ── */}
                 <div
                   className={`dm-3d-floating${is3DMinimized ? ' dm-3d-floating--minimized' : ''}${is3DExpanded ? ' dm-3d-floating--expanded' : ''}`}
@@ -1103,54 +1219,34 @@ const DrawingModePage = () => {
                     <div className="dm-teach-body">
                       {/* Pinned Quick Status Strip & Hardware Actions */}
                       <div className="dm-panel-card" style={{ padding: '8px 10px', gap: '8px' }}>
-                        {/* Live Pose Readout */}
-                        <div className="dm-teach-pose">
-                          {teachConnected && teachPose && teachPose.length === 6 ? (
-                            POSE_LABELS.map((lbl, i) => (
-                              <div className="dm-teach-pose-item" key={lbl}>
-                                <span className="dm-teach-pose-label">{lbl}</span>
-                                <span className="dm-teach-pose-value">{Number(teachPose[i]).toFixed(1)}</span>
-                              </div>
-                            ))
-                          ) : (
-                            <span className="dm-teach-offline">Robot not connected</span>
-                          )}
-                        </div>
-
+        
                         {/* Quick Hardware Actions */}
                         <div className="dm-quick-actions">
                           <button
                             type="button"
-                            className={`dm-quick-btn dm-quick-btn--connect${teachConnected ? ' connected' : ''}`}
-                            disabled={!teachStatus}
-                            onClick={() => robotAction('/api/map/connect', 'Robot connected')}
+                            className={`dm-quick-btn dm-quick-btn--secondary${errorStatus === 'ok' ? ' dm-quick-btn--ok' : ''}${errorStatus === 'error' ? ' dm-quick-btn--error' : ''}`}
+                            onClick={handleClearError}
+                            title="Clear robot errors and reset alarms"
                           >
-                            <span className="dm-quick-btn-dot" />
-                            {teachConnected ? 'Connected' : 'Connect'}
+                            {errorStatus === 'ok' ? 'Cleared ✓' : errorStatus === 'error' ? 'Error ✕' : 'Clear Error'}
                           </button>
                           <button
                             type="button"
-                            className="dm-quick-btn"
-                            disabled={!teachStatus}
-                            onClick={() => robotAction('/api/map/init', 'Robot init sent')}
+                            className={`dm-quick-btn${initLoading ? ' dm-quick-btn--loading' : ''}${initStatus === 'ok' ? ' dm-quick-btn--ok' : ''}${initStatus === 'error' ? ' dm-quick-btn--error' : ''}`}
+                            onClick={handleInit}
+                            disabled={initLoading}
+                            title="Connect and initialize / enable robot motors"
                           >
-                            Init
+                            {initLoading ? <><span className="init-btn-spinner" /> Initing…</> : initStatus === 'ok' ? 'Ready ✓' : initStatus === 'error' ? 'Error ✕' : 'Init'}
                           </button>
                           <button
                             type="button"
-                            className={`dm-quick-btn${teachStatus && teachStatus.camera_running ? ' active' : ''}`}
-                            disabled={!teachStatus}
-                            onClick={() => robotAction('/api/map/camstart', 'Camera started')}
+                            className={`dm-quick-btn${homeLoading ? ' dm-quick-btn--loading' : ''}${homeStatus === 'ok' ? ' dm-quick-btn--ok' : ''}${homeStatus === 'error' ? ' dm-quick-btn--error' : ''}`}
+                            onClick={handleGoHome}
+                            disabled={homeLoading || !teachConnected}
+                            title="Send robot to Home position"
                           >
-                            Camera
-                          </button>
-                          <button
-                            type="button"
-                            className={`dm-quick-btn${teachStatus && teachStatus.heatmap_mode ? ' active' : ''}`}
-                            disabled={!teachStatus}
-                            onClick={() => robotAction('/api/map/heatmap/toggle', 'Heatmap toggled')}
-                          >
-                            Heatmap
+                            {homeLoading ? <><span className="init-btn-spinner" /> Homing…</> : homeStatus === 'ok' ? 'Homed ✓' : homeStatus === 'error' ? 'Error ✕' : 'Home'}
                           </button>
                         </div>
                       </div>
