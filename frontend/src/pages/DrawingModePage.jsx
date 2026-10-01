@@ -790,11 +790,21 @@ const DrawingModePage = () => {
     try {
       const res = await apiFetch('/api/map/error', { method: 'POST' })
       const data = await res.json()
-      setErrorStatus(data.ok ? 'ok' : 'error')
-    } catch { setErrorStatus('error') }
-    finally { setTimeout(() => setErrorStatus(null), 3000) }
+      if (data.ok) {
+        setErrorStatus('ok')
+        showTeachMsg('Clear Error สำเร็จ')
+      } else {
+        setErrorStatus('error')
+        showTeachMsg(data.error || 'Clear Error ไม่สำเร็จ', 'error')
+      }
+    } catch {
+      setErrorStatus('error')
+      showTeachMsg('Clear Error ไม่สำเร็จ', 'error')
+    } finally {
+      setTimeout(() => setErrorStatus(null), 3000)
+    }
     fetchTeachStatus()
-  }, [fetchTeachStatus])
+  }, [fetchTeachStatus, showTeachMsg])
 
   const handleInit = useCallback(async () => {
     if (initLoading) return
