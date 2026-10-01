@@ -99,7 +99,7 @@ const DrawingModePage = () => {
   const [modeLoading, setModeLoading] = useState(false)
 
   // Teach / Grid Floating Panel
-  const [panelTab, setPanelTab] = useState('align') // 'align' | 'grid' | 'jog' | 'all'
+  const [panelTab, setPanelTab] = useState('align') // 'align' | 'jog' | 'grid' | 'draw'
   const [jogMode, setJogMode] = useState('pos')   // 'pos' | 'rot' | 'joint'
   const [isTeachMinimized, setIsTeachMinimized] = useState(false)
   const [teachStatus, setTeachStatus] = useState(null)
@@ -1192,14 +1192,6 @@ const DrawingModePage = () => {
                       </button>
                       <button
                         type="button"
-                        className={`dm-panel-tab${panelTab === 'grid' ? ' active' : ''}`}
-                        onClick={() => setPanelTab('grid')}
-                        title="Grid Layout & Surface Z"
-                      >
-                        Grid
-                      </button>
-                      <button
-                        type="button"
                         className={`dm-panel-tab${panelTab === 'jog' ? ' active' : ''}`}
                         onClick={() => setPanelTab('jog')}
                         title="Manual Robot Arm Motion"
@@ -1208,11 +1200,19 @@ const DrawingModePage = () => {
                       </button>
                       <button
                         type="button"
-                        className={`dm-panel-tab${panelTab === 'all' ? ' active' : ''}`}
-                        onClick={() => setPanelTab('all')}
-                        title="Show All Panels"
+                        className={`dm-panel-tab${panelTab === 'grid' ? ' active' : ''}`}
+                        onClick={() => setPanelTab('grid')}
+                        title="Grid Layout & Surface Z"
                       >
-                        All
+                        Grid
+                      </button>
+                      <button
+                        type="button"
+                        className={`dm-panel-tab${panelTab === 'draw' ? ' active' : ''}`}
+                        onClick={() => setPanelTab('draw')}
+                        title="Send drawing to Robot"
+                      >
+                        Draw
                       </button>
                     </div>
 
@@ -1252,7 +1252,7 @@ const DrawingModePage = () => {
                       </div>
 
                       {/* ── TAB: Align & Frame ─────────────────────────────── */}
-                      {(panelTab === 'align' || panelTab === 'all') && (
+                      {(panelTab === 'align') && (
                         <>
                           <div className="dm-panel-card">
                             <div className="dm-panel-card-head">
@@ -1389,7 +1389,7 @@ const DrawingModePage = () => {
                       )}
 
                       {/* ── TAB: Grid & Surface ───────────────────────────── */}
-                      {(panelTab === 'grid' || panelTab === 'all') && (
+                      {(panelTab === 'grid') && (
                         <>
                           <div className="dm-panel-card">
                             <div className="dm-panel-card-head">
@@ -1542,7 +1542,7 @@ const DrawingModePage = () => {
                       )}
 
                       {/* ── TAB: Jog Motion ───────────────────────────────── */}
-                      {(panelTab === 'jog' || panelTab === 'all') && (
+                      {(panelTab === 'jog') && (
                         <div className="dm-panel-card">
                           <div className="dm-panel-card-head">
                             <span className="dm-panel-card-title">Motion Jog Control</span>
@@ -1669,6 +1669,79 @@ const DrawingModePage = () => {
                       {teachMsg && (
                         <div className={`dm-teach-msg dm-teach-msg--${teachMsg.kind}`}>
                           {teachMsg.text}
+                        </div>
+                      )}
+
+                      {/* ── TAB: Draw ─────────────────────────────────────── */}
+                      {panelTab === 'draw' && (
+                        <div className="dm-panel-card">
+                          <div className="dm-panel-card-head">
+                            <span className="dm-panel-card-title">Send Drawing to Robot</span>
+                          </div>
+
+                          {/* Status */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                            <span style={{
+                              fontSize: '11px', fontWeight: 700,
+                              padding: '3px 10px', borderRadius: '10px',
+                              background: teachConnected ? 'rgba(74,222,128,0.12)' : 'rgba(239,68,68,0.10)',
+                              color: teachConnected ? '#16a34a' : '#ef4444',
+                              border: `1px solid ${teachConnected ? 'rgba(74,222,128,0.4)' : 'rgba(239,68,68,0.3)'}`,
+                            }}>
+                              {teachConnected ? 'Robot Connected' : 'Robot Disconnected'}
+                            </span>
+                            {teachStatus && teachStatus.draw_running && (
+                              <span style={{
+                                fontSize: '11px', fontWeight: 700,
+                                padding: '3px 10px', borderRadius: '10px',
+                                background: 'rgba(245,158,11,0.12)',
+                                color: '#d97706',
+                                border: '1px solid rgba(245,158,11,0.35)',
+                              }}>
+                                ✎ Drawing…
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Object count */}
+                          <div style={{ fontSize: '12px', color: '#64748b' }}>
+                            {objectCount > 0
+                              ? `${objectCount} object${objectCount > 1 ? 's' : ''} on canvas — ready to send`
+                              : 'Canvas is empty — draw something first'}
+                          </div>
+
+                          {/* Send + Stop */}
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                            <button
+                              type="button"
+                              className={`dm-quick-btn dm-quick-btn--ok${isSending ? ' dm-quick-btn--loading' : ''}`}
+                              style={{ flex: 1 }}
+                              onClick={sendToRobot}
+                              disabled={isSending || !teachConnected || objectCount === 0}
+                              title="Send drawing paths to robot"
+                            >
+                              {isSending ? '…Sending' : '▶ Send to Robot'}
+                            </button>
+                            <button
+                              type="button"
+                              className="dm-quick-btn dm-quick-btn--error"
+                              onClick={stopDraw}
+                              disabled={!isSending && !(teachStatus && teachStatus.draw_running)}
+                              title="Stop the running draw"
+                            >
+                              ■ Stop
+                            </button>
+                          </div>
+
+                          {/* Status text */}
+                          {status && status !== 'Ready' && (
+                            <div style={{
+                              fontSize: '11px', fontWeight: 600,
+                              color: status.startsWith('✓') ? '#16a34a' : status.startsWith('✗') ? '#dc2626' : '#64748b',
+                            }}>
+                              {status}
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
