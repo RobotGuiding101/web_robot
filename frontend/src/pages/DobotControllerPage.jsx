@@ -533,11 +533,13 @@ const DobotControllerPage = () => {
     setMoveToStatus(null)
     setMoveToError(null)
     try {
+      // Always use joint mode when joints data is available (snapped ghost always has joints)
+      const useJoint = targetPose.joints && targetPose.joints.length >= 6
       const body = {
-        mode: moveMode,
+        mode: useJoint ? 'joint' : moveMode,
         speed: Math.max(1, Math.min(100, speed || 20)),
       }
-      if (moveMode === 'joint' && targetPose.joints) {
+      if (useJoint) {
         body.joints = targetPose.joints
       } else {
         body.x  = targetPose.x;  body.y  = targetPose.y;  body.z  = targetPose.z
@@ -605,11 +607,13 @@ const DobotControllerPage = () => {
     setMoveToStatus(null)
     setMoveToError(null)
     try {
+      // Always use joint mode when joints data is available (snapped ghost always has joints)
+      const useJoint = target.joints && target.joints.length >= 6
       const body = {
-        mode: moveMode,
+        mode: useJoint ? 'joint' : moveMode,
         speed: Math.max(1, Math.min(100, speed || 20)),
       }
-      if (moveMode === 'joint' && target.joints) {
+      if (useJoint) {
         body.joints = target.joints
       } else {
         body.x  = target.pose.x;  body.y  = target.pose.y;  body.z  = target.pose.z
@@ -643,6 +647,9 @@ const DobotControllerPage = () => {
     setSequenceStatus(null)
     setSequenceMsg(null)
     try {
+      // Prefer joint mode for all points that have joints data
+      const allHaveJoints = ghostList.every(g => g.joints && g.joints.length >= 6)
+      const effectiveSequenceMode = allHaveJoints ? 'joint' : sequenceMode
       const points = ghostList.map(g => ({
         x: g.pose ? g.pose.x : null,
         y: g.pose ? g.pose.y : null,
@@ -657,7 +664,7 @@ const DobotControllerPage = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           points,
-          mode: sequenceMode,
+          mode: effectiveSequenceMode,
           speed: Math.max(1, Math.min(100, speed || 20)),
           pause_s: Number(sequencePause) || 0.5,
         }),
@@ -934,27 +941,23 @@ const DobotControllerPage = () => {
                 </div>
               </div>
 
-            {/* ── Ghost Control Card (selector + list + sequence) ── */}
+            {/* ── Ghost Control Card ── */}
               <div className="ghost-control-card">
-                {/* ── Ghost Pose Multi-Round Bar ── */}
-                <div className="ghost-pose-banner">
-                  <div className="ghost-pose-info">
-                    <span className="ghost-badge">เงาสีเทา</span>
-                    {ghostList.length > 0 ? (
-                      <span className="ghost-coords">
-                        บันทึก <strong>{ghostList.length}</strong> จุด (ล่าสุด: X:{latestGhost?.pose?.x} Y:{latestGhost?.pose?.y} Z:{latestGhost?.pose?.z})
-                      </span>
-                    ) : (
-                      <span className="ghost-empty-tip">
-                        กด <strong>Snap เงา (R)</strong> เพื่อบันทึกเงาใน 3D (ทำได้หลายจุด)
-                      </span>
+
+                {/* ── Header: Snap / Clear ── */}
+                <div className="ghost-header-bar">
+                  <div className="ghost-header-left">
+                    <span className="ghost-header-icon">👻</span>
+                    <span className="ghost-header-title">Waypoints</span>
+                    {ghostList.length > 0 && (
+                      <span className="ghost-count-badge">{ghostList.length}</span>
                     )}
                   </div>
-                  <div className="ghost-actions">
+                  <div className="ghost-header-actions">
                     <button
                       type="button"
-                      className="ghost-action-btn ghost-action-btn--snap"
-                      title="กด Snap เพื่อบันทึกเงาสีเทา ณ ตำแหน่งนี้ (กดได้หลายรอบตามต้องการ)"
+                      className="ghost-snap-btn"
+                      title="บันทึกตำแหน่งปัจจุบันของ 3D model เป็น waypoint (R)"
                       onClick={() => {
                         const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
                         if (iframe && iframe.contentWindow) {
@@ -962,13 +965,13 @@ const DobotControllerPage = () => {
                         }
                       }}
                     >
-                      Snap เงา (R)
+                      <span>+</span> Snap (R)
                     </button>
                     {ghostList.length > 0 && (
                       <button
                         type="button"
-                        className="ghost-action-btn ghost-action-btn--clear"
-                        title="ลบเงาทั้งหมดออกจาก 3D"
+                        className="ghost-clear-btn"
+                        title="ลบ waypoint ทั้งหมด"
                         onClick={() => {
                           const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
                           if (iframe && iframe.contentWindow) {
@@ -976,192 +979,69 @@ const DobotControllerPage = () => {
                           }
                         }}
                       >
-                        ลบเงาทั้งหมด ({ghostList.length})
+                        ลบทั้งหมด
                       </button>
                     )}
                   </div>
                 </div>
 
-                {/* ── Ghost Selector (Dropdown) ── */}
-                <div className="ghost-dropdown-row">
-                  <label className="ghost-dropdown-label">
-                    <span>เลือกเงาที่จะขยับ:</span>
-                    <select
-                      className="ghost-dropdown-select"
-                      value={selectedGhostIndex ?? ''}
-                      disabled={ghostList.length === 0}
-                      onChange={(e) => {
-                        if (e.target.value !== '') handleSelectGhost(Number(e.target.value))
-                      }}
-                    >
-                      {ghostList.length === 0 ? (
-                        <option value="">-- ยังไม่มีจุดเงา (กด Snap เงา ใน 3D ก่อน) --</option>
-                      ) : (
-                        <>
-                          <option value="" disabled>-- เลือกเงาจากลิสต์ --</option>
-                          {ghostList.map((g, idx) => (
-                            <option key={idx} value={idx}>
-                              เงา #{idx + 1} (X:{g.pose?.x} Y:{g.pose?.y} Z:{g.pose?.z})
-                            </option>
-                          ))}
-                        </>
-                      )}
-                    </select>
-                  </label>
-                  <button
-                    type="button"
-                    className="ghost-btn-move"
-                    disabled={selectedGhostIndex === null || ghostList.length === 0 || !connected || moveToLoading || sequenceRunning}
-                    onClick={() => handleMoveToGhost(selectedGhostIndex)}
-                    title="ขยับหุ่นยนต์ไปยังเงาที่เลือกทันที"
-                  >
-                    ขยับไปที่เงานี้
-                  </button>
-                </div>
-
-                {/* Chips Strip with Prev/Next (shown when ghosts exist) */}
-                {ghostList.length > 0 && (
-                  <div className="ghost-selector-bar">
-                    <button
-                      type="button"
-                      className="ghost-nav-btn"
-                      title="เลือกเงาก่อนหน้า"
-                      disabled={selectedGhostIndex === null || selectedGhostIndex <= 0}
-                      onClick={() => handleSelectGhost(Math.max(0, (selectedGhostIndex ?? 0) - 1))}
-                    >
-                      ◀
-                    </button>
-
-                    <div className="ghost-chips-list">
-                      {ghostList.map((g, idx) => (
-                        <button
+                {/* ── Waypoint List ── */}
+                <div className="ghost-waypoint-list">
+                  {ghostList.length === 0 ? (
+                    <div className="ghost-waypoint-empty">
+                      <span className="ghost-empty-icon">📍</span>
+                      <span>ยังไม่มี waypoint — กด <strong>Snap (R)</strong> หรือแป้น <strong>R</strong> ใน 3D</span>
+                    </div>
+                  ) : (
+                    ghostList.map((g, idx) => {
+                      const isSel = selectedGhostIndex === idx
+                      const hasJoints = g.joints && g.joints.length >= 6
+                      return (
+                        <div
                           key={g.id || idx}
-                          type="button"
-                          className={`ghost-chip ${selectedGhostIndex === idx ? 'active' : ''}`}
+                          className={`ghost-wp-row ${isSel ? 'ghost-wp-row--selected' : ''}`}
                           onClick={() => handleSelectGhost(idx)}
-                          title={`เลือกเงา #${idx + 1} (X:${g.pose?.x} Y:${g.pose?.y} Z:${g.pose?.z})`}
                         >
-                          <span>#{idx + 1}</span>
-                          {selectedGhostIndex === idx && <span>✓</span>}
-                        </button>
-                      ))}
-                    </div>
-
-                    <button
-                      type="button"
-                      className="ghost-nav-btn"
-                      title="เลือกเงาถัดไป"
-                      disabled={selectedGhostIndex === null || selectedGhostIndex >= ghostList.length - 1}
-                      onClick={() => handleSelectGhost(Math.min(ghostList.length - 1, (selectedGhostIndex ?? 0) + 1))}
-                    >
-                      ▶
-                    </button>
-                  </div>
-                )}
-
-                {/* List View of All Ghosts (Always visible table container) */}
-                <div className="ghost-list-container">
-                  <div className="ghost-list-header">
-                    <span className="ghost-list-title">ตารางเงาทั้งหมด ({ghostList.length})</span>
-                    <span className="ghost-list-sub">
-                      {ghostList.length > 0 ? 'คลิกที่แถวเพื่อเลือก หรือกดปุ่มขยับ' : 'กด Snap เงา (R) เพื่อเพิ่มจุดลงในตาราง'}
-                    </span>
-                  </div>
-                  <div className="ghost-items-list">
-                    {ghostList.length === 0 ? (
-                      <div className="ghost-list-empty-row">
-                        ยังไม่มีจุดเงาที่บันทึก — กด <strong>Snap เงา (R)</strong> ด้านบน หรือกดแป้น <strong>R</strong> ในโมเดล 3D เพื่อบันทึกจุดเงาลงตารางนี้
-                      </div>
-                    ) : (
-                      ghostList.map((g, idx) => {
-                        const isSel = selectedGhostIndex === idx
-                        return (
-                          <div
-                            key={g.id || idx}
-                            className={`ghost-item-row ${isSel ? 'selected' : ''}`}
-                            onClick={() => handleSelectGhost(idx)}
-                            title={`เลือกเงา #${idx + 1}`}
-                          >
-                            <div className="ghost-item-info">
-                              <div className="ghost-item-name">
-                                <span>เงา #{idx + 1}</span>
-                                {isSel && <span className="ghost-item-active-badge">กำลังเลือก</span>}
-                              </div>
-                              <div className="ghost-item-coords">
-                                X: {g.pose?.x} | Y: {g.pose?.y} | Z: {g.pose?.z} mm
-                              </div>
+                          <div className="ghost-wp-num">{idx + 1}</div>
+                          <div className="ghost-wp-info">
+                            <div className="ghost-wp-coords">
+                              X:{g.pose?.x} Y:{g.pose?.y} Z:{g.pose?.z}
                             </div>
-                            <div className="ghost-item-actions" onClick={(e) => e.stopPropagation()}>
-                              <button
-                                type="button"
-                                className="ghost-item-btn-move"
-                                disabled={!connected || moveToLoading || sequenceRunning}
-                                onClick={() => handleMoveToGhost(idx)}
-                                title={`ขยับหุ่นยนต์ไปยังเงา #${idx + 1}`}
-                              >
-                                ขยับ
-                              </button>
-                              <button
-                                type="button"
-                                className="ghost-item-btn-delete"
-                                onClick={() => handleDeleteGhost(idx)}
-                                title={`ลบเงา #${idx + 1}`}
-                              >
-                                ลบ
-                              </button>
-                            </div>
+                            {hasJoints && (
+                              <div className="ghost-wp-joint-badge">Joint ✓</div>
+                            )}
                           </div>
-                        )
-                      })
-                    )}
-                  </div>
+                          <div className="ghost-wp-actions" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              className="ghost-wp-btn-go"
+                              disabled={!connected || moveToLoading || sequenceRunning}
+                              onClick={() => handleMoveToGhost(idx)}
+                              title={`ขยับ Robot → Waypoint #${idx + 1}`}
+                            >
+                              ▶ ไป
+                            </button>
+                            <button
+                              type="button"
+                              className="ghost-wp-btn-del"
+                              onClick={() => handleDeleteGhost(idx)}
+                              title={`ลบ Waypoint #${idx + 1}`}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })
+                  )}
                 </div>
 
-                {/* Selected Ghost Details & Actions */}
-                {selectedGhostIndex !== null && ghostList[selectedGhostIndex] && (
-                  <div className="ghost-details-card">
-                    <div className="ghost-details-title">
-                      <span>เงา #{selectedGhostIndex + 1}</span>
-                      <span className="ghost-details-coords">
-                        X: {ghostList[selectedGhostIndex].pose?.x} | Y: {ghostList[selectedGhostIndex].pose?.y} | Z: {ghostList[selectedGhostIndex].pose?.z} mm
-                      </span>
-                    </div>
-                    <div className="ghost-details-actions">
-                      <button
-                        type="button"
-                        className="ghost-btn-move"
-                        disabled={!connected || moveToLoading || sequenceRunning}
-                        onClick={() => handleMoveToGhost(selectedGhostIndex)}
-                        title={`ขยับหุ่นยนต์ไปยังเงา #${selectedGhostIndex + 1} ทันที (${moveMode.toUpperCase()})`}
-                      >
-                        ขยับไปที่เงานี้
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost-action-btn ghost-action-btn--restore"
-                        onClick={() => handleSelectGhost(selectedGhostIndex)}
-                        title="ตั้งพิกัดเงานี้เป็นเป้าหมายในแผงควบคุม"
-                      >
-                        ตั้งเป็นเป้าหมาย
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost-btn-delete"
-                        onClick={() => handleDeleteGhost(selectedGhostIndex)}
-                        title={`ลบเงา #${selectedGhostIndex + 1} ออก`}
-                      >
-                        ลบเงานี้
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* ── Sequential Motion Panel (ขยับทุกเงา เรียงตามลำดับ) ── */}
-                {ghostList.length > 0 && (
+                {/* ── Sequential Motion Panel ── */}
+                {ghostList.length > 1 && (
                   <div className="ghost-sequence-box">
                     <div className="ghost-sequence-header">
                       <div className="ghost-sequence-title">
-                        <span>ขยับทุกเงา เรียงตามลำดับ</span>
+                        <span>🔁 รันทุก waypoint</span>
                         <span style={{ fontSize: '10px', color: '#64748b', fontWeight: 'normal' }}>
                           (1 → {ghostList.length})
                         </span>
@@ -1179,7 +1059,7 @@ const DobotControllerPage = () => {
                             <option value="joint">Joint</option>
                           </select>
                         </label>
-                        <label style={{ marginLeft: '6px' }}>พักจุดละ:
+                        <label style={{ marginLeft: '6px' }}>พัก:
                           <select
                             value={sequencePause}
                             onChange={(e) => setSequencePause(Number(e.target.value))}
