@@ -203,11 +203,12 @@ const CameraViewPage = () => {
                       width: '8px',
                       height: '8px',
                       borderRadius: '50%',
-                      background: status.camera_running ? '#4ade80' : '#22c55e',
-                      boxShadow: '0 0 8px #4ade80',
+                      background: status.camera_running ? '#4ade80' : '#94a3b8',
+                      boxShadow: status.camera_running ? '0 0 8px rgba(74,222,128,0.7)' : 'none',
+                      transition: 'background 0.2s ease, box-shadow 0.2s ease',
                     }}
                   />
-                  LIVE
+                  {status.camera_running ? 'LIVE' : 'OFFLINE'}
                 </div>
 
                 <div
