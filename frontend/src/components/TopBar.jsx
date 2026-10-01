@@ -101,7 +101,7 @@ const TopBar = ({ title, onEmergency, showConnect = true }) => {
 
       <div className="topbar-right">
         <div className="topbar-ip-badge" title="Connected IP Address">
-          <span className="topbar-ip-dot" />
+          <span className={`topbar-ip-dot${robotConnected ? ' topbar-ip-dot--on' : ''}`} />
           <span className="topbar-ip-label">IP:</span>
           <span className="topbar-ip-val">{ip}</span>
         </div>

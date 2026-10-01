@@ -121,7 +121,7 @@ body {
   align-items: center;
   gap: 16px;
   width: 100%;
-  padding: 8px 0;
+  padding: 20px 0 8px;
 }
 
 .sidebar .nav-item {
@@ -253,8 +253,13 @@ body {
   width: 8px;
   height: 8px;
   border-radius: 50%;
+  background-color: #94a3b8;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.topbar-ip-dot--on {
   background-color: #22c55e;
-  box-shadow: 0 0 6px rgba(34, 197, 94, 0.4);
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.5);
 }
 
 .topbar-ip-label {
@@ -3705,9 +3710,9 @@ body {
 }
 
 .settings-status-badge.disconnected {
-  background: #fef2f2;
-  color: #dc2626;
-  border: 1px solid #fecaca;
+  background: #f1f5f9;
+  color: #64748b;
+  border: 1px solid #e2e8f0;
 }
 
 .settings-status-dot {
@@ -3724,7 +3729,7 @@ body {
 }
 
 .settings-status-badge.disconnected .settings-status-dot {
-  background: #ef4444;
+  background: #94a3b8;
 }
 
 @keyframes pulse-green {
@@ -3876,6 +3881,10 @@ body {
   font-weight: 600;
   color: #15803d;
   margin-right: auto;
+}
+
+.settings-feedback-msg--error {
+  color: #dc2626;
 }
 
 /* =============================================

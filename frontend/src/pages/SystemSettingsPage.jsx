@@ -56,7 +56,7 @@ const SystemSettingsPage = () => {
   const [homeX, setHomeX] = useState(() => localStorage.getItem('home_x') || '0.0')
   const [homeY, setHomeY] = useState(() => localStorage.getItem('home_y') || '0.0')
   const [homeZ, setHomeZ] = useState(() => localStorage.getItem('home_z') || '0.0')
-  const [feedbackMsg, setFeedbackMsg] = useState(null)
+  const [feedbackMsg, setFeedbackMsg] = useState(null) // { text, type: 'ok'|'error' }
 
   /* Save states */
   const [savedSection, setSavedSection] = useState(null)
@@ -66,8 +66,8 @@ const SystemSettingsPage = () => {
     setTimeout(() => setSavedSection(null), 2000)
   }
 
-  const showFeedback = (msg) => {
-    setFeedbackMsg(msg)
+  const showFeedback = (msg, type = 'ok') => {
+    setFeedbackMsg({ text: msg, type })
     setTimeout(() => setFeedbackMsg(null), 3000)
   }
 
@@ -151,13 +151,13 @@ const SystemSettingsPage = () => {
       const data = await res.json()
       setRobotConnected(!!data.ok)
       if (data.ok) {
-        showFeedback('Robot connected')
+        showFeedback('Robot connected', 'ok')
       } else {
-        showFeedback('Robot connection failed')
+        showFeedback('Robot connection failed', 'error')
       }
     } catch {
       setRobotConnected(false)
-      showFeedback('Network error')
+      showFeedback('Network error', 'error')
     } finally {
       setRobotLoading(false)
     }
@@ -232,7 +232,11 @@ const SystemSettingsPage = () => {
               <StatusBadge connected={robotConnected} />
             </SettingsRow>
             <div className="settings-actions">
-              {feedbackMsg && <span className="settings-feedback-msg">{feedbackMsg}</span>}
+              {feedbackMsg && (
+                <span className={`settings-feedback-msg${feedbackMsg.type === 'error' ? ' settings-feedback-msg--error' : ''}`}>
+                  {feedbackMsg.text}
+                </span>
+              )}
               <button
                 id="btn-test-connection"
                 className={`settings-btn settings-btn--secondary ${robotLoading ? 'loading' : ''}`}
