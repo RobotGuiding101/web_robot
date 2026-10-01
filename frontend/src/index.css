@@ -13,7 +13,11 @@ html {
 }
 
 body {
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family:
+    "Inter",
+    system-ui,
+    -apple-system,
+    sans-serif;
   background-color: #ffffff;
   color: #1a2f45;
   -webkit-user-select: none;
@@ -311,6 +315,59 @@ body {
   }
 }
 
+/* ── TopBar Connect Button ───────────────────── */
+.topbar-connect-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 18px;
+  border-radius: 20px;
+  border: 1.5px solid #94a3b8;
+  background: #ffffff;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  white-space: nowrap;
+}
+.topbar-connect-btn:hover:not(:disabled) {
+  border-color: #1a8fe3;
+  color: #1a8fe3;
+  background: #f0f8ff;
+}
+.topbar-connect-btn:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+.topbar-connect-btn--connected {
+  border-color: rgba(74, 222, 128, 0.6);
+  color: #16a34a;
+  background: rgba(74, 222, 128, 0.08);
+}
+.topbar-connect-btn--connected:hover:not(:disabled) {
+  border-color: #16a34a;
+  background: rgba(74, 222, 128, 0.15);
+  color: #15803d;
+}
+.topbar-connect-btn--error {
+  border-color: rgba(239, 68, 68, 0.6);
+  color: #dc2626;
+  background: rgba(239, 68, 68, 0.07);
+}
+.topbar-connect-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #94a3b8;
+  flex-shrink: 0;
+  transition: background 0.18s ease;
+}
+.topbar-connect-dot--on {
+  background: #4ade80;
+  box-shadow: 0 0 6px rgba(74, 222, 128, 0.7);
+}
+
 /* =============================================
    Card & Placeholder Box Base Styles
    ============================================= */
@@ -326,7 +383,10 @@ body {
   text-align: center;
   color: #1a2f45;
   cursor: pointer;
-  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.1s ease;
   min-height: 44px;
   box-shadow: 0 2px 8px rgba(74, 114, 160, 0.05);
 }
@@ -343,7 +403,10 @@ body {
   text-align: center;
   color: #1a2f45;
   cursor: pointer;
-  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.1s ease;
   min-height: 44px;
   box-shadow: 0 2px 8px rgba(74, 114, 160, 0.05);
 }
@@ -416,7 +479,6 @@ body {
 }
 
 @keyframes hero-float {
-
   0%,
   100% {
     transform: translateY(0);
@@ -460,18 +522,25 @@ body {
   border-radius: 18px;
   cursor: pointer;
   text-align: left;
-  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease,
+    border-color 0.18s ease;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
   position: relative;
   overflow: hidden;
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: "Inter", system-ui, sans-serif;
 }
 
 .dash-card::before {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.45) 0%, transparent 60%);
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.45) 0%,
+    transparent 60%
+  );
   pointer-events: none;
 }
 
@@ -704,7 +773,7 @@ body {
   scroll-behavior: smooth;
 }
 
-.ctrl-box>* {
+.ctrl-box > * {
   flex-shrink: 0;
 }
 
@@ -851,7 +920,7 @@ body {
 .frame-status-text {
   font-size: 11px;
   color: #5c6f82;
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
   background: #f0f3f8;
   padding: 3px 8px;
   border-radius: 6px;
@@ -883,7 +952,6 @@ body {
 }
 
 @keyframes pulse-green {
-
   0%,
   100% {
     opacity: 1;
@@ -901,7 +969,7 @@ body {
 }
 
 .status-box {
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  font-family: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
   font-size: 10.5px;
   color: #5c6f82;
   background: #f0f3f8;
@@ -919,7 +987,7 @@ body {
   min-height: 52px;
   max-height: 90px;
   overflow-y: auto;
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  font-family: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
   font-size: 11px;
   display: flex;
   flex-direction: column;
@@ -976,7 +1044,7 @@ body {
   background: #f0f3f8;
   font-size: 12px;
   color: #1a2f45;
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
   transition: border-color 0.12s ease;
 }
 
@@ -1453,7 +1521,8 @@ body {
   flex: 1;
   overflow-y: auto;
   padding: 6px 10px;
-  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+  font-family:
+    "JetBrains Mono", "Fira Code", "Cascadia Code", ui-monospace, monospace;
   font-size: 11.5px;
   display: flex;
   flex-direction: column;
@@ -1621,7 +1690,9 @@ body {
   aspect-ratio: 1;
   border-radius: 5px;
   cursor: pointer;
-  transition: transform 0.1s ease, box-shadow 0.1s ease;
+  transition:
+    transform 0.1s ease,
+    box-shadow 0.1s ease;
   min-width: 0;
 }
 
@@ -1827,7 +1898,6 @@ body {
 }
 
 @keyframes dm-pulse {
-
   0%,
   100% {
     box-shadow: 0 4px 14px rgba(74, 114, 160, 0.35);
@@ -2057,7 +2127,9 @@ body {
   border-radius: 50%;
   cursor: pointer;
   flex-shrink: 0;
-  transition: transform 0.1s ease, box-shadow 0.1s ease;
+  transition:
+    transform 0.1s ease,
+    box-shadow 0.1s ease;
 }
 
 .dm-dot:hover {
@@ -2160,15 +2232,20 @@ body {
   overflow: hidden;
   background: #ffffff;
   border: 1.5px solid #dbe3ed;
-  box-shadow: 0 10px 25px -3px rgba(15, 23, 42, 0.16), 0 4px 10px -2px rgba(15, 23, 42, 0.08);
-  transition: width 0.24s cubic-bezier(0.4, 0, 0.2, 1),
+  box-shadow:
+    0 10px 25px -3px rgba(15, 23, 42, 0.16),
+    0 4px 10px -2px rgba(15, 23, 42, 0.08);
+  transition:
+    width 0.24s cubic-bezier(0.4, 0, 0.2, 1),
     height 0.24s cubic-bezier(0.4, 0, 0.2, 1),
     border-radius 0.24s ease,
     box-shadow 0.2s ease;
 }
 
 .dm-3d-floating:hover {
-  box-shadow: 0 14px 30px -4px rgba(15, 23, 42, 0.22), 0 6px 14px -3px rgba(15, 23, 42, 0.12);
+  box-shadow:
+    0 14px 30px -4px rgba(15, 23, 42, 0.22),
+    0 6px 14px -3px rgba(15, 23, 42, 0.12);
 }
 
 .dm-3d-floating--expanded {
@@ -2569,7 +2646,7 @@ body {
 /* Quick Action bar */
 .dm-quick-actions {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 6px;
 }
 
@@ -2617,6 +2694,25 @@ body {
   height: 6px;
   border-radius: 50%;
   background: #10b981;
+}
+
+.dm-quick-btn--secondary {
+  border-color: #94a3b8;
+  color: #475569;
+}
+.dm-quick-btn--ok {
+  background: #ecfdf5;
+  border-color: #34d399;
+  color: #15803d;
+}
+.dm-quick-btn--error {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  color: #dc2626;
+}
+.dm-quick-btn--loading {
+  opacity: 0.75;
+  cursor: default;
 }
 
 /* Alignment Stat Badges */
@@ -3098,9 +3194,6 @@ body {
   object-fit: contain;
 }
 
-
-
-
 .login-title {
   font-size: 22px;
   font-weight: 800;
@@ -3497,9 +3590,15 @@ body {
   color: #1a2f45;
   background: #ffffff;
   outline: none;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
   width: 200px;
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family:
+    "Inter",
+    system-ui,
+    -apple-system,
+    sans-serif;
 }
 
 .settings-input:focus {
@@ -3533,7 +3632,11 @@ body {
   outline: none;
   cursor: pointer;
   transition: border-color 0.15s ease;
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family:
+    "Inter",
+    system-ui,
+    -apple-system,
+    sans-serif;
 }
 
 .settings-select:focus {
@@ -3562,7 +3665,7 @@ body {
   border: 1.5px solid #bccad8;
 }
 
-.settings-toggle input:checked+.settings-toggle-track {
+.settings-toggle input:checked + .settings-toggle-track {
   background: #4a72a0;
   border-color: #4a72a0;
 }
@@ -3579,7 +3682,7 @@ body {
   transition: transform 0.2s ease;
 }
 
-.settings-toggle input:checked+.settings-toggle-track .settings-toggle-thumb {
+.settings-toggle input:checked + .settings-toggle-track .settings-toggle-thumb {
   transform: translateX(20px);
 }
 
@@ -3625,7 +3728,6 @@ body {
 }
 
 @keyframes pulse-green {
-
   0%,
   100% {
     box-shadow: 0 0 6px rgba(34, 197, 94, 0.5);
@@ -3661,7 +3763,11 @@ body {
   cursor: pointer;
   border: none;
   transition: all 0.15s ease;
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family:
+    "Inter",
+    system-ui,
+    -apple-system,
+    sans-serif;
   white-space: nowrap;
 }
 
@@ -3750,8 +3856,14 @@ body {
   color: #1a2f45;
   background: #ffffff;
   outline: none;
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  font-family:
+    "Inter",
+    system-ui,
+    -apple-system,
+    sans-serif;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .settings-coord-input:focus {
@@ -3966,7 +4078,11 @@ body {
   outline: none;
   transition: border-color 0.15s ease;
   width: 100%;
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family:
+    "Inter",
+    system-ui,
+    -apple-system,
+    sans-serif;
   font-variant-numeric: tabular-nums;
 }
 
@@ -4056,7 +4172,6 @@ body {
 }
 
 @keyframes pulse-dot {
-
   0%,
   100% {
     box-shadow: 0 0 8px rgba(74, 114, 160, 0.8);
@@ -4100,7 +4215,7 @@ body {
   flex: 1;
   overflow-y: auto;
   padding: 10px 14px;
-  font-family: 'Courier New', monospace;
+  font-family: "Courier New", monospace;
   font-size: 11.5px;
   line-height: 1.6;
   color: #1a2f45;
@@ -4127,7 +4242,11 @@ body {
   border-radius: 6px;
   padding: 2px 10px;
   cursor: pointer;
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family:
+    "Inter",
+    system-ui,
+    -apple-system,
+    sans-serif;
   transition: all 0.15s ease;
 }
 
@@ -4241,7 +4360,6 @@ body {
 }
 
 @keyframes pulse {
-
   0%,
   100% {
     opacity: 0.7;
@@ -4300,7 +4418,7 @@ body {
 }
 
 .o-pad::after {
-  content: '';
+  content: "";
   position: absolute;
   z-index: 2;
   width: 20%;
@@ -4311,7 +4429,7 @@ body {
   border-radius: 50%;
   transform: translate(-50%, -50%);
   display: none;
-  transition: all .25s;
+  transition: all 0.25s;
   cursor: pointer;
 }
 
@@ -4328,33 +4446,33 @@ body {
   height: 50%;
   text-align: center;
   transform: rotate(45deg);
-  border: 1px solid rgba(0, 0, 0, .2);
+  border: 1px solid rgba(0, 0, 0, 0.2);
 }
 
 .o-pad a::before {
-  content: '';
+  content: "";
   position: absolute;
   width: 60%;
   height: 60%;
   top: 50%;
   left: 50%;
-  background: rgba(255, 255, 255, .1);
+  background: rgba(255, 255, 255, 0.1);
   border-radius: 50%;
   transform: translate(-50%, -50%);
-  transition: all .25s;
+  transition: all 0.25s;
   cursor: pointer;
   display: none;
 }
 
 .o-pad a::after {
-  content: '';
+  content: "";
   position: absolute;
   width: 0;
   height: 0;
   border-radius: 5px;
   border-style: solid;
   transform: translate(-50%, -50%) rotate(-45deg);
-  transition: all .25s;
+  transition: all 0.25s;
 }
 
 /* UP */
@@ -4367,9 +4485,11 @@ body {
 }
 
 .o-pad a.up:hover {
-  background: linear-gradient(315deg,
-      rgba(255, 255, 255, 0) 15%,
-      rgba(255, 255, 255, .4) 100%);
+  background: linear-gradient(
+    315deg,
+    rgba(255, 255, 255, 0) 15%,
+    rgba(255, 255, 255, 0.4) 100%
+  );
 }
 
 .o-pad a.up::before {
@@ -4398,9 +4518,11 @@ body {
 }
 
 .o-pad a.down:hover {
-  background: linear-gradient(135deg,
-      rgba(255, 255, 255, 0) 15%,
-      rgba(255, 255, 255, .4) 100%);
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0) 15%,
+    rgba(255, 255, 255, 0.4) 100%
+  );
 }
 
 .o-pad a.down::before {
@@ -4429,9 +4551,11 @@ body {
 }
 
 .o-pad a.left:hover {
-  background: linear-gradient(225deg,
-      rgba(255, 255, 255, 0) 15%,
-      rgba(255, 255, 255, .4) 100%);
+  background: linear-gradient(
+    225deg,
+    rgba(255, 255, 255, 0) 15%,
+    rgba(255, 255, 255, 0.4) 100%
+  );
 }
 
 .o-pad a.left::before {
@@ -4460,9 +4584,11 @@ body {
 }
 
 .o-pad a.right:hover {
-  background: linear-gradient(45deg,
-      rgba(255, 255, 255, 0) 15%,
-      rgba(255, 255, 255, .4) 100%);
+  background: linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0) 15%,
+    rgba(255, 255, 255, 0.4) 100%
+  );
 }
 
 .o-pad a.right::before {
@@ -4516,9 +4642,11 @@ body {
 }
 
 .ud-btn.up:hover {
-  background: linear-gradient(315deg,
-      rgba(255, 255, 255, 0) 15%,
-      rgba(255, 255, 255, .4) 100%);
+  background: linear-gradient(
+    315deg,
+    rgba(255, 255, 255, 0) 15%,
+    rgba(255, 255, 255, 0.4) 100%
+  );
 }
 
 /* DOWN */
@@ -4528,9 +4656,11 @@ body {
 }
 
 .ud-btn.down:hover {
-  background: linear-gradient(135deg,
-      rgba(255, 255, 255, 0) 15%,
-      rgba(255, 255, 255, .4) 100%);
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0) 15%,
+    rgba(255, 255, 255, 0.4) 100%
+  );
 }
 
 /* ลูกศร */
@@ -4955,7 +5085,11 @@ body {
   flex-shrink: 0;
   border-radius: 12px;
   border: 1.5px solid rgba(59, 130, 246, 0.25);
-  background: linear-gradient(135deg, rgba(239, 246, 255, 0.9), rgba(224, 242, 254, 0.7));
+  background: linear-gradient(
+    135deg,
+    rgba(239, 246, 255, 0.9),
+    rgba(224, 242, 254, 0.7)
+  );
   overflow: hidden;
   box-shadow: 0 2px 10px rgba(59, 130, 246, 0.08);
 }
@@ -5166,7 +5300,11 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 8px 12px;
-  background: linear-gradient(135deg, rgba(71, 85, 105, 0.09), rgba(100, 116, 139, 0.05));
+  background: linear-gradient(
+    135deg,
+    rgba(71, 85, 105, 0.09),
+    rgba(100, 116, 139, 0.05)
+  );
   border-bottom: 1px solid rgba(100, 116, 139, 0.2);
   font-size: 11px;
 }
@@ -5338,7 +5476,11 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 8px 12px;
-  background: linear-gradient(135deg, rgba(6, 182, 212, 0.07), rgba(14, 165, 233, 0.04));
+  background: linear-gradient(
+    135deg,
+    rgba(6, 182, 212, 0.07),
+    rgba(14, 165, 233, 0.04)
+  );
   border-bottom: 1px solid rgba(6, 182, 212, 0.2);
   font-size: 11px;
   flex-wrap: wrap;
@@ -5490,7 +5632,6 @@ body {
 }
 
 @keyframes pulse-step {
-
   0%,
   100% {
     transform: scale(1);
@@ -5552,7 +5693,6 @@ body {
 }
 
 @keyframes pulse-stop-btn {
-
   0%,
   100% {
     opacity: 1;
