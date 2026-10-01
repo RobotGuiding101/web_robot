@@ -92,6 +92,16 @@ class Camera:
         self._stacked_frame = None
         self._stacked_key = None
 
+        # ── SDK colored point cloud (RealSense post-processing + rs.pointcloud) ──
+        self._pc          = None
+        self._dec         = None
+        self._spat        = None
+        self._temp        = None
+        self._hole        = None
+        self._cloud_buf   = None       # (positions_m float32[N,3], colors_rgb uint8[N,3])
+        self._cloud_lock  = threading.Lock()
+        self._cloud_every = 3          # rebuild cloud every N captured frames
+
     def start(self, retries=3, retry_delay=1.0) -> bool:
         if not HAS_RS:
             log("  pyrealsense2 not installed"); return False
@@ -142,6 +152,7 @@ class Camera:
             ci          = prof.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
             self.intrinsics = {"fx": ci.fx, "fy": ci.fy, "cx": ci.ppx, "cy": ci.ppy}
             self.w = ci.width; self.h = ci.height
+            self._init_cloud_pipeline()
             self._running = True
             for _ in range(30):
                 self.pipe.wait_for_frames()
@@ -182,6 +193,58 @@ class Camera:
         self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
         self._capture_thread.start()
 
+    def _init_cloud_pipeline(self):
+        """Set up the SDK point-cloud path: decimate -> spatial -> temporal ->
+        hole-filling, then rs.pointcloud mapped to the (aligned) color frame.
+        Failure is non-fatal: the app keeps running with the cloud disabled."""
+        if not HAS_RS:
+            return
+        try:
+            dec = rs.decimation_filter()
+            dec.set_option(rs.option.filter_magnitude, 4)
+            self._dec = dec
+            self._spat = rs.spatial_filter()
+            self._temp = rs.temporal_filter()
+            self._hole = rs.hole_filling_filter()
+            self._pc = rs.pointcloud()
+            with self._cloud_lock:
+                self._cloud_buf = None
+            log("  [Cam] point cloud: SDK pipeline ready "
+                "(decimation x4 + spatial + temporal + hole-filling)")
+        except Exception as e:
+            self._pc = None
+            log(f"  [Cam] point cloud init failed: {e}")
+
+    def _build_cloud(self, df, cf):
+        """Run the filter chain + rs.pointcloud on one aligned frame pair and
+        stash the colored cloud for get_latest_pointcloud()."""
+        try:
+            d = self._dec.process(df)
+            d = self._spat.process(d)
+            d = self._temp.process(d)
+            d = self._hole.process(d)
+            self._pc.map_to(cf)
+            pts = self._pc.calculate(d)
+            verts = np.asanyarray(pts.get_vertices())
+            if verts.size == 0:
+                return
+            xyz = np.ascontiguousarray(verts.view(np.float32).reshape(-1, 3))
+            tex = np.asanyarray(pts.get_texture_coordinates()).view(np.float32).reshape(-1, 2)
+            valid = xyz[:, 2] > 0.05
+            if not valid.any():
+                return
+            xyz = xyz[valid]
+            tex = tex[valid]
+            cimg = np.asanyarray(cf.get_data())
+            h, w = cimg.shape[:2]
+            u = np.clip((tex[:, 0] * w).astype(np.int32), 0, w - 1)
+            v = np.clip((tex[:, 1] * h).astype(np.int32), 0, h - 1)
+            rgb = np.ascontiguousarray(cimg[v, u][:, ::-1])
+            with self._cloud_lock:
+                self._cloud_buf = (xyz, rgb)
+        except Exception as e:
+            log(f"  [Cam] cloud build failed: {e}")
+
     def _capture_loop(self):
         while not self._capture_stop_event.is_set():
             try:
@@ -207,6 +270,9 @@ class Camera:
                 if cf:
                     with self._color_lock:
                         self._color_buf = np.asanyarray(cf.get_data()).copy()
+                if (self._pc is not None and df and cf and
+                        (self._frame_count % self._cloud_every == 0)):
+                    self._build_cloud(df, cf)
                 self._frame_count += 1
                 self._err_streak = 0
             except Exception as e:
@@ -275,6 +341,7 @@ class Camera:
             self.intrinsics = {"fx": ci.fx, "fy": ci.fy, "cx": ci.ppx, "cy": ci.ppy}
             self.w = ci.width
             self.h = ci.height
+            self._init_cloud_pipeline()
             for _ in range(15):
                 self.pipe.wait_for_frames()
         except Exception:
@@ -318,6 +385,17 @@ class Camera:
         with self._depth_lock:
             depth = self._depth_buf[-1] if self._depth_buf else None
         return color, depth
+
+    def get_latest_pointcloud(self):
+        """Most recent SDK colored cloud as (positions_m[N,3] float32,
+        colors_rgb[N,3] uint8), or (None, None) before the first build.
+
+        The capture thread only ever replaces the tuple, so the returned
+        arrays are stable read-only snapshots."""
+        with self._cloud_lock:
+            if self._cloud_buf is None:
+                return None, None
+            return self._cloud_buf
 
     def get_latest_color(self, max_wait: float = 2.0):
         """Most recent color frame, written by capture thread.

@@ -1,4 +1,5 @@
 import time
+import struct
 from typing import Optional
 from fastapi import APIRouter, Response, Query
 from fastapi.responses import StreamingResponse
@@ -351,6 +352,23 @@ def camera_stream_secondary(serial: Optional[str] = None, mode: Optional[str] = 
         media_type="multipart/x-mixed-replace; boundary=frame",
         headers=_STREAM_HEADERS,
     )
+
+
+@router.get("/pointcloud2")
+def camera_pointcloud2(serial: Optional[str] = None):
+    """Secondary camera's SDK colored cloud, same binary layout as
+    /api/map/pointcloud (uint32 N + int16 mm xyz + uint8 rgb)."""
+    c2 = ensure_cam2_running(target_serial=serial)
+    if not c2 or not c2._running:
+        return Response(status_code=503)
+    pos, col = c2.get_latest_pointcloud()
+    if pos is None or pos.shape[0] == 0:
+        return Response(status_code=503)
+    mm = np.clip(pos * 1000.0, -32767.0, 32767.0).astype("<i2")
+    rgb = np.ascontiguousarray(col, dtype=np.uint8)
+    body = struct.pack("<I", mm.shape[0]) + mm.tobytes() + rgb.tobytes()
+    return Response(content=body, media_type="application/octet-stream",
+                    headers=_STREAM_HEADERS)
 
 
 @router.get("/snapshot")
