@@ -22,7 +22,8 @@
             height: 100vh;
         }
 
-        #mount-tune, #cam2-tune {
+        #mount-tune,
+        #cam2-tune {
             position: absolute;
             left: 12px;
             z-index: 45;
@@ -36,16 +37,23 @@
             gap: 3px;
         }
 
-        #mount-tune { top: 12px; }
-        #cam2-tune { top: 185px; }
+        #mount-tune {
+            top: 12px;
+        }
 
-        #mount-tune label, #cam2-tune label {
+        #cam2-tune {
+            top: 185px;
+        }
+
+        #mount-tune label,
+        #cam2-tune label {
             display: flex;
             align-items: center;
             gap: 6px;
         }
 
-        #mount-tune input[type=range], #cam2-tune input[type=range] {
+        #mount-tune input[type=range],
+        #cam2-tune input[type=range] {
             width: 110px;
         }
 
@@ -149,39 +157,44 @@
             gap: 5px;
             padding: 6px 12px;
             border-radius: 8px;
-            border: 1px solid rgba(0,0,0,0.15);
-            background: rgba(255,255,255,0.88);
+            border: 1px solid rgba(0, 0, 0, 0.15);
+            background: rgba(255, 255, 255, 0.88);
             backdrop-filter: blur(8px);
             color: #1e293b;
             font-size: 11px;
             font-weight: 600;
             cursor: pointer;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
             transition: all 0.15s ease;
             user-select: none;
         }
+
         .gizmo-btn:hover {
-            background: rgba(240,248,255,0.95);
+            background: rgba(240, 248, 255, 0.95);
             border-color: #3b82f6;
             color: #1d4ed8;
         }
+
         .gizmo-btn.active {
             background: #1d4ed8;
             border-color: #1d4ed8;
             color: #fff;
-            box-shadow: 0 2px 10px rgba(29,78,216,0.4);
+            box-shadow: 0 2px 10px rgba(29, 78, 216, 0.4);
         }
+
         .gizmo-btn .kbd {
             font-size: 9px;
             padding: 1px 4px;
             border-radius: 4px;
-            background: rgba(0,0,0,0.08);
+            background: rgba(0, 0, 0, 0.08);
             color: inherit;
             opacity: 0.7;
         }
+
         .gizmo-btn.active .kbd {
-            background: rgba(255,255,255,0.25);
+            background: rgba(255, 255, 255, 0.25);
         }
+
         /* ── Gizmo Guide Badge ── */
         .gizmo-guide {
             display: flex;
@@ -189,15 +202,16 @@
             gap: 7px;
             padding: 5px 12px;
             border-radius: 8px;
-            border: 1px solid rgba(0,0,0,0.12);
-            background: rgba(255,255,255,0.92);
+            border: 1px solid rgba(0, 0, 0, 0.12);
+            background: rgba(255, 255, 255, 0.92);
             backdrop-filter: blur(8px);
             color: #1e293b;
             font-size: 11px;
             font-weight: 600;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
             user-select: none;
         }
+
         .guide-dot {
             display: inline-block;
             width: 8px;
@@ -206,9 +220,22 @@
             margin-right: 3px;
             vertical-align: middle;
         }
-        .dot-xyz { background: #3b82f6; box-shadow: 0 0 5px #3b82f6; }
-        .dot-j4  { background: #ef4444; box-shadow: 0 0 5px #ef4444; }
-        .dot-j5  { background: #10b981; box-shadow: 0 0 5px #10b981; }
+
+        .dot-xyz {
+            background: #3b82f6;
+            box-shadow: 0 0 5px #3b82f6;
+        }
+
+        .dot-j4 {
+            background: #ef4444;
+            box-shadow: 0 0 5px #ef4444;
+        }
+
+        .dot-j5 {
+            background: #10b981;
+            box-shadow: 0 0 5px #10b981;
+        }
+
         .guide-sep {
             color: #cbd5e1;
             font-weight: 300;
@@ -247,35 +274,51 @@
     </div>
     <!-- Gizmo Toolbar -->
     <div id="gizmo-toolbar">
-        <button id="btn-snap" class="gizmo-btn gizmo-btn-snap" title="Snap Gizmo back to arm tip &amp; capture Ghost Shadow (R)">
+        <button id="btn-snap" class="gizmo-btn gizmo-btn-snap"
+            title="Snap Gizmo back to arm tip &amp; capture Ghost Shadow (R)">
             ⊙ Snap เงา <span class="kbd">R</span>
         </button>
-        <button id="btn-clear-ghost" class="gizmo-btn gizmo-btn-clear" style="display:none;" title="Clear ghost shadow (C)">
+        <button id="btn-clear-ghost" class="gizmo-btn gizmo-btn-clear" style="display:none;"
+            title="Clear ghost shadow (C)">
             ✖ ลบเงา <span class="kbd">C</span>
         </button>
     </div>
 
     <!-- Floating tooltip for joint angle during hover / drag -->
-    <div id="joint-tooltip" style="position:fixed;display:none;pointer-events:none;z-index:9999;background:rgba(15,23,42,0.92);backdrop-filter:blur(6px);color:#fff;font:11px/1.4 system-ui,sans-serif;font-weight:600;padding:5px 9px;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.18);"></div>
+    <div id="joint-tooltip"
+        style="position:fixed;display:none;pointer-events:none;z-index:9999;background:rgba(15,23,42,0.92);backdrop-filter:blur(6px);color:#fff;font:11px/1.4 system-ui,sans-serif;font-weight:600;padding:5px 9px;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.18);">
+    </div>
 
     <div id="canvas-container"></div>
 
     <div id="mount-tune">
-        <label>X <input type="range" id="mt-px" min="-2" max="2" step="0.05" value="0"><span id="mt-px-v">0</span></label>
-        <label>Y <input type="range" id="mt-py" min="-2" max="2" step="0.05" value="0"><span id="mt-py-v">0</span></label>
-        <label>Z <input type="range" id="mt-pz" min="-2" max="2" step="0.01" value="-0.02"><span id="mt-pz-v">-0.02</span></label>
-        <label>RotX <input type="range" id="mt-rx" min="-180" max="180" step="5" value="180"><span id="mt-rx-v">180</span></label>
-        <label>RotY <input type="range" id="mt-ry" min="-180" max="180" step="5" value="0"><span id="mt-ry-v">0</span></label>
-        <label>RotZ <input type="range" id="mt-rz" min="-180" max="180" step="5" value="180"><span id="mt-rz-v">180</span></label>
+        <label>X <input type="range" id="mt-px" min="-2" max="2" step="0.05" value="0"><span
+                id="mt-px-v">0</span></label>
+        <label>Y <input type="range" id="mt-py" min="-2" max="2" step="0.05" value="0"><span
+                id="mt-py-v">0</span></label>
+        <label>Z <input type="range" id="mt-pz" min="-2" max="2" step="0.01" value="-0.02"><span
+                id="mt-pz-v">-0.02</span></label>
+        <label>RotX <input type="range" id="mt-rx" min="-180" max="180" step="5" value="180"><span
+                id="mt-rx-v">180</span></label>
+        <label>RotY <input type="range" id="mt-ry" min="-180" max="180" step="5" value="0"><span
+                id="mt-ry-v">0</span></label>
+        <label>RotZ <input type="range" id="mt-rz" min="-180" max="180" step="5" value="180"><span
+                id="mt-rz-v">180</span></label>
     </div>
 
     <div id="cam2-tune">
-        <label>X <input type="range" id="c2-px" min="-2" max="2" step="0.05" value="-0.05"><span id="c2-px-v">-0.05</span></label>
-        <label>Y <input type="range" id="c2-py" min="-2" max="2" step="0.05" value="0.75"><span id="c2-py-v">0.75</span></label>
-        <label>Z <input type="range" id="c2-pz" min="-2" max="2" step="0.05" value="0.75"><span id="c2-pz-v">0.75</span></label>
-        <label>RotX <input type="range" id="c2-rx" min="-180" max="180" step="5" value="-75"><span id="c2-rx-v">-75</span></label>
-        <label>RotY <input type="range" id="c2-ry" min="-180" max="180" step="5" value="0"><span id="c2-ry-v">0</span></label>
-        <label>RotZ <input type="range" id="c2-rz" min="-180" max="180" step="5" value="0"><span id="c2-rz-v">0</span></label>
+        <label>X <input type="range" id="c2-px" min="-2" max="2" step="0.05" value="-0.05"><span
+                id="c2-px-v">-0.05</span></label>
+        <label>Y <input type="range" id="c2-py" min="-2" max="2" step="0.05" value="0.75"><span
+                id="c2-py-v">0.75</span></label>
+        <label>Z <input type="range" id="c2-pz" min="-2" max="2" step="0.05" value="0.75"><span
+                id="c2-pz-v">0.75</span></label>
+        <label>RotX <input type="range" id="c2-rx" min="-180" max="180" step="5" value="-75"><span
+                id="c2-rx-v">-75</span></label>
+        <label>RotY <input type="range" id="c2-ry" min="-180" max="180" step="5" value="0"><span
+                id="c2-ry-v">0</span></label>
+        <label>RotZ <input type="range" id="c2-rz" min="-180" max="180" step="5" value="0"><span
+                id="c2-rz-v">0</span></label>
         <button id="btn-icp" type="button">Align (ICP)</button>
         <button id="btn-color" type="button">Color: Video</button>
         <label>3D mode
@@ -414,7 +457,7 @@
                     bmp.close();
                     depthTexture.needsUpdate = true;
                 })
-                .catch(() => {})
+                .catch(() => { })
                 .finally(() => { setTimeout(readDepthFrame, 120); });
         }
         readDepthFrame();
@@ -444,7 +487,7 @@
                 camCtx.drawImage(bmp, 0, 0);
                 bmp.close();
                 camTexture.needsUpdate = true;
-            }).catch(() => {});
+            }).catch(() => { });
         }
 
         function readCamStream() {
@@ -461,7 +504,7 @@
                     if (done) return;
                     buf = catBuf(buf, value);
                     let pos = 0;
-                    for (;;) {
+                    for (; ;) {
                         const soi = findSeq(buf, [0xff, 0xd8], pos);
                         if (soi < 0) { pos = Math.max(0, buf.length - 1); break; }
                         const eoi = findSeq(buf, [0xff, 0xd9], soi + 2);
@@ -485,7 +528,7 @@
                 cam2Ctx.drawImage(bmp, 0, 0);
                 bmp.close();
                 cam2Texture.needsUpdate = true;
-            }).catch(() => {});
+            }).catch(() => { });
         }
 
         function readCam2Stream() {
@@ -502,7 +545,7 @@
                     if (done) return;
                     buf = catBuf(buf, value);
                     let pos = 0;
-                    for (;;) {
+                    for (; ;) {
                         const soi = findSeq(buf, [0xff, 0xd8], pos);
                         if (soi < 0) { pos = Math.max(0, buf.length - 1); break; }
                         const eoi = findSeq(buf, [0xff, 0xd9], soi + 2);
@@ -653,7 +696,7 @@
             link5.add(c.scene); onModelLoaded();
         }, undefined, onModelLoaded);
 
-        loader.load('models/Link6test.dae', (c) => {
+        loader.load('models/Link6.dae', (c) => {
             c.scene.rotation.set(deg(180), deg(0), deg(180));
             c.scene.traverse((child) => {
                 if (child.isMesh) {
@@ -691,7 +734,7 @@
             projCam.matrixWorldInverse.copy(projCam.matrixWorld).invert();
             projCam.updateProjectionMatrix();
             texMatrix.multiplyMatrices(projBias, projCam.projectionMatrix)
-                     .multiply(projCam.matrixWorldInverse);
+                .multiply(projCam.matrixWorldInverse);
         }
 
         const MAX_PTS = 100000;
@@ -878,7 +921,7 @@
                     meshPosAttr.needsUpdate = true;
                     meshValAttr.needsUpdate = true;
                 })
-                .catch(() => {})
+                .catch(() => { })
                 .finally(() => { setTimeout(readDepthGrid, 60); });
         }
         readDepthGrid();
@@ -956,7 +999,7 @@
                     cloudPosAttr.needsUpdate = true;
                     cloudColAttr.needsUpdate = true;
                 })
-                .catch(() => {})
+                .catch(() => { })
                 .finally(() => { setTimeout(readPointCloud, 300); });
         }
         readPointCloud();
@@ -973,7 +1016,7 @@
             projCam2.matrixWorldInverse.copy(projCam2.matrixWorld).invert();
             projCam2.updateProjectionMatrix();
             texMatrix2.multiplyMatrices(projBias, projCam2.projectionMatrix)
-                      .multiply(projCam2.matrixWorldInverse);
+                .multiply(projCam2.matrixWorldInverse);
         }
 
         const CAM2_MAX_PTS = 100000;
@@ -1136,7 +1179,7 @@
                     mesh2PosAttr.needsUpdate = true;
                     mesh2ValAttr.needsUpdate = true;
                 })
-                .catch(() => {})
+                .catch(() => { })
                 .finally(() => { setTimeout(readDepthGrid2, 70); });
         }
         readDepthGrid2();
@@ -1195,7 +1238,7 @@
                     cam2PosAttr.needsUpdate = true;
                     cam2ColAttr.needsUpdate = true;
                 })
-                .catch(() => {})
+                .catch(() => { })
                 .finally(() => { setTimeout(readPointCloud2, 400); });
         }
         readPointCloud2();
@@ -1444,11 +1487,11 @@
             fetch('/api/camera/mode', { headers: { Authorization: 'Bearer ' + token }, cache: 'no-store' })
                 .then((r) => (r.ok ? r.json() : null))
                 .then((d) => { if (d && d.mode !== undefined) camMode1 = d.mode; })
-                .catch(() => {});
+                .catch(() => { });
             fetch('/api/camera/mode2', { headers: { Authorization: 'Bearer ' + token }, cache: 'no-store' })
                 .then((r) => (r.ok ? r.json() : null))
                 .then((d) => { if (d && d.mode !== undefined) camMode2 = d.mode; })
-                .catch(() => {});
+                .catch(() => { });
             setTimeout(pollCameraModes, 1500);
         }
         pollCameraModes();
@@ -1471,7 +1514,7 @@
                     projCam2.fov = (2 * Math.atan(d.h / (2 * d.fy)) * 180) / Math.PI;
                     projCam2.updateProjectionMatrix();
                 })
-                .catch(() => {});
+                .catch(() => { });
         })();
 
         function bindMountTune() {
@@ -1829,17 +1872,17 @@
             seg.getWorldPosition(_jointPos);
             _toEff.subVectors(_effPos, _jointPos);
             _toTarget.subVectors(target, _jointPos);
-            const localAxis = axis === 'x' ? new THREE.Vector3(1,0,0)
-                : axis === 'y' ? new THREE.Vector3(0,1,0)
-                : new THREE.Vector3(0,0,1);
+            const localAxis = axis === 'x' ? new THREE.Vector3(1, 0, 0)
+                : axis === 'y' ? new THREE.Vector3(0, 1, 0)
+                    : new THREE.Vector3(0, 0, 1);
             if (seg.parent) seg.parent.getWorldQuaternion(_parentQ);
             else _parentQ.identity();
             _worldAxis.copy(localAxis).applyQuaternion(_parentQ).normalize();
-            const effDot    = _toEff.dot(_worldAxis);
+            const effDot = _toEff.dot(_worldAxis);
             const targetDot = _toTarget.dot(_worldAxis);
             _effProj.copy(_toEff).addScaledVector(_worldAxis, -effDot);
             _targetProj.copy(_toTarget).addScaledVector(_worldAxis, -targetDot);
-            const effLen    = _effProj.length();
+            const effLen = _effProj.length();
             const targetLen = _targetProj.length();
             if (effLen < 0.001 || targetLen < 0.001) return true;
             _effProj.divideScalar(effLen);
@@ -1849,7 +1892,7 @@
             _cross.crossVectors(_effProj, _targetProj);
             if (_cross.dot(_worldAxis) < 0) angle = -angle;
             if (Math.abs(angle) > 0.0001) {
-                const curAngle  = seg.rotation[axis];
+                const curAngle = seg.rotation[axis];
                 const nextAngle = THREE.MathUtils.clamp(curAngle + angle, min, max);
                 seg.rotation[axis] = nextAngle;
                 if (axis !== 'x') seg.rotation.x = 0;
@@ -1865,9 +1908,9 @@
             // to prevent the 3D wrist model from breaking or twisting unnaturally.
             // J4 and J5 are rotated separately in 'Wrist J4/J5' mode (shortcut E).
             const IK_ARM_JOINTS = 3; // J1 (0), J2 (1), J3 (2)
-            const ITERATIONS    = 35;
-            const TOLERANCE     = 0.0015;
-            const DAMPING       = 0.70;
+            const ITERATIONS = 35;
+            const TOLERANCE = 0.0015;
+            const DAMPING = 0.70;
             for (let iter = 0; iter < ITERATIONS; iter++) {
                 endEffector.getWorldPosition(_effPos);
                 if (_effPos.distanceTo(targetPos) < TOLERANCE) break;
@@ -1895,8 +1938,8 @@
 
         // ── Send current target pose to parent React app ──
         const _rad2degFn = THREE.MathUtils.radToDeg;
-        const _tpEuler   = new THREE.Euler();
-        const _tpQuat    = new THREE.Quaternion();
+        const _tpEuler = new THREE.Euler();
+        const _tpQuat = new THREE.Quaternion();
 
         function _postTargetPose() {
             endEffector.getWorldPosition(_tcpPos);
@@ -1911,9 +1954,9 @@
             const mmX = safeCoord(_tcpPos.x * 1000);
             const mmY = safeCoord(_tcpPos.y * 1000);
             const mmZ = safeCoord(_tcpPos.z * 1000);
-            const rx  = safeCoord(_rad2degFn(_tpEuler.x));
-            const ry  = safeCoord(_rad2degFn(_tpEuler.y));
-            const rz  = safeCoord(_rad2degFn(_tpEuler.z));
+            const rx = safeCoord(_rad2degFn(_tpEuler.x));
+            const ry = safeCoord(_rad2degFn(_tpEuler.y));
+            const rz = safeCoord(_rad2degFn(_tpEuler.z));
 
             const joints = [
                 safeCoord(_rad2degFn(link1.rotation.y)),
@@ -2068,7 +2111,7 @@
                     child.material = ghostMat;
                     child.castShadow = false;
                     child.receiveShadow = false;
-                    child.raycast = () => {};
+                    child.raycast = () => { };
                 }
             });
 
