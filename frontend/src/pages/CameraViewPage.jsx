@@ -586,28 +586,6 @@ const CameraViewPage = () => {
                                 padding: '16px',
                               }}
                             >
-                              <span style={{ fontSize: '28px', opacity: 0.5 }}>📷</span>
-                              <span>กำลังเชื่อมต่อกล้องตัวที่ 2…</span>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setStream2Key(Date.now())
-                                  setStream2Error(false)
-                                }}
-                                style={{
-                                  marginTop: '4px',
-                                  background: '#2563eb',
-                                  border: 'none',
-                                  color: '#fff',
-                                  borderRadius: '6px',
-                                  padding: '5px 12px',
-                                  fontSize: '11px',
-                                  fontWeight: 600,
-                                  cursor: 'pointer',
-                                }}
-                              >
-                                ลองใหม่ (Retry)
-                              </button>
                             </div>
                           )}
                         </>
