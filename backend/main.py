@@ -57,6 +57,13 @@ async def lifespan(app: FastAPI):
             if attempt < 3:
                 time.sleep(5.0)
 
+        try:
+            from routers.camera import start_cam2_once
+            c2 = start_cam2_once()
+            print(f"[AutoStart] cam2 running={bool(c2 and c2._running)}", flush=True)
+        except Exception as e:
+            print(f"[AutoStart] cam2 start failed: {e}", flush=True)
+
         def _connect_robot():
             try:
                 if not robot.connected:

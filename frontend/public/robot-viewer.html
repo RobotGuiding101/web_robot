@@ -278,10 +278,20 @@
         <label>RotZ <input type="range" id="c2-rz" min="-180" max="180" step="5" value="0"><span id="c2-rz-v">0</span></label>
         <button id="btn-icp" type="button">Align (ICP)</button>
         <button id="btn-color" type="button">Color: Video</button>
+        <label>3D mode
+            <select id="sel-mode">
+                <option value="auto" selected>Auto (ตามกล้อง)</option>
+                <option value="rgb">RGB</option>
+                <option value="gray">Gray</option>
+                <option value="depth">Depth</option>
+            </select>
+        </label>
         <label><input type="checkbox" id="chk-auto" checked> Auto-align (ยึดตาม cam2)</label>
         <label><input type="checkbox" id="chk-mark2"> แสดง cam2 marker</label>
-        <label><input type="checkbox" id="chk-cloud1" checked> แสดง cloud cam1</label>
-        <label><input type="checkbox" id="chk-cloud2" checked> แสดง cloud cam2</label>
+        <label><input type="checkbox" id="chk-mesh1" checked> แสดง mesh cam1</label>
+        <label><input type="checkbox" id="chk-cloud1"> แสดง cloud cam1</label>
+        <label><input type="checkbox" id="chk-mesh2" checked> แสดง mesh cam2</label>
+        <label><input type="checkbox" id="chk-cloud2"> แสดง cloud cam2</label>
     </div>
 
     <button id="btn-panels" type="button">⚙ Tune</button>
@@ -684,7 +694,7 @@
                      .multiply(projCam.matrixWorldInverse);
         }
 
-        const MAX_PTS = 80000;
+        const MAX_PTS = 100000;
         const cloudPos = new Float32Array(MAX_PTS * 3);
         const cloudCol = new Float32Array(MAX_PTS * 3);
         const cloudGeo = new THREE.BufferGeometry();
@@ -710,7 +720,7 @@
         const discTex = new THREE.CanvasTexture(discCanvas);
 
         const cloudMatSensor = new THREE.PointsMaterial({
-            size: 0.006,
+            size: 0.004,
             sizeAttenuation: true,
             vertexColors: true,
             map: discTex,
@@ -725,7 +735,7 @@
                 texMatrix: { value: texMatrix },
                 flipX: { value: FLIP_X },
                 flipY: { value: FLIP_Y },
-                pointSize: { value: 0.004 },
+                pointSize: { value: 0.003 },
                 sizeFactor: { value: 800.0 },
             },
             vertexShader: [
@@ -768,6 +778,159 @@
         depthPoints.frustumCulled = false;
         projectorMount.add(depthPoints);
 
+        let camIntr = { fx: 426.0, fy: 425.5, cx: 426.0, cy: 243.8, w: 848, h: 480 };
+
+        const MESH_W = 212;
+        const MESH_H = 120;
+        const meshPos = new Float32Array(MESH_W * MESH_H * 3);
+        const meshUv = new Float32Array(MESH_W * MESH_H * 2);
+        const meshIndices = [];
+        for (let j = 0; j < MESH_H; j++) {
+            for (let i = 0; i < MESH_W; i++) {
+                const k = j * MESH_W + i;
+                meshUv[k * 2] = i / (MESH_W - 1);
+                meshUv[k * 2 + 1] = 1.0 - j / (MESH_H - 1);
+            }
+        }
+        for (let j = 0; j < MESH_H - 1; j++) {
+            for (let i = 0; i < MESH_W - 1; i++) {
+                const a = j * MESH_W + i;
+                const b = a + 1;
+                const c = a + MESH_W;
+                const e = c + 1;
+                meshIndices.push(a, c, b, b, c, e);
+            }
+        }
+        const meshValid = new Float32Array(MESH_W * MESH_H);
+        const meshGeo = new THREE.BufferGeometry();
+        const meshPosAttr = new THREE.BufferAttribute(meshPos, 3);
+        meshPosAttr.setUsage(THREE.DynamicDrawUsage);
+        meshGeo.setAttribute('position', meshPosAttr);
+        meshGeo.setAttribute('uv', new THREE.BufferAttribute(meshUv, 2));
+        const meshValAttr = new THREE.BufferAttribute(meshValid, 1);
+        meshValAttr.setUsage(THREE.DynamicDrawUsage);
+        meshGeo.setAttribute('aValid', meshValAttr);
+        meshGeo.setIndex(meshIndices);
+        const meshMat = new THREE.ShaderMaterial({
+            uniforms: { map: { value: camTexture } },
+            vertexShader: [
+                'attribute float aValid;',
+                'varying float vValid;',
+                'varying vec2 vUv;',
+                'void main() {',
+                '  vUv = uv;',
+                '  vValid = aValid;',
+                '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+                '}',
+            ].join('\n'),
+            fragmentShader: [
+                'uniform sampler2D map;',
+                'varying float vValid;',
+                'varying vec2 vUv;',
+                'void main() {',
+                '  if (vValid < 0.99) discard;',
+                '  gl_FragColor = texture2D(map, vUv);',
+                '}',
+            ].join('\n'),
+            side: THREE.DoubleSide,
+        });
+        const depthMesh = new THREE.Mesh(meshGeo, meshMat);
+        depthMesh.rotation.z = Math.PI / 2;
+        depthMesh.frustumCulled = false;
+        projectorMount.add(depthMesh);
+
+        function readDepthGrid() {
+            const token = localStorage.getItem('access_token') || '';
+            if (!token) { setTimeout(readDepthGrid, 2000); return; }
+            fetch('/api/map/depth_grid?_t=' + Date.now(), {
+                headers: { Authorization: 'Bearer ' + token },
+                cache: 'no-store',
+            }).then((r) => (r.ok ? r.arrayBuffer() : null))
+                .then((ab) => {
+                    if (!ab || ab.byteLength < 4) return;
+                    const dv = new DataView(ab);
+                    const w = dv.getUint16(0, true);
+                    const h = dv.getUint16(2, true);
+                    if (w !== MESH_W || h !== MESH_H) return;
+                    const d = new Uint16Array(ab, 4, w * h);
+                    const MAXMM = 1200;
+                    const JUMP = 80;
+                    const fx = camIntr.fx, fy = camIntr.fy, cx = camIntr.cx, cy = camIntr.cy;
+                    const iw = camIntr.w, ih = camIntr.h;
+                    for (let j = 0; j < h; j++) {
+                        for (let i = 0; i < w; i++) {
+                            const k = j * w + i;
+                            const zmm = d[k];
+                            let ok = zmm > 0 && zmm < MAXMM;
+                            if (ok && i > 0 && d[k - 1] > 0 && Math.abs(zmm - d[k - 1]) > JUMP) ok = false;
+                            if (ok && j > 0 && d[k - w] > 0 && Math.abs(zmm - d[k - w]) > JUMP) ok = false;
+                            if (ok && i < w - 1 && d[k + 1] > 0 && Math.abs(zmm - d[k + 1]) > JUMP) ok = false;
+                            if (ok && j < h - 1 && d[k + w] > 0 && Math.abs(zmm - d[k + w]) > JUMP) ok = false;
+                            const z = (ok ? zmm : 500) / 1000.0;
+                            const px = ((i + 0.5) / w) * iw;
+                            const py = ((j + 0.5) / h) * ih;
+                            meshPos[k * 3] = (px - cx) / fx * z;
+                            meshPos[k * 3 + 1] = -((py - cy) / fy * z);
+                            meshPos[k * 3 + 2] = -z;
+                            meshValid[k] = ok ? 1 : 0;
+                        }
+                    }
+                    meshPosAttr.needsUpdate = true;
+                    meshValAttr.needsUpdate = true;
+                })
+                .catch(() => {})
+                .finally(() => { setTimeout(readDepthGrid, 60); });
+        }
+        readDepthGrid();
+
+        let manualMode = 'auto';
+        let camMode1 = 'rgb';
+        let camMode2 = 'rgb';
+        let colorSrc = 'video';
+
+        function effMode(cam) {
+            return manualMode === 'auto' ? (cam === 2 ? camMode2 : camMode1) : manualMode;
+        }
+
+        function turboColor(t) {
+            const r = Math.min(1, Math.max(0, 1.5 - Math.abs(4 * t - 3)));
+            const g = Math.min(1, Math.max(0, 1.5 - Math.abs(4 * t - 2)));
+            const b = Math.min(1, Math.max(0, 1.5 - Math.abs(4 * t - 1)));
+            return [r, g, b];
+        }
+
+        function setCloudColors(colArr, posArr, count, rgb, mode) {
+            if (mode === 'gray') {
+                for (let i = 0; i < count; i++) {
+                    const j = i * 3;
+                    const l = (0.299 * rgb[j] + 0.587 * rgb[j + 1] + 0.114 * rgb[j + 2]) / 255;
+                    colArr[j] = l; colArr[j + 1] = l; colArr[j + 2] = l;
+                }
+                return;
+            }
+            if (mode === 'depth') {
+                let dmin = Infinity, dmax = -Infinity;
+                for (let i = 0; i < count; i++) {
+                    const d = -posArr[i * 3 + 2];
+                    if (d < dmin) dmin = d;
+                    if (d > dmax) dmax = d;
+                }
+                const span = Math.max(dmax - dmin, 0.05);
+                for (let i = 0; i < count; i++) {
+                    const t = Math.min(1, Math.max(0, (-posArr[i * 3 + 2] - dmin) / span));
+                    const c = turboColor(t);
+                    colArr[i * 3] = c[0]; colArr[i * 3 + 1] = c[1]; colArr[i * 3 + 2] = c[2];
+                }
+                return;
+            }
+            for (let i = 0; i < count; i++) {
+                const j = i * 3;
+                colArr[j] = rgb[j] / 255;
+                colArr[j + 1] = rgb[j + 1] / 255;
+                colArr[j + 2] = rgb[j + 2] / 255;
+            }
+        }
+
         function readPointCloud() {
             const token = localStorage.getItem('access_token') || '';
             if (!token) { setTimeout(readPointCloud, 2000); return; }
@@ -787,16 +950,14 @@
                         cloudPos[j] = mm[j] / 1000.0;
                         cloudPos[j + 1] = -mm[j + 1] / 1000.0;
                         cloudPos[j + 2] = -mm[j + 2] / 1000.0;
-                        cloudCol[j] = rgb[j] / 255.0;
-                        cloudCol[j + 1] = rgb[j + 1] / 255.0;
-                        cloudCol[j + 2] = rgb[j + 2] / 255.0;
                     }
+                    setCloudColors(cloudCol, cloudPos, count, rgb, effMode(1));
                     cloudGeo.setDrawRange(0, count);
                     cloudPosAttr.needsUpdate = true;
                     cloudColAttr.needsUpdate = true;
                 })
                 .catch(() => {})
-                .finally(() => { setTimeout(readPointCloud, 150); });
+                .finally(() => { setTimeout(readPointCloud, 300); });
         }
         readPointCloud();
 
@@ -815,7 +976,7 @@
                       .multiply(projCam2.matrixWorldInverse);
         }
 
-        const CAM2_MAX_PTS = 80000;
+        const CAM2_MAX_PTS = 100000;
         const cam2Pos = new Float32Array(CAM2_MAX_PTS * 3);
         const cam2Col = new Float32Array(CAM2_MAX_PTS * 3);
         const cam2Geo = new THREE.BufferGeometry();
@@ -827,7 +988,7 @@
         cam2Geo.setAttribute('color', cam2ColAttr);
         cam2Geo.setDrawRange(0, 0);
         const cam2MatSensor = new THREE.PointsMaterial({
-            size: 0.006,
+            size: 0.004,
             sizeAttenuation: true,
             vertexColors: true,
             map: discTex,
@@ -840,7 +1001,7 @@
             uniforms: {
                 map: { value: cam2Texture },
                 texMatrix: { value: texMatrix2 },
-                pointSize: { value: 0.004 },
+                pointSize: { value: 0.003 },
                 sizeFactor: { value: 800.0 },
             },
             vertexShader: [
@@ -877,6 +1038,108 @@
         const cam2Points = new THREE.Points(cam2Geo, cam2Mat);
         cam2Points.frustumCulled = false;
         cam2Mount.add(cam2Points);
+
+        const MESH2_W = 212;
+        const MESH2_H = 120;
+        const mesh2Pos = new Float32Array(MESH2_W * MESH2_H * 3);
+        const mesh2Uv = new Float32Array(MESH2_W * MESH2_H * 2);
+        const mesh2Valid = new Float32Array(MESH2_W * MESH2_H);
+        const mesh2Indices = [];
+        for (let j = 0; j < MESH2_H; j++) {
+            for (let i = 0; i < MESH2_W; i++) {
+                const k = j * MESH2_W + i;
+                mesh2Uv[k * 2] = i / (MESH2_W - 1);
+                mesh2Uv[k * 2 + 1] = 1.0 - j / (MESH2_H - 1);
+            }
+        }
+        for (let j = 0; j < MESH2_H - 1; j++) {
+            for (let i = 0; i < MESH2_W - 1; i++) {
+                const a = j * MESH2_W + i;
+                const b = a + 1;
+                const c = a + MESH2_W;
+                const e = c + 1;
+                mesh2Indices.push(a, c, b, b, c, e);
+            }
+        }
+        const mesh2Geo = new THREE.BufferGeometry();
+        const mesh2PosAttr = new THREE.BufferAttribute(mesh2Pos, 3);
+        mesh2PosAttr.setUsage(THREE.DynamicDrawUsage);
+        mesh2Geo.setAttribute('position', mesh2PosAttr);
+        mesh2Geo.setAttribute('uv', new THREE.BufferAttribute(mesh2Uv, 2));
+        const mesh2ValAttr = new THREE.BufferAttribute(mesh2Valid, 1);
+        mesh2ValAttr.setUsage(THREE.DynamicDrawUsage);
+        mesh2Geo.setAttribute('aValid', mesh2ValAttr);
+        mesh2Geo.setIndex(mesh2Indices);
+        const mesh2Mat = new THREE.ShaderMaterial({
+            uniforms: { map: { value: cam2Texture } },
+            vertexShader: [
+                'attribute float aValid;',
+                'varying float vValid;',
+                'varying vec2 vUv;',
+                'void main() {',
+                '  vUv = uv;',
+                '  vValid = aValid;',
+                '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+                '}',
+            ].join('\n'),
+            fragmentShader: [
+                'uniform sampler2D map;',
+                'varying float vValid;',
+                'varying vec2 vUv;',
+                'void main() {',
+                '  if (vValid < 0.99) discard;',
+                '  gl_FragColor = texture2D(map, vUv);',
+                '}',
+            ].join('\n'),
+            side: THREE.DoubleSide,
+        });
+        const depthMesh2 = new THREE.Mesh(mesh2Geo, mesh2Mat);
+        depthMesh2.frustumCulled = false;
+        cam2Mount.add(depthMesh2);
+
+        function readDepthGrid2() {
+            const token = localStorage.getItem('access_token') || '';
+            if (!token) { setTimeout(readDepthGrid2, 2000); return; }
+            fetch('/api/camera/depth_grid2?_t=' + Date.now(), {
+                headers: { Authorization: 'Bearer ' + token },
+                cache: 'no-store',
+            }).then((r) => (r.ok ? r.arrayBuffer() : null))
+                .then((ab) => {
+                    if (!ab || ab.byteLength < 4) return;
+                    const dv = new DataView(ab);
+                    const w = dv.getUint16(0, true);
+                    const h = dv.getUint16(2, true);
+                    if (w !== MESH2_W || h !== MESH2_H) return;
+                    const d = new Uint16Array(ab, 4, w * h);
+                    const MAXMM = 1200;
+                    const JUMP = 80;
+                    const fx = camIntr.fx, fy = camIntr.fy, cx = camIntr.cx, cy = camIntr.cy;
+                    const iw = camIntr.w, ih = camIntr.h;
+                    for (let j = 0; j < h; j++) {
+                        for (let i = 0; i < w; i++) {
+                            const k = j * w + i;
+                            const zmm = d[k];
+                            let ok = zmm > 0 && zmm < MAXMM;
+                            if (ok && i > 0 && d[k - 1] > 0 && Math.abs(zmm - d[k - 1]) > JUMP) ok = false;
+                            if (ok && j > 0 && d[k - w] > 0 && Math.abs(zmm - d[k - w]) > JUMP) ok = false;
+                            if (ok && i < w - 1 && d[k + 1] > 0 && Math.abs(zmm - d[k + 1]) > JUMP) ok = false;
+                            if (ok && j < h - 1 && d[k + w] > 0 && Math.abs(zmm - d[k + w]) > JUMP) ok = false;
+                            const z = (ok ? zmm : 500) / 1000.0;
+                            const px = ((i + 0.5) / w) * iw;
+                            const py = ((j + 0.5) / h) * ih;
+                            mesh2Pos[k * 3] = (px - cx) / fx * z;
+                            mesh2Pos[k * 3 + 1] = -((py - cy) / fy * z);
+                            mesh2Pos[k * 3 + 2] = -z;
+                            mesh2Valid[k] = ok ? 1 : 0;
+                        }
+                    }
+                    mesh2PosAttr.needsUpdate = true;
+                    mesh2ValAttr.needsUpdate = true;
+                })
+                .catch(() => {})
+                .finally(() => { setTimeout(readDepthGrid2, 70); });
+        }
+        readDepthGrid2();
 
         const cam2MarkerMat = new THREE.MeshStandardMaterial({
             color: 0xff5522,
@@ -926,16 +1189,14 @@
                         cam2Pos[j] = mm[j] / 1000.0;
                         cam2Pos[j + 1] = -mm[j + 1] / 1000.0;
                         cam2Pos[j + 2] = -mm[j + 2] / 1000.0;
-                        cam2Col[j] = rgb[j] / 255.0;
-                        cam2Col[j + 1] = rgb[j + 1] / 255.0;
-                        cam2Col[j + 2] = rgb[j + 2] / 255.0;
                     }
+                    setCloudColors(cam2Col, cam2Pos, count, rgb, effMode(2));
                     cam2Geo.setDrawRange(0, count);
                     cam2PosAttr.needsUpdate = true;
                     cam2ColAttr.needsUpdate = true;
                 })
                 .catch(() => {})
-                .finally(() => { setTimeout(readPointCloud2, 300); });
+                .finally(() => { setTimeout(readPointCloud2, 400); });
         }
         readPointCloud2();
 
@@ -987,16 +1248,71 @@
         }
 
         let icpBusy = false;
+        let alignGoalP = null;
+        let alignGoalQ = null;
+        let alignStable = 0;
+        const ARM_STILL_MS = 1200;
+        const _lastParentWorld = new THREE.Matrix4();
+        let _lastParentMove = performance.now();
+
+        function trackArmStill() {
+            const p = projectorMount.parent;
+            if (!p) return;
+            p.updateWorldMatrix(true, false);
+            const a = p.matrixWorld.elements;
+            const b = _lastParentWorld.elements;
+            let moved = false;
+            for (let i = 0; i < 16; i++) {
+                if (Math.abs(a[i] - b[i]) > 1e-6) { moved = true; break; }
+            }
+            if (moved) {
+                _lastParentMove = performance.now();
+                _lastParentWorld.copy(p.matrixWorld);
+            }
+        }
+
+        function matClose(m, ref, eps) {
+            const a = m.elements;
+            const b = ref.elements;
+            for (let i = 0; i < 16; i++) {
+                if (Math.abs(a[i] - b[i]) > eps) return false;
+            }
+            return true;
+        }
+
+        function applyAlignTarget() {
+            if (alignGoalP === null) return;
+            projectorMount.position.lerp(alignGoalP, 0.08);
+            projectorMount.quaternion.slerp(alignGoalQ, 0.08);
+            projectorMount.updateMatrixWorld(true);
+            const dp = projectorMount.position.distanceTo(alignGoalP);
+            const dq = 1 - Math.abs(projectorMount.quaternion.dot(alignGoalQ));
+            if (dp < 0.0005 && dq < 1e-6) {
+                projectorMount.position.copy(alignGoalP);
+                projectorMount.quaternion.copy(alignGoalQ);
+                projectorMount.updateMatrixWorld(true);
+                alignGoalP = null;
+                alignGoalQ = null;
+                syncMountSliders(projectorMount, 'mt-');
+            }
+        }
         function runIcpAlign(silent) {
             if (icpBusy) return;
+            if (performance.now() - _lastParentMove < ARM_STILL_MS) return;
             const token = localStorage.getItem('access_token') || '';
             if (!token) return;
             const n1 = cloudGeo.drawRange.count | 0;
             const n2 = cam2Geo.drawRange.count | 0;
             if (!n1 || !n2) { if (!silent) alert('point cloud not ready yet'); return; }
-            const stride = Math.max(1, Math.floor(Math.max(n1, n2) / 800));
-            const source = worldCloud(depthPoints, cloudPos, n1, stride);
-            const target = worldCloud(cam2Points, cam2Pos, n2, stride);
+            const s1 = Math.max(1, Math.floor(n1 / 1500));
+            const s2 = Math.max(1, Math.floor(n2 / 1500));
+            const source = worldCloud(depthPoints, cloudPos, n1, s1);
+            const target = worldCloud(cam2Points, cam2Pos, n2, s2);
+            const parentAtSend = new THREE.Matrix4();
+            if (projectorMount.parent) {
+                projectorMount.parent.updateWorldMatrix(true, false);
+                parentAtSend.copy(projectorMount.parent.matrixWorld);
+            }
             icpBusy = true;
             fetch('/api/map/align_icp', {
                 method: 'POST',
@@ -1008,7 +1324,16 @@
                         if (!silent) alert('ICP: ' + ((data && data.error) || 'failed'));
                         return;
                     }
+                    if (data.fitness == null || data.fitness < 0.5 || data.rmse > 0.02) return;
+                    if (projectorMount.parent) {
+                        projectorMount.parent.updateWorldMatrix(true, false);
+                        if (!matClose(projectorMount.parent.matrixWorld, parentAtSend, 1e-6)) return;
+                    }
                     const T = new THREE.Matrix4().fromArray(data.transform);
+                    const tLen = new THREE.Vector3().setFromMatrixPosition(T).length();
+                    const tAng = 2 * Math.acos(Math.min(1, Math.abs(
+                        new THREE.Quaternion().setFromRotationMatrix(T).w)));
+                    if (tLen > 0.10 || tAng > 0.20) return;
                     projectorMount.updateWorldMatrix(true, false);
                     const parent = projectorMount.parent;
                     parent.updateWorldMatrix(true, false);
@@ -1020,10 +1345,25 @@
                     const q = new THREE.Quaternion();
                     const s = new THREE.Vector3();
                     m.decompose(p, q, s);
-                    projectorMount.position.copy(p);
-                    projectorMount.quaternion.copy(q);
-                    projectorMount.updateMatrixWorld(true);
-                    syncMountSliders(projectorMount, 'mt-');
+                    const dp = projectorMount.position.distanceTo(p);
+                    const dq = 1 - Math.abs(projectorMount.quaternion.dot(q));
+                    if (dp < 0.008 && dq < 2e-4) {
+                        alignStable++;
+                        if (alignStable >= 3) {
+                            alignStable = 0;
+                            if (autoChk && autoChk.checked) autoChk.checked = false;
+                            setAuto(false);
+                        }
+                        return;
+                    }
+                    alignStable = 0;
+                    if (alignGoalP === null) {
+                        alignGoalP = p.clone();
+                        alignGoalQ = q.clone();
+                    } else {
+                        alignGoalP.lerp(p, 0.4);
+                        alignGoalQ.slerp(q, 0.4);
+                    }
                 })
                 .catch(() => { if (!silent) alert('ICP request failed'); })
                 .finally(() => { icpBusy = false; });
@@ -1056,9 +1396,19 @@
         if (cloud2Chk) cloud2Chk.addEventListener('change', () => {
             cam2Points.visible = cloud2Chk.checked;
         });
+        const mesh1Chk = document.getElementById('chk-mesh1');
+        if (mesh1Chk) mesh1Chk.addEventListener('change', () => {
+            depthMesh.visible = mesh1Chk.checked;
+        });
+        const mesh2Chk = document.getElementById('chk-mesh2');
+        if (mesh2Chk) mesh2Chk.addEventListener('change', () => {
+            depthMesh2.visible = mesh2Chk.checked;
+        });
         if (mark2Chk) { cam2Marker.visible = cam2Label.visible = mark2Chk.checked; }
         if (cloud1Chk) { depthPoints.visible = cloud1Chk.checked; }
         if (cloud2Chk) { cam2Points.visible = cloud2Chk.checked; }
+        if (mesh1Chk) { depthMesh.visible = mesh1Chk.checked; }
+        if (mesh2Chk) { depthMesh2.visible = mesh2Chk.checked; }
 
         const panelsBtn = document.getElementById('btn-panels');
         if (panelsBtn) panelsBtn.addEventListener('click', () => {
@@ -1069,19 +1419,39 @@
             });
         });
 
-        let cloudColorMode = 'video';
         function applyCloudColor() {
-            const vid = cloudColorMode === 'video';
-            depthPoints.material = vid ? cloudMatVideo : cloudMatSensor;
-            cam2Points.material = vid ? cam2MatVideo : cam2MatSensor;
+            const v1 = colorSrc === 'video' && effMode(1) === 'rgb';
+            const v2 = colorSrc === 'video' && effMode(2) === 'rgb';
+            depthPoints.material = v1 ? cloudMatVideo : cloudMatSensor;
+            cam2Points.material = v2 ? cam2MatVideo : cam2MatSensor;
             const b = document.getElementById('btn-color');
-            if (b) b.textContent = 'Color: ' + (vid ? 'Video' : 'Sensor');
+            if (b) b.textContent = 'Color: ' + (colorSrc === 'video' ? 'Video' : 'Sensor');
         }
         const colorBtn = document.getElementById('btn-color');
         if (colorBtn) colorBtn.addEventListener('click', () => {
-            cloudColorMode = cloudColorMode === 'video' ? 'sensor' : 'video';
+            colorSrc = colorSrc === 'video' ? 'sensor' : 'video';
             applyCloudColor();
         });
+        const selMode = document.getElementById('sel-mode');
+        if (selMode) selMode.addEventListener('change', () => {
+            manualMode = selMode.value;
+            applyCloudColor();
+        });
+
+        function pollCameraModes() {
+            const token = localStorage.getItem('access_token') || '';
+            if (!token) { setTimeout(pollCameraModes, 2000); return; }
+            fetch('/api/camera/mode', { headers: { Authorization: 'Bearer ' + token }, cache: 'no-store' })
+                .then((r) => (r.ok ? r.json() : null))
+                .then((d) => { if (d && d.mode !== undefined) camMode1 = d.mode; })
+                .catch(() => {});
+            fetch('/api/camera/mode2', { headers: { Authorization: 'Bearer ' + token }, cache: 'no-store' })
+                .then((r) => (r.ok ? r.json() : null))
+                .then((d) => { if (d && d.mode !== undefined) camMode2 = d.mode; })
+                .catch(() => {});
+            setTimeout(pollCameraModes, 1500);
+        }
+        pollCameraModes();
         applyCloudColor();
 
         (function loadIntrinsics() {
@@ -1093,6 +1463,7 @@
             }).then((r) => (r.ok ? r.json() : null))
                 .then((d) => {
                     if (!d || !d.fx || !d.fy) return;
+                    camIntr = { fx: d.fx, fy: d.fy, cx: d.cx, cy: d.cy, w: d.w, h: d.h };
                     projCam.aspect = d.w / d.h;
                     projCam.fov = (2 * Math.atan(d.h / (2 * d.fy)) * 180) / Math.PI;
                     projCam.updateProjectionMatrix();
@@ -1961,6 +2332,8 @@
 
             updateProjector();
             updateProjector2();
+            trackArmStill();
+            applyAlignTarget();
             cam2Mount.updateWorldMatrix(true, false);
             cam2Label.position.copy(cam2Mount.position);
             cam2Label.position.y += 0.18;

@@ -28,8 +28,8 @@ class CameraSelectBody(BaseModel):
 # ── Secondary Camera Singleton ───────────────────────────────────────────────
 cam2: Optional[Camera] = None
 cam2_lock = threading.Lock()
+_cam2_start_lock = threading.Lock()
 _cam2_last_active = 0.0
-CAM2_IDLE_STOP_S = 30.0
 
 
 def get_cam2() -> Camera:
@@ -40,56 +40,68 @@ def get_cam2() -> Camera:
         return cam2
 
 
-def ensure_cam2_running(target_serial: Optional[str] = None) -> Optional[Camera]:
-    global _cam2_last_active
-    c2 = get_cam2()
+def _cam2_pick_serial(target_serial: Optional[str] = None) -> Optional[str]:
+    """Resolve which device serial CAM2 should use (explicit target, else the
+    first enumerated device that is not CAM1's serial)."""
     devices = getattr(state, "camera_devices", [])
     if not devices:
         return None
-
     if target_serial:
         dev = next((d for d in devices if d.get("serial") == target_serial), None)
     else:
-        dev = next((d for d in devices if d.get("serial") and d.get("serial") != cam.serial), None)
+        dev = next((d for d in devices
+                    if d.get("serial") and d.get("serial") != cam.serial), None)
+    return dev["serial"] if dev else None
 
-    if not dev:
-        return None
 
-    dev_serial = dev["serial"]
-    if c2.serial != dev_serial or not c2._running:
+def start_cam2_once(target_serial: Optional[str] = None) -> Optional[Camera]:
+    """Start CAM2 exactly like CAM1: one pipeline, started once, run forever.
+
+    Unlike the old ensure_cam2_running() this never stops/restarts the pipeline
+    while it is already running — a repeated stop()+start() here was racing the
+    USB device with CAM1's pipeline and left both cameras dead with
+    "Device or resource busy". If CAM2 is running it is returned as-is; the
+    capture thread's own _reopen_pipeline() handles USB drops.
+
+    NOTE: a freshly constructed Camera() inherits CAM_SERIAL (= CAM1's serial),
+    so c2.serial is NOT trustworthy until it has been explicitly assigned. Any
+    serial equal to CAM1's is discarded and the *other* enumerated device is
+    used instead — otherwise both pipelines fight over the same D455.
+    """
+    global _cam2_last_active
+    c2 = get_cam2()
+    if c2._running:
+        _cam2_last_active = time.time()
+        return c2
+    with _cam2_start_lock:
+        if c2._running:
+            _cam2_last_active = time.time()
+            return c2
+        serial = c2.serial
+        if not serial or serial == cam.serial:
+            serial = _cam2_pick_serial(target_serial)
+        if not serial or serial == cam.serial:
+            return None
         try:
-            c2.stop()
-            c2.set_serial(dev_serial)
+            c2.set_serial(serial)
+            print(f"[Cam2] starting serial={serial}", flush=True)
             c2.start()
         except Exception as e:
             print(f"[Cam2] Start failed: {e}", flush=True)
-    _cam2_last_active = time.time()
-    return c2 if c2._running else None
+            return None
+        _cam2_last_active = time.time()
+        print(f"[Cam2] running={c2._running}", flush=True)
+        return c2 if c2._running else None
 
 
-def _cam2_idle_watchdog():
-    """Stop the CAM2 pipeline once nobody has viewed it for a while.
-
-    The Camera capture thread runs independently of any HTTP client, so
-    without this a single visit to the camera page (or a stream2 request)
-    left the second D455 streaming forever — measured 2026-09-25: backend
-    CPU 175% with zero stream2 clients, which starves CAM1's depth/tracking
-    and makes align fail ("no valid plane fit" / "points not locked on yet").
-    """
-    while True:
-        time.sleep(5.0)
-        c2 = cam2
-        if c2 is None or not c2._running:
-            continue
-        if _cam2_last_active and (time.time() - _cam2_last_active) > CAM2_IDLE_STOP_S:
-            try:
-                c2.stop()
-                print("[Cam2] stopped (idle)", flush=True)
-            except Exception as e:
-                print(f"[Cam2] idle stop failed: {e}", flush=True)
-
-
-threading.Thread(target=_cam2_idle_watchdog, daemon=True).start()
+def ensure_cam2_running(target_serial: Optional[str] = None) -> Optional[Camera]:
+    """Backwards-compatible wrapper: return CAM2 if running, else start once."""
+    c2 = get_cam2()
+    if c2._running:
+        global _cam2_last_active
+        _cam2_last_active = time.time()
+        return c2
+    return start_cam2_once(target_serial)
 
 
 def _cam2_transform(cf, df, mode: Optional[str]):
@@ -133,6 +145,13 @@ def _cam2_encode(cf, df, mode: Optional[str], count: int):
 
 
 def _mjpeg_generator_cam2(target_serial: Optional[str] = None, mode: Optional[str] = None):
+    """CAM2 MJPEG generator — same pacing as CAM1 (_mjpeg_generator).
+
+    CAM2 now runs as a peer of CAM1 (started once at boot, never restarted by
+    a viewer), so it gets the same uncapped "yield the instant a new frame
+    exists" loop. The old 15fps throttle only added latency — every displayed
+    frame was one to two frames behind the live scene.
+    """
     global _cam2_last_active
     c2 = ensure_cam2_running(target_serial)
     if not c2 or not c2._running:
@@ -154,16 +173,15 @@ def _mjpeg_generator_cam2(target_serial: Optional[str] = None, mode: Optional[st
 
     last_count = -1
     while c2 and c2._running:
-        loop_start = time.time()
         _cam2_last_active = time.time()
         cf, df = c2.get_latest_frames_ref()
         if cf is None:
-            time.sleep(0.04)
+            time.sleep(0.01)
             continue
 
         count = c2._frame_count
         if count == last_count:
-            time.sleep(0.02)
+            time.sleep(0.002)
             continue
         last_count = count
 
@@ -171,13 +189,6 @@ def _mjpeg_generator_cam2(target_serial: Optional[str] = None, mode: Optional[st
         if payload is None:
             continue
         yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + payload + b"\r\n")
-
-        # Lower CAM2 fps while the control pipeline needs the CPU, so align/draw
-        # (cam1 capture + tracking) is not starved by the display stream.
-        fps = 8 if (state.align_running or state.draw_running) else 15
-        dt = time.time() - loop_start
-        if dt < 1.0 / fps:
-            time.sleep(1.0 / fps - dt)
 
 
 @router.get("/mode")
@@ -194,6 +205,22 @@ def set_camera_mode(body: CameraModeBody):
         return {"ok": False, "error": f"Invalid mode '{body.mode}'. Expected 'rgb', 'gray', or 'depth'"}
     state.camera_mode = m
     return {"ok": True, "mode": state.camera_mode}
+
+
+@router.get("/mode2")
+def get_camera_mode2():
+    """Get current CAM2 display mode (rgb, gray, or depth)."""
+    return {"mode": getattr(state, "camera2_mode", "rgb")}
+
+
+@router.post("/mode2")
+def set_camera_mode2(body: CameraModeBody):
+    """Set CAM2 display mode (rgb, gray, or depth)."""
+    m = body.mode.lower()
+    if m not in ("rgb", "gray", "depth"):
+        return {"ok": False, "error": f"Invalid mode '{body.mode}'. Expected 'rgb', 'gray', or 'depth'"}
+    state.camera2_mode = m
+    return {"ok": True, "mode": state.camera2_mode}
 
 
 @router.post("/mode/toggle")
@@ -347,6 +374,10 @@ def camera_stream(mode: Optional[str] = None):
 @router.get("/stream2")
 def camera_stream_secondary(serial: Optional[str] = None, mode: Optional[str] = None):
     """Stream MJPEG video feed for secondary camera (optional ?mode=rgb|gray|depth)."""
+    if mode:
+        m = mode.lower()
+        if m in ("rgb", "gray", "depth"):
+            state.camera2_mode = m
     return StreamingResponse(
         _mjpeg_generator_cam2(target_serial=serial, mode=mode),
         media_type="multipart/x-mixed-replace; boundary=frame",
@@ -368,6 +399,21 @@ def camera_pointcloud2(serial: Optional[str] = None):
     rgb = np.ascontiguousarray(col, dtype=np.uint8)
     body = struct.pack("<I", mm.shape[0]) + mm.tobytes() + rgb.tobytes()
     return Response(content=body, media_type="application/octet-stream",
+                    headers=_STREAM_HEADERS)
+
+
+@router.get("/depth_grid2")
+def camera_depth_grid2(serial: Optional[str] = None):
+    c2 = ensure_cam2_running(target_serial=serial)
+    if not c2 or not c2._running:
+        return Response(status_code=503)
+    cf, df = c2.get_latest_frames_ref()
+    if df is None:
+        return Response(status_code=503)
+    d = cv2.resize(df, (212, 120), interpolation=cv2.INTER_NEAREST)
+    d = np.ascontiguousarray(d, dtype="<u2")
+    hdr = struct.pack("<HH", 212, 120)
+    return Response(content=hdr + d.tobytes(), media_type="application/octet-stream",
                     headers=_STREAM_HEADERS)
 
 
