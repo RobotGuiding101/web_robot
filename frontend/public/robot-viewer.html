@@ -271,6 +271,9 @@
         <button id="btn-icp" type="button">Align (ICP)</button>
         <button id="btn-color" type="button">Color: Video</button>
         <label><input type="checkbox" id="chk-auto" checked> Auto-align (ยึดตาม cam2)</label>
+        <label><input type="checkbox" id="chk-mark2" checked> แสดง cam2 marker</label>
+        <label><input type="checkbox" id="chk-cloud1"> แสดง cloud cam1</label>
+        <label><input type="checkbox" id="chk-cloud2"> แสดง cloud cam2</label>
     </div>
 
     <button id="btn-panels" type="button">⚙ Tune</button>
@@ -867,6 +870,35 @@
         cam2Points.frustumCulled = false;
         cam2Mount.add(cam2Points);
 
+        const cam2MarkerMat = new THREE.MeshStandardMaterial({
+            color: 0xff5522,
+            emissive: 0xaa2200,
+            emissiveIntensity: 0.6,
+            metalness: 0.2,
+            roughness: 0.5,
+        });
+        const cam2Marker = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.1, 16), cam2MarkerMat);
+        cam2Marker.rotation.x = -Math.PI / 2;
+        cam2Mount.add(cam2Marker);
+
+        const cam2LabelCanvas = document.createElement('canvas');
+        cam2LabelCanvas.width = 256;
+        cam2LabelCanvas.height = 128;
+        const cam2LabelCtx = cam2LabelCanvas.getContext('2d');
+        cam2LabelCtx.fillStyle = '#ff5522';
+        cam2LabelCtx.font = 'bold 72px system-ui, sans-serif';
+        cam2LabelCtx.textAlign = 'center';
+        cam2LabelCtx.textBaseline = 'middle';
+        cam2LabelCtx.fillText('cam2', 128, 64);
+        const cam2Label = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: new THREE.CanvasTexture(cam2LabelCanvas),
+            transparent: true,
+            depthTest: false,
+        }));
+        cam2Label.scale.set(0.22, 0.11, 1);
+        cam2Label.renderOrder = 999;
+        scene.add(cam2Label);
+
         function readPointCloud2() {
             const token = localStorage.getItem('access_token') || '';
             if (!token) { setTimeout(readPointCloud2, 2000); return; }
@@ -1002,6 +1034,23 @@
             autoChk.addEventListener('change', () => setAuto(autoChk.checked));
             setAuto(autoChk.checked);
         }
+
+        const mark2Chk = document.getElementById('chk-mark2');
+        if (mark2Chk) mark2Chk.addEventListener('change', () => {
+            cam2Marker.visible = mark2Chk.checked;
+            cam2Label.visible = mark2Chk.checked;
+        });
+        const cloud1Chk = document.getElementById('chk-cloud1');
+        if (cloud1Chk) cloud1Chk.addEventListener('change', () => {
+            depthPoints.visible = cloud1Chk.checked;
+        });
+        const cloud2Chk = document.getElementById('chk-cloud2');
+        if (cloud2Chk) cloud2Chk.addEventListener('change', () => {
+            cam2Points.visible = cloud2Chk.checked;
+        });
+        if (mark2Chk) { cam2Marker.visible = cam2Label.visible = mark2Chk.checked; }
+        if (cloud1Chk) { depthPoints.visible = cloud1Chk.checked; }
+        if (cloud2Chk) { cam2Points.visible = cloud2Chk.checked; }
 
         const panelsBtn = document.getElementById('btn-panels');
         if (panelsBtn) panelsBtn.addEventListener('click', () => {
@@ -1713,6 +1762,9 @@
 
             updateProjector();
             updateProjector2();
+            cam2Mount.updateWorldMatrix(true, false);
+            cam2Label.position.copy(cam2Mount.position);
+            cam2Label.position.y += 0.18;
             cloudMatVideo.uniforms.sizeFactor.value = renderer.domElement.height;
             cam2MatVideo.uniforms.sizeFactor.value = renderer.domElement.height;
             renderer.render(scene, camera);
