@@ -64,6 +64,17 @@ def _list_devices_rs():
 
 RECONNECT_AFTER = 3
 
+# Serializes pipeline bring-up across ALL Camera instances. Two D455s that
+# call pipe.start() at the same moment fight over the USB stack and one fails
+# with "Couldn't resolve requests" / "xioctl(VIDIOC_S_FMT) failed ... Device or
+# resource busy", after which the losing pipeline never recovers. Holding this
+# for the whole configure+start(+first frames) window makes bring-up atomic.
+_START_LOCK = threading.Lock()
+
+
+def _is_frame_timeout(exc: Exception) -> bool:
+    return "didn't arrive" in str(exc) or "Frame didn't arrive" in str(exc)
+
 
 class Camera:
     def __init__(self):
@@ -100,14 +111,18 @@ class Camera:
         self._hole        = None
         self._cloud_buf   = None       # (positions_m float32[N,3], colors_rgb uint8[N,3])
         self._cloud_lock  = threading.Lock()
-        self._cloud_every = 3          # rebuild cloud every N captured frames
+        self._cloud_every = 12         # rebuild cloud every N captured frames
 
     def start(self, retries=3, retry_delay=1.0) -> bool:
         if not HAS_RS:
             log("  pyrealsense2 not installed"); return False
+        with _START_LOCK:
+            return self._start_locked(retries=retries, retry_delay=retry_delay)
+
+    def _start_locked(self, retries=3, retry_delay=1.0) -> bool:
         if self._running:
-            log("  [Cam] already running, stopping first")
-            self.stop()
+            log("  [Cam] already running; start() is a no-op")
+            return True
         if self._capture_thread and self._capture_thread.is_alive():
             log("  [Cam] capture thread still running, stopping it")
             self._capture_stop_event.set()
@@ -174,7 +189,45 @@ class Camera:
                     pass
                 self.pipe = None
             log(f"  [Cam] FAILED  {e}")
+            if _is_frame_timeout(e) and not getattr(self, "_reset_done", False):
+                self._reset_done = True
+                log("  [Cam] depth stream hung — issuing hardware reset and retrying")
+                if self._hardware_reset():
+                    self._reset_done = False
+                    return self._start_locked(retries=retries, retry_delay=retry_delay)
             return False
+
+    def _hardware_reset(self) -> bool:
+        """Power-cycle the D455 over USB. The depth (Stereo Module) stream
+        occasionally wedges — pipe.start() succeeds but no depth frame ever
+        arrives ("Frame didn't arrive within 5000") until the device is
+        hardware-reset. The RGB stream is unaffected, so a reset is the only
+        software-side recovery short of unplugging the camera."""
+        if not HAS_RS or not self.serial:
+            return False
+        try:
+            ctx = rs.context()
+            dev = next((d for d in ctx.query_devices()
+                        if d.get_info(rs.camera_info.serial_number) == self.serial), None)
+            if dev is None:
+                log("  [Cam] hardware reset: device not found")
+                return False
+            dev.hardware_reset()
+        except Exception as e:
+            log(f"  [Cam] hardware reset failed: {e}")
+            return False
+        for _ in range(20):
+            sleep(0.5)
+            try:
+                ctx = rs.context()
+                if any(d.get_info(rs.camera_info.serial_number) == self.serial
+                       for d in ctx.query_devices()):
+                    sleep(1.0)
+                    return True
+            except Exception:
+                pass
+        log("  [Cam] hardware reset: device did not re-enumerate")
+        return False
 
     def stop(self):
         if self._capture_thread and self._capture_thread.is_alive():
@@ -201,7 +254,7 @@ class Camera:
             return
         try:
             dec = rs.decimation_filter()
-            dec.set_option(rs.option.filter_magnitude, 4)
+            dec.set_option(rs.option.filter_magnitude, 3)
             self._dec = dec
             self._spat = rs.spatial_filter()
             self._temp = rs.temporal_filter()
@@ -210,7 +263,7 @@ class Camera:
             with self._cloud_lock:
                 self._cloud_buf = None
             log("  [Cam] point cloud: SDK pipeline ready "
-                "(decimation x4 + spatial + temporal + hole-filling)")
+                "(decimation x3 + spatial + temporal + hole-filling)")
         except Exception as e:
             self._pc = None
             log(f"  [Cam] point cloud init failed: {e}")
@@ -301,6 +354,10 @@ class Camera:
         (those join/restart this very thread); it only swaps rs.pipeline in
         place and returns True once frames flow again.
         """
+        with _START_LOCK:
+            return self._reopen_pipeline_locked()
+
+    def _reopen_pipeline_locked(self) -> bool:
         try:
             if self.pipe is not None:
                 self.pipe.stop()

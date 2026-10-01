@@ -262,9 +262,9 @@ def _grid_fully_marked() -> bool:
 
 STREAM_FPS = 30
 STREAM_FPS_IDLE = 30
-STREAM_W = 720
-STREAM_H = 405
-STREAM_JPEG_QUALITY = 85
+STREAM_W = 640
+STREAM_H = 360
+STREAM_JPEG_QUALITY = 80
 
 
 _DEPTH_CMAP = getattr(cv2, "COLORMAP_TURBO", cv2.COLORMAP_JET)
@@ -394,6 +394,18 @@ DEPTH_FRAME_H = 120
 DEPTH_FRAME_MAX_MM = 4000.0
 
 
+@router.get("/depth_grid")
+def api_depth_grid():
+    cf, df = cam.get_latest_frames_ref()
+    if df is None:
+        return Response(status_code=503)
+    d = cv2.resize(df, (DEPTH_FRAME_W, DEPTH_FRAME_H), interpolation=cv2.INTER_NEAREST)
+    d = np.ascontiguousarray(d, dtype="<u2")
+    hdr = struct.pack("<HH", DEPTH_FRAME_W, DEPTH_FRAME_H)
+    return Response(content=hdr + d.tobytes(), media_type="application/octet-stream",
+                    headers=_STREAM_HEADERS)
+
+
 @router.get("/camera_intrinsics")
 def api_camera_intrinsics():
     intr = cam.intrinsics or {}
@@ -445,10 +457,18 @@ class AlignIcpBody(BaseModel):
     max_dist: float = 0.05
 
 
-def _icp_align(src, dst, iters=30, max_dist=0.05):
-    """Rigid point-to-point ICP (Umeyama / SVD). Both arrays must already be
-    in a common frame. Returns a 4x4 float64 transform T with src@T aligned
-    onto dst, or None when there is too little overlap."""
+def _icp_align(src, dst, iters=30, max_dist=0.05, keep_frac=0.6, min_inliers=60):
+    """Trimmed rigid point-to-point ICP (Umeyama / SVD). Both arrays must
+    already be in a common frame. Returns (T, fitness, rmse) where T is a 4x4
+    float64 transform aligning src onto dst, or None when there is too little
+    overlap.
+
+    Uses trimmed ICP (keep the closest keep_frac of pairs, at least
+    min_inliers, never beyond max_dist) instead of "every pair under
+    max_dist". With two cameras looking at partly different scene content, the
+    raw cutoff accepts mostly spurious correspondences and returns a
+    confident-but-wrong transform; trimming makes the fit robust and lets the
+    caller gate on fitness/rmse before applying anything."""
     src = np.asarray(src, dtype=np.float64)
     dst = np.asarray(dst, dtype=np.float64)
     if src.ndim != 2 or dst.ndim != 2 or src.shape[0] < 10 or dst.shape[0] < 10:
@@ -456,16 +476,23 @@ def _icp_align(src, dst, iters=30, max_dist=0.05):
     cur = src.copy()
     n = cur.shape[0]
     T = np.eye(4)
+    fitness = 0.0
+    rmse = float("inf")
+    k = max(min_inliers, int(n * keep_frac))
     for _ in range(iters):
         diff = cur[:, None, :] - dst[None, :, :]
         d2 = np.einsum("ijk,ijk->ij", diff, diff)
         idx = d2.argmin(axis=1)
         dmin = np.sqrt(d2[np.arange(n), idx])
-        keep = dmin < max_dist
-        if int(keep.sum()) < 20:
+        order = np.argsort(dmin)
+        keep = order[:k]
+        keep = keep[dmin[keep] < max_dist]
+        if keep.size < min_inliers:
             break
         P = cur[keep]
         Q = dst[idx[keep]]
+        fitness = float(keep.size) / float(n)
+        rmse = float(np.sqrt(np.mean(dmin[keep] ** 2)))
         pc = P.mean(axis=0)
         qc = Q.mean(axis=0)
         H = (P - pc).T @ (Q - qc)
@@ -475,20 +502,38 @@ def _icp_align(src, dst, iters=30, max_dist=0.05):
             Vt[-1, :] *= -1
             R = Vt.T @ U.T
         t = qc - R @ pc
+        ang = np.arccos(np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0))
+        if np.linalg.norm(t) < 1e-5 and ang < 1e-4:
+            cur = (R @ cur.T).T + t
+            dT = np.eye(4)
+            dT[:3, :3] = R
+            dT[:3, 3] = t
+            T = dT @ T
+            break
         cur = (R @ cur.T).T + t
         dT = np.eye(4)
         dT[:3, :3] = R
         dT[:3, 3] = t
         T = dT @ T
-    return T
+    return T, fitness, rmse
 
 
 @router.post("/align_icp")
 def api_align_icp(body: AlignIcpBody):
-    T = _icp_align(body.source, body.target, iters=body.iters, max_dist=body.max_dist)
-    if T is None:
+    res = _icp_align(body.source, body.target, iters=body.iters, max_dist=body.max_dist)
+    if res is None:
         return {"ok": False, "error": "not enough overlap between the two clouds"}
-    return {"ok": True, "transform": T.T.reshape(-1).tolist()}
+    T, fitness, rmse = res
+    t_norm = float(np.linalg.norm(T[:3, 3]))
+    ang = float(np.arccos(np.clip((np.trace(T[:3, :3]) - 1.0) / 2.0, -1.0, 1.0)))
+    if t_norm > 0.30 or ang > np.deg2rad(30.0):
+        return {"ok": False,
+                "error": f"correction too large (t={t_norm:.3f}m, r={np.rad2deg(ang):.1f}deg)"}
+    if fitness < 0.5 or rmse > 0.02:
+        return {"ok": False,
+                "error": f"poor fit (fitness={fitness:.2f}, rmse={rmse * 1000:.0f}mm)"}
+    return {"ok": True, "transform": T.T.reshape(-1).tolist(),
+            "fitness": round(fitness, 3), "rmse": round(rmse, 5)}
 
 
 # ── robot / camera lifecycle ─────────────────────────────────────────────────
