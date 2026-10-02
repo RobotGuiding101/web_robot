@@ -1004,19 +1004,7 @@ const DrawingModePage = () => {
                   <span>Camera 1 — offline</span>
                 </div>
 
-                {/* Fabric.js canvas — transparent overlay */}
-                <div className="dm-canvas-wrap" ref={(el) => {
-                  // keep the wrap ref in sync so ResizeObserver targets correct element
-                  if (el && canvasElRef.current) {
-                    const fc = fabricRef.current
-                    if (fc) {
-                      fc.setDimensions({ width: el.clientWidth, height: el.clientHeight })
-                      fc.renderAll()
-                    }
-                  }
-                }}>
-                  <canvas ref={canvasElRef} id="drawing-canvas" />
-                </div>
+                {/* Fabric.js canvas — moved to Draw tab, kept in DOM always */}
 
                 <div
                   className="dm-mark-hit"
@@ -1683,6 +1671,23 @@ const DrawingModePage = () => {
                       )}
 
                       {/* ── TAB: Draw ─────────────────────────────────────── */}
+                      {/* canvas อยู่ใน DOM ตลอด ซ่อน/แสดงด้วย display เพื่อไม่ให้ Fabric destroy */}
+                      <div
+                        className="dm-canvas-wrap dm-canvas-wrap--tab"
+                        style={{ display: panelTab === 'draw' ? 'flex' : 'none' }}
+                        ref={(el) => {
+                          if (el && canvasElRef.current) {
+                            const fc = fabricRef.current
+                            if (fc) {
+                              fc.setDimensions({ width: el.clientWidth, height: el.clientHeight })
+                              fc.renderAll()
+                            }
+                          }
+                        }}
+                      >
+                        <canvas ref={canvasElRef} id="drawing-canvas" />
+                      </div>
+
                       {panelTab === 'draw' && (
                         <div className="dm-panel-card">
                           <div className="dm-panel-card-head">
