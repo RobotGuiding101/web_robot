@@ -14,9 +14,13 @@ from typing import Optional
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import StreamingResponse
+from jose import jwt
 from pydantic import BaseModel
+
+from routers.auth import ALGORITHM, SECRET_KEY
+from routers.device_events import log_event
 
 from maps_point.config import (ROBOT_IP, ROBOT_MODE_LABELS,
                                DRAW_GRID_MAX_ROWS, DRAW_GRID_MAX_COLS,
@@ -39,6 +43,22 @@ robot = Robot(ROBOT_IP)
 cam = Camera()
 state = AppState()
 start_tracking_thread(cam, state)   # keeps state.points glued to the object
+
+
+def _log_user_event(request: Request, device: str, state_name: str, detail: str = ""):
+    """Fire-and-forget DeviceLog entry, attributed to the JWT subject.
+
+    The HTTP auth middleware has already validated the token by the time any
+    /api/map/* handler runs, so a missing/invalid subject simply skips logging
+    (best-effort by design — logging must never fail the robot action).
+    """
+    try:
+        header = request.headers.get("authorization", "")
+        if header.startswith("Bearer "):
+            payload = jwt.decode(header[7:], SECRET_KEY, algorithms=[ALGORITHM])
+            log_event(payload.get("sub", ""), device, state_name, detail)
+    except Exception:
+        pass
 
 
 class ConnectBody(BaseModel):
@@ -262,9 +282,15 @@ def _grid_fully_marked() -> bool:
 
 STREAM_FPS = 30
 STREAM_FPS_IDLE = 30
-STREAM_W = 640
-STREAM_H = 360
-STREAM_JPEG_QUALITY = 80
+# LAN-only, MJPEG budget: two cameras share ~24.7 Mbps of LAN. At 848x480 the
+# JPEG is ~40-80 KB/frame, so both cams at 30fps oversubscribed the link 2x and
+# the TCP queues grew into visible, ever-worsening lag. Q72 + a 20fps send cap
+# keeps cam1 ~8 Mbps so cam1+cam2 fit with headroom (lower latency, not just
+# smaller files).
+STREAM_W = 848
+STREAM_H = 480
+STREAM_JPEG_QUALITY = 72
+STREAM_TARGET_FPS = 20
 
 
 _DEPTH_CMAP = getattr(cv2, "COLORMAP_TURBO", cv2.COLORMAP_JET)
@@ -350,6 +376,8 @@ def _mjpeg_generator(mode: Optional[str] = None):
     waiting for one.
     """
     last_count = -1
+    last_sent = 0.0
+    min_dt = 1.0 / max(STREAM_TARGET_FPS, 1)
     while True:
         if not cam._running:
             time.sleep(0.2)
@@ -364,7 +392,12 @@ def _mjpeg_generator(mode: Optional[str] = None):
         if count == last_count:
             time.sleep(0.002)
             continue
+        now = time.monotonic()
+        if now - last_sent < min_dt:
+            time.sleep(0.002)
+            continue
         last_count = count
+        last_sent = now
 
         effective_mode = (mode or getattr(state, "camera_mode", "rgb")).lower()
         payload = _encode_frame(cf, df, effective_mode, count)
@@ -519,42 +552,60 @@ def _icp_align(src, dst, iters=30, max_dist=0.05, keep_frac=0.6, min_inliers=60)
 
 
 @router.post("/align_icp")
-def api_align_icp(body: AlignIcpBody):
+def api_align_icp(request: Request, body: AlignIcpBody):
     res = _icp_align(body.source, body.target, iters=body.iters, max_dist=body.max_dist)
     if res is None:
+        _log_user_event(request, "align", "fail", "not enough overlap")
         return {"ok": False, "error": "not enough overlap between the two clouds"}
     T, fitness, rmse = res
     t_norm = float(np.linalg.norm(T[:3, 3]))
     ang = float(np.arccos(np.clip((np.trace(T[:3, :3]) - 1.0) / 2.0, -1.0, 1.0)))
     if t_norm > 0.30 or ang > np.deg2rad(30.0):
+        _log_user_event(request, "align", "fail",
+                        f"correction too large (t={t_norm:.3f}m, r={np.rad2deg(ang):.1f}deg)")
         return {"ok": False,
                 "error": f"correction too large (t={t_norm:.3f}m, r={np.rad2deg(ang):.1f}deg)"}
     if fitness < 0.5 or rmse > 0.02:
+        _log_user_event(request, "align", "fail",
+                        f"poor fit (fitness={fitness:.2f}, rmse={rmse * 1000:.0f}mm)")
         return {"ok": False,
                 "error": f"poor fit (fitness={fitness:.2f}, rmse={rmse * 1000:.0f}mm)"}
+    _log_user_event(request, "align", "ok",
+                    f"fitness={fitness:.3f} rmse={rmse * 1000:.1f}mm t={t_norm * 1000:.0f}mm")
     return {"ok": True, "transform": T.T.reshape(-1).tolist(),
             "fitness": round(fitness, 3), "rmse": round(rmse, 5)}
 
 
 # ── robot / camera lifecycle ─────────────────────────────────────────────────
 @router.post("/connect")
-def api_connect(body: Optional[ConnectBody] = None):
-    if body:
-        robot.connect(ip=body.ip, dashboard_port=body.dashboard_port, move_port=body.move_port)
-    else:
-        robot.connect()
+def api_connect(request: Request, body: Optional[ConnectBody] = None):
+    try:
+        if body:
+            robot.connect(ip=body.ip, dashboard_port=body.dashboard_port, move_port=body.move_port)
+        else:
+            robot.connect()
+    except Exception as e:
+        _log_user_event(request, "robot", "connect", f"failed: {e}")
+        return {"ok": False, "error": str(e)}
+    _log_user_event(request, "robot", "connect", "connected")
     return {"ok": robot.connected}
 
 
 @router.post("/init")
-def api_init():
-    robot.init_robot()
+def api_init(request: Request):
+    try:
+        robot.init_robot()
+        _log_user_event(request, "robot", "init", "ok")
+    except Exception as e:
+        _log_user_event(request, "robot", "init", f"failed: {e}")
+        return {"ok": False, "error": str(e)}
     return {"ok": True, "connected": robot.connected}
 
 
 @router.post("/camstart")
-def api_camstart():
+def api_camstart(request: Request):
     ok = cam.start()
+    _log_user_event(request, "camera", "start", f"ok={ok}")
     return {"ok": ok}
 
 
@@ -567,7 +618,7 @@ def api_error():
 
 
 @router.post("/emergency")
-def api_emergency():
+def api_emergency(request: Request):
     global sequence_running
     sequence_stop.set()
     sequence_running = False
@@ -577,14 +628,17 @@ def api_emergency():
     state.draw_running = False
     if robot.connected:
         robot.emergency_stop()
+    _log_user_event(request, "estop", "on", "emergency stop triggered")
     return {"ok": True, "status": "emergency_stop_triggered"}
 
 
 @router.post("/home")
-def api_home():
+def api_home(request: Request):
     try:
         robot.go_home()
+        _log_user_event(request, "robot", "home", "ok")
     except RobotMoveError as e:
+        _log_user_event(request, "robot", "home", f"failed: {e}")
         return {"ok": False, "error": str(e)}
     return {"ok": True}
 
@@ -600,11 +654,12 @@ def api_point(body: PointBody):
 
 
 @router.post("/goto")
-def api_goto(body: GotoBody):
+def api_goto(request: Request, body: GotoBody):
     if not robot.connected or not cam._running:
         return {"ok": False, "error": "robot/camera not ready"}
     threading.Thread(target=do_goto, args=(robot, cam, state, body.x, body.y),
                      daemon=True).start()
+    _log_user_event(request, "robot", "goto", f"x={body.x} y={body.y}")
     return {"ok": True}
 
 
