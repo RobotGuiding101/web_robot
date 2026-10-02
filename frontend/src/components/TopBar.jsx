@@ -33,7 +33,7 @@ const TopBar = ({ title, onEmergency, showConnect = true }) => {
         .catch(() => setRobotConnected(false))
     }
     check()
-    const interval = setInterval(check, 3000)
+    const interval = setInterval(check, 8000)
     return () => clearInterval(interval)
   }, [])
 

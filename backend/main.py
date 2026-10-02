@@ -1,3 +1,5 @@
+import asyncio
+import json
 import os
 import threading
 import time
@@ -7,7 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from anyio import to_thread
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from jose import JWTError, jwt
@@ -75,6 +77,7 @@ async def lifespan(app: FastAPI):
         threading.Thread(target=_connect_robot, daemon=True).start()
 
     threading.Thread(target=_auto_start_camera, daemon=True).start()
+    asyncio.create_task(_joint_broadcast_loop())
     yield
 
 
@@ -132,3 +135,59 @@ app.include_router(devices_router.router,
 @app.get("/")
 def root():
     return {"message": "Robot Arm API is running"}
+
+
+# ── WebSocket: high-rate joint feed for the 3D viewer ────────────────────────
+# The viewer needs the arm to move smoothly, but the dashboard TCP port can only
+# be polled; at HTTP cadence the model visibly stepped. One broadcaster polls
+# GetAngle and pushes to every connected viewer so N viewers cost one poll.
+_joint_clients: set = set()
+
+
+async def _joint_broadcast_loop():
+    from routers.mapcontrol import robot
+    tick = 0
+    while True:
+        if not _joint_clients:
+            await asyncio.sleep(0.5)
+            tick = 0
+            continue
+        try:
+            connected = bool(robot.connected)
+            if connected:
+                angles = await to_thread.run_sync(robot.get_angle)
+                pose = await to_thread.run_sync(robot.get_pose) if tick % 2 == 0 else None
+            else:
+                angles = [0.0] * 6
+                pose = [0.0] * 6 if tick % 2 == 0 else None
+            msg = {"angles": [float(a) for a in angles], "connected": connected}
+            if pose is not None:
+                msg["pose"] = [float(p) for p in pose]
+            payload = json.dumps(msg)
+            for ws in list(_joint_clients):
+                try:
+                    await ws.send_text(payload)
+                except Exception:
+                    _joint_clients.discard(ws)
+        except Exception:
+            pass
+        tick += 1
+        await asyncio.sleep(0.05)
+
+
+@app.websocket("/ws/joints")
+async def ws_joints(websocket: WebSocket, token: str = ""):
+    try:
+        jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+    _joint_clients.add(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        _joint_clients.discard(websocket)

@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from routers.auth import ALGORITHM, SECRET_KEY
 from routers.device_events import log_event
+import state_store
 
 from maps_point.config import (ROBOT_IP, ROBOT_MODE_LABELS,
                                DRAW_GRID_MAX_ROWS, DRAW_GRID_MAX_COLS,
@@ -42,6 +43,8 @@ router = APIRouter(prefix="/api/map", tags=["MapControl"])
 robot = Robot(ROBOT_IP)
 cam = Camera()
 state = AppState()
+state_store.load(state)             # restore marks/grid from the last session
+state_store.start_autosave(state)   # persist again on change
 start_tracking_thread(cam, state)   # keeps state.points glued to the object
 
 
@@ -282,13 +285,13 @@ def _grid_fully_marked() -> bool:
 
 STREAM_FPS = 30
 STREAM_FPS_IDLE = 30
-# LAN-only, MJPEG budget: two cameras share ~24.7 Mbps of LAN. At 848x480 Q72
-# cam1 is ~6 Mbps and cam2 (640x360) ~4 Mbps, so 30fps fits with headroom.
-# (The 20fps cap was only needed while the cams ran 848x480 Q85+ = ~44 Mbps.)
-STREAM_W = 848
-STREAM_H = 480
-STREAM_JPEG_QUALITY = 72
-STREAM_TARGET_FPS = 30
+# Wi-Fi-first budget: the viewing machine sits on 2.4 GHz, where an ~11 Mbps
+# MJPEG pair bufferbloats hard (RTT spikes ~3ms -> ~180ms). 640x360 Q62 @25fps
+# drops cam1 to ~3 Mbps so both cameras fit a 2.4 GHz link with low latency.
+STREAM_W = 640
+STREAM_H = 360
+STREAM_JPEG_QUALITY = 62
+STREAM_TARGET_FPS = 25
 
 
 _DEPTH_CMAP = getattr(cv2, "COLORMAP_TURBO", cv2.COLORMAP_JET)
@@ -470,10 +473,17 @@ def api_depth_frame():
 
 
 @router.get("/pointcloud")
-def api_pointcloud():
+def api_pointcloud(max_pts: int = Query(default=0, alias="max")):
     pos, col = cam.get_latest_pointcloud()
     if pos is None or pos.shape[0] == 0:
         return Response(status_code=503)
+    # ?max=N subsamples before serializing. Auto-align only needs a coarse
+    # cloud, so the full-resolution payload (hundreds of KB) is pure waste for
+    # it; 0 keeps the old full-resolution behaviour for the display toggle.
+    if max_pts and pos.shape[0] > max_pts:
+        idx = np.linspace(0, pos.shape[0] - 1, max_pts).astype(np.int64)
+        pos = pos[idx]
+        col = col[idx]
     mm = np.clip(pos * 1000.0, -32767.0, 32767.0).astype("<i2")
     rgb = np.ascontiguousarray(col, dtype=np.uint8)
     body = struct.pack("<I", mm.shape[0]) + mm.tobytes() + rgb.tobytes()
@@ -1529,6 +1539,13 @@ def api_draw_stop():
 
 
 # ── status / logs / cli ──────────────────────────────────────────────────────
+@router.get("/joints")
+def api_joints():
+    """Joint angles only — the lightweight poll target for the 3D viewer, which
+    needs joints several times a second but not /status's pose/mode/grid work."""
+    return {"angles": robot.get_angle() if robot.connected else [0.0] * 6}
+
+
 @router.get("/status")
 def api_status():
     pose = robot.get_pose() if robot.connected else [0.0] * 6
