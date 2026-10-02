@@ -14,12 +14,17 @@ from typing import Optional
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from jose import jwt
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from routers.auth import ALGORITHM, SECRET_KEY
+from database import get_db
+from models import User, UserSetting
+from routers.auth import ALGORITHM, SECRET_KEY, get_current_user
 from routers.device_events import log_event
 import state_store
 
@@ -1023,12 +1028,42 @@ def api_emergency(request: Request):
     return {"ok": True, "status": "emergency_stop_triggered"}
 
 
-@router.post("/home")
-def api_home(request: Request):
+_HOME_KEYS = ("home_x", "home_y", "home_z", "home_rx", "home_ry", "home_rz")
+
+
+async def _user_home_pose(db: AsyncSession, user_id: str):
+    rows = await db.execute(
+        select(UserSetting).where(
+            UserSetting.user_id == user_id,
+            UserSetting.key.in_(_HOME_KEYS),
+        )
+    )
+    saved = {s.key: s.value for s in rows.scalars().all()}
     try:
-        robot.go_home()
+        pose = [float(saved.get(k, "0.0")) for k in _HOME_KEYS]
+    except (TypeError, ValueError):
+        return None
+    return tuple(pose) if any(pose[:3]) else None
+
+
+@router.post("/home")
+async def api_home(request: Request,
+                   user: User = Depends(get_current_user),
+                   db: AsyncSession = Depends(get_db)):
+    if state.align_running or state.draw_running or sequence_running:
+        return {"ok": False, "error": "robot busy (align/draw/sequence running)"}
+    home = await _user_home_pose(db, user.id)
+    await db.close()
+    try:
+        if home:
+            await run_in_threadpool(_run_locked, robot.movl, *home)
+        else:
+            await run_in_threadpool(_run_locked, robot.go_home)
         _log_user_event(request, "robot", "home", "ok")
     except RobotMoveError as e:
+        _log_user_event(request, "robot", "home", f"failed: {e}")
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
         _log_user_event(request, "robot", "home", f"failed: {e}")
         return {"ok": False, "error": str(e)}
     return {"ok": True}
