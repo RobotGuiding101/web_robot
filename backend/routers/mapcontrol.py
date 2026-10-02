@@ -282,15 +282,13 @@ def _grid_fully_marked() -> bool:
 
 STREAM_FPS = 30
 STREAM_FPS_IDLE = 30
-# LAN-only, MJPEG budget: two cameras share ~24.7 Mbps of LAN. At 848x480 the
-# JPEG is ~40-80 KB/frame, so both cams at 30fps oversubscribed the link 2x and
-# the TCP queues grew into visible, ever-worsening lag. Q72 + a 20fps send cap
-# keeps cam1 ~8 Mbps so cam1+cam2 fit with headroom (lower latency, not just
-# smaller files).
+# LAN-only, MJPEG budget: two cameras share ~24.7 Mbps of LAN. At 848x480 Q72
+# cam1 is ~6 Mbps and cam2 (640x360) ~4 Mbps, so 30fps fits with headroom.
+# (The 20fps cap was only needed while the cams ran 848x480 Q85+ = ~44 Mbps.)
 STREAM_W = 848
 STREAM_H = 480
 STREAM_JPEG_QUALITY = 72
-STREAM_TARGET_FPS = 20
+STREAM_TARGET_FPS = 30
 
 
 _DEPTH_CMAP = getattr(cv2, "COLORMAP_TURBO", cv2.COLORMAP_JET)
@@ -483,6 +481,263 @@ def api_pointcloud():
                     headers=_STREAM_HEADERS)
 
 
+class ObjectAreaBody(BaseModel):
+    cam: int = 1
+    above_mm: float = 8.0
+    band_mm: float = 400.0
+    cell_mm: float = 3.0
+    min_area_cm2: float = 1.0
+    min_points: int = 40
+
+
+def _fit_plane_ransac(P, iters=300, thresh=0.006, seed=0):
+    """RANSAC + least-squares refit of the dominant plane (the flat surface).
+
+    Returns (unit_normal, d) with plane n·p = d, or None. The camera cloud is
+    unordered, so a plain least-squares fit would be dragged by the objects on
+    the surface; RANSAC locks onto the plane with the most inliers first."""
+    N = len(P)
+    if N < 50:
+        return None
+    rng = np.random.default_rng(seed)
+    best_n = None
+    best_d = 0.0
+    best_count = 0
+    for _ in range(iters):
+        i, j, k = rng.choice(N, 3, replace=False)
+        n = np.cross(P[j] - P[i], P[k] - P[i])
+        nlen = np.linalg.norm(n)
+        if nlen < 1e-9:
+            continue
+        n = n / nlen
+        d = float(n @ P[i])
+        count = int(np.count_nonzero(np.abs(P @ n - d) < thresh))
+        if count > best_count:
+            best_count = count
+            best_n, best_d = n, d
+    if best_n is None:
+        return None
+    inliers = P[np.abs(P @ best_n - best_d) < thresh]
+    if len(inliers) >= 3:
+        c = inliers.mean(axis=0)
+        _, _, vt = np.linalg.svd(inliers - c, full_matrices=False)
+        best_n = vt[-1] / np.linalg.norm(vt[-1])
+        best_d = float(best_n @ c)
+    return best_n, best_d
+
+
+@router.post("/object_area")
+def api_object_area(body: ObjectAreaBody):
+    """Area of each object resting on a flat surface, from a camera point cloud.
+
+    Fits the dominant plane (the surface) with RANSAC, keeps points that sit
+    above it within a height band (so the floor/background below is ignored),
+    clusters them on a raster grid and returns each cluster's planar area
+    (convex hull) in cm². Intended for "flat surface + objects on top".
+    """
+    c = cam if body.cam == 1 else None
+    if c is None:
+        from routers.camera import get_cam2
+        c = get_cam2()
+    if c is None or not getattr(c, "_running", False):
+        return {"ok": False, "error": "camera not running"}
+    pos, _ = c.get_latest_pointcloud()
+    if pos is None or len(pos) < 100:
+        return {"ok": False, "error": "point cloud not ready"}
+
+    P = np.asarray(pos, dtype=np.float64)
+    fit = _fit_plane_ransac(P)
+    if fit is None:
+        return {"ok": False, "error": "could not fit surface plane"}
+    n, d = fit
+    # Orient the normal so the camera (origin) is on the +n side; then object
+    # points (between camera and surface) get a positive height.
+    if -d < 0:
+        n, d = -n, -d
+
+    h = P @ n - d
+    lo = max(0.0, body.above_mm) / 1000.0
+    hi = max(lo + 0.001, body.band_mm / 1000.0)
+    obj = P[(h > lo) & (h < hi)]
+    if len(obj) < 30:
+        return {"ok": True, "cam": body.cam, "count": 0, "total_cm2": 0.0, "objects": []}
+
+    a = np.array([1.0, 0.0, 0.0])
+    if abs(n @ a) > 0.9:
+        a = np.array([0.0, 1.0, 0.0])
+    u = np.cross(n, a)
+    u /= np.linalg.norm(u)
+    v = np.cross(n, u)
+    uv = np.stack([obj @ u, obj @ v], axis=1)
+
+    cell = max(0.001, body.cell_mm / 1000.0)
+    mn = uv.min(axis=0)
+    idx = np.floor((uv - mn) / cell).astype(np.int64)
+    W = int(idx[:, 0].max()) + 3
+    H = int(idx[:, 1].max()) + 3
+    if W * H > 8_000_000:
+        return {"ok": False, "error": "scene too large to cluster"}
+    grid = np.zeros((H, W), np.uint8)
+    grid[idx[:, 1], idx[:, 0]] = 1
+    grid = cv2.morphologyEx(grid, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    grid = cv2.morphologyEx(grid, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    nlab, labels = cv2.connectedComponents(grid, connectivity=8)
+    plabels = labels[idx[:, 1], idx[:, 0]]
+
+    objects = []
+    cell_area_cm2 = (cell * 100.0) ** 2
+    for lab in range(1, nlab):
+        sel = plabels == lab
+        cnt = int(sel.sum())
+        if cnt < body.min_points:
+            continue
+        # Cell-count area instead of a convex hull: a single stray point would
+        # blow the hull out to hundreds of cm² and the cell count is robust to
+        # those outliers.
+        cells = int(np.count_nonzero(labels == lab))
+        area_cm2 = cells * cell_area_cm2
+        if area_cm2 < body.min_area_cm2:
+            continue
+        cen = uv[sel].mean(axis=0)
+        objects.append({
+            "area_cm2": round(float(area_cm2), 2),
+            "centroid_mm": [round(float(cen[0]) * 1000, 1), round(float(cen[1]) * 1000, 1)],
+            "points": cnt,
+        })
+
+    objects.sort(key=lambda o: -o["area_cm2"])
+    total = round(sum(o["area_cm2"] for o in objects), 2)
+    return {"ok": True, "cam": body.cam, "count": len(objects),
+            "total_cm2": total, "objects": objects}
+
+
+class PlaneCamBody(BaseModel):
+    cam: int = 2
+
+
+class PlaneAreaBody(BaseModel):
+    cam: int = 2
+    thr: float = 25.0
+    min_area_cm2: float = 1.0
+    cell_mm: float = 5.0
+
+
+_PLANE_BG: dict = {}
+_PLANE_BG_LOCK = threading.Lock()
+
+
+def _area_cam(cam_id: int):
+    if cam_id == 1:
+        return cam
+    from routers.camera import get_cam2
+    return get_cam2()
+
+
+@router.get("/color_frame")
+def api_color_frame(cam: int = 1):
+    """Latest native-resolution colour frame as JPEG — lets the calibration UI
+    show a flat image the user can click to pick a pixel (u,v) at 1:1 scale."""
+    c = _area_cam(cam)
+    if c is None or not getattr(c, "_running", False):
+        return Response(status_code=503)
+    img = c.get_latest_color()
+    if img is None:
+        return Response(status_code=503)
+    ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+    if not ok:
+        return Response(status_code=503)
+    return Response(content=buf.tobytes(), media_type="image/jpeg", headers=_STREAM_HEADERS)
+
+
+@router.post("/plane_background")
+def api_plane_background(body: PlaneCamBody):
+    """Store the current (empty) surface image as the subtraction background."""
+    c = _area_cam(body.cam)
+    if c is None or not getattr(c, "_running", False):
+        return {"ok": False, "error": "camera not running"}
+    img = c.get_latest_color()
+    if img is None:
+        return {"ok": False, "error": "no frame"}
+    with _PLANE_BG_LOCK:
+        _PLANE_BG[body.cam] = img.copy()
+    return {"ok": True, "cam": body.cam, "height": int(img.shape[0]), "width": int(img.shape[1])}
+
+
+@router.get("/plane_background")
+def api_plane_background_status():
+    with _PLANE_BG_LOCK:
+        cams = {str(k): [int(v.shape[0]), int(v.shape[1])] for k, v in _PLANE_BG.items()}
+    return {"ok": True, "cams": cams}
+
+
+@router.post("/area_plane")
+def api_area_plane(body: PlaneAreaBody):
+    """Depth-free planar area using the floor-calibration homography.
+
+    The D455 cannot resolve depth closer than ~0.3 m, but a fixed camera looking
+    at a flat surface only needs a pixel→robot-XY homography (floorcalib):
+    subtract the taught empty-surface background to get the object mask, then
+    push every mask pixel through H and rasterise on a real-mm grid. No depth
+    is used, so the <30 cm range limit does not apply.
+    """
+    pairs, H, _fz = floorcalib.load()
+    if H is None:
+        return {"ok": False, "error": "calibrate floor first (need >=4 taught points)"}
+    c = _area_cam(body.cam)
+    if c is None or not getattr(c, "_running", False):
+        return {"ok": False, "error": "camera not running"}
+    img = c.get_latest_color()
+    if img is None:
+        return {"ok": False, "error": "no frame"}
+    with _PLANE_BG_LOCK:
+        bg = _PLANE_BG.get(body.cam)
+    if bg is None or bg.shape != img.shape:
+        return {"ok": False, "error": "capture the empty-surface background first"}
+
+    diff = cv2.absdiff(img, bg)
+    gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+    _, mask = cv2.threshold(gray, body.thr, 255, cv2.THRESH_BINARY)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
+
+    nlab, labels, stats, _cents = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    cell = max(1.0, body.cell_mm)
+    objects = []
+    for lab in range(1, nlab):
+        px = int(stats[lab, cv2.CC_STAT_AREA])
+        if px < 30:
+            continue
+        ys, xs = np.where(labels == lab)
+        hom = H @ np.vstack([xs, ys, np.ones_like(xs)]).astype(np.float64)
+        w = hom[2]
+        ok = np.abs(w) > 1e-9
+        X = hom[0][ok] / w[ok]
+        Y = hom[1][ok] / w[ok]
+        if X.size < 3:
+            continue
+        ix = np.floor((X - X.min()) / cell).astype(np.int64)
+        iy = np.floor((Y - Y.min()) / cell).astype(np.int64)
+        Wc, Hc = int(ix.max()) + 2, int(iy.max()) + 2
+        if Wc * Hc > 4_000_000:
+            continue
+        grid = np.zeros((Hc, Wc), np.uint8)
+        grid[iy, ix] = 1
+        area_cm2 = float(grid.sum()) * (cell / 10.0) ** 2
+        if area_cm2 < body.min_area_cm2:
+            continue
+        objects.append({
+            "area_cm2": round(area_cm2, 2),
+            "centroid_mm": [round(float(X.mean()), 1), round(float(Y.mean()), 1)],
+            "pixels": px,
+        })
+
+    objects.sort(key=lambda o: -o["area_cm2"])
+    return {"ok": True, "cam": body.cam, "count": len(objects),
+            "total_cm2": round(sum(o["area_cm2"] for o in objects), 2),
+            "objects": objects,
+            "rmse_mm": floorcalib.reprojection_rmse(H, pairs)}
+
+
 class AlignIcpBody(BaseModel):
     source: list          # [[x,y,z], ...] to be moved
     target: list          # [[x,y,z], ...] reference
@@ -490,23 +745,18 @@ class AlignIcpBody(BaseModel):
     max_dist: float = 0.05
 
 
-def _icp_align(src, dst, iters=30, max_dist=0.05, keep_frac=0.6, min_inliers=60):
-    """Trimmed rigid point-to-point ICP (Umeyama / SVD). Both arrays must
-    already be in a common frame. Returns (T, fitness, rmse) where T is a 4x4
-    float64 transform aligning src onto dst, or None when there is too little
-    overlap.
+def _voxel_downsample(P, voxel):
+    """One point per voxel (keeps the cloud's shape, cuts density)."""
+    if voxel <= 0 or len(P) == 0:
+        return P
+    keys = np.floor(P / voxel).astype(np.int64)
+    _, idx = np.unique(keys, axis=0, return_index=True)
+    return P[idx]
 
-    Uses trimmed ICP (keep the closest keep_frac of pairs, at least
-    min_inliers, never beyond max_dist) instead of "every pair under
-    max_dist". With two cameras looking at partly different scene content, the
-    raw cutoff accepts mostly spurious correspondences and returns a
-    confident-but-wrong transform; trimming makes the fit robust and lets the
-    caller gate on fitness/rmse before applying anything."""
-    src = np.asarray(src, dtype=np.float64)
-    dst = np.asarray(dst, dtype=np.float64)
-    if src.ndim != 2 or dst.ndim != 2 or src.shape[0] < 10 or dst.shape[0] < 10:
-        return None
-    cur = src.copy()
+
+def _icp_core(cur, dst, iters, max_dist, keep_frac, min_inliers):
+    """One fixed-scale trimmed-ICP pass. cur is already near dst. Returns
+    (T_delta, cur_moved, fitness, rmse)."""
     n = cur.shape[0]
     T = np.eye(4)
     fitness = 0.0
@@ -535,43 +785,159 @@ def _icp_align(src, dst, iters=30, max_dist=0.05, keep_frac=0.6, min_inliers=60)
             Vt[-1, :] *= -1
             R = Vt.T @ U.T
         t = qc - R @ pc
-        ang = np.arccos(np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0))
-        if np.linalg.norm(t) < 1e-5 and ang < 1e-4:
-            cur = (R @ cur.T).T + t
-            dT = np.eye(4)
-            dT[:3, :3] = R
-            dT[:3, 3] = t
-            T = dT @ T
-            break
         cur = (R @ cur.T).T + t
         dT = np.eye(4)
         dT[:3, :3] = R
         dT[:3, 3] = t
         T = dT @ T
+        ang = np.arccos(np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0))
+        if np.linalg.norm(t) < 1e-5 and ang < 1e-4:
+            break
+    return T, cur, fitness, rmse
+
+
+def _rot_between(a, b):
+    """Rotation matrix taking unit vector a onto unit vector b (Rodrigues)."""
+    a = a / np.linalg.norm(a)
+    b = b / np.linalg.norm(b)
+    v = np.cross(a, b)
+    c = float(a @ b)
+    if np.linalg.norm(v) < 1e-8:
+        if c > 0:
+            return np.eye(3)
+        perp = np.array([1.0, 0.0, 0.0]) if abs(a[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+        ax = np.cross(a, perp)
+        ax /= np.linalg.norm(ax)
+        K = np.array([[0, -ax[2], ax[1]], [ax[2], 0, -ax[0]], [-ax[1], ax[0], 0]])
+        return np.eye(3) + 2 * (K @ K)
+    K = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+    return np.eye(3) + K + (K @ K) * (1.0 / (1.0 + c))
+
+
+def _rot_axis(axis, angle):
+    """Rotation matrix about a (unit) axis by angle (Rodrigues)."""
+    ax = axis / np.linalg.norm(axis)
+    K = np.array([[0, -ax[2], ax[1]], [ax[2], 0, -ax[0]], [-ax[1], ax[0], 0]])
+    return np.eye(3) + np.sin(angle) * K + (1.0 - np.cos(angle)) * (K @ K)
+
+
+def _icp_run(src, dst, T0, schedule, keep_frac):
+    T = T0.copy()
+    fitness = 0.0
+    rmse = float("inf")
+    for voxel, md, it, mi in schedule:
+        s = _voxel_downsample(src, voxel)
+        d = _voxel_downsample(dst, voxel)
+        if s.shape[0] < 10 or d.shape[0] < 10:
+            continue
+        cur = (T[:3, :3] @ s.T).T + T[:3, 3]
+        Td, _cur, fit, r = _icp_core(cur, d, it, md, keep_frac, mi)
+        T = Td @ T
+        fitness, rmse = fit, r
     return T, fitness, rmse
+
+
+def _icp_align(src, dst, iters=30, max_dist=0.05, keep_frac=0.6, min_inliers=60):
+    """Trimmed rigid ICP (Umeyama / SVD), coarse-to-fine with a seeded search.
+
+    Both arrays must already be in a common frame. Returns (T, fitness, rmse)
+    with T a 4x4 aligning src onto dst, or None.
+
+    Plain ICP stalls unless the initial offset is under ~one point spacing. Two
+    cameras placed by hand-tuned mounts easily start tens of cm apart, so we
+    seed it: match centroids (removes the bulk translation) and, since both
+    cameras see the same flat surface, align the dominant plane normals too
+    (fixes the tilt). Coarse-to-fine then refines. A large in-plane rotation
+    cannot be recovered this way on a small flat scene — ICP's basin is narrower
+    than the rotation — so rough manual alignment of the mounts is still needed
+    before auto-align; that is where extrinsic calibration would help."""
+    src = np.asarray(src, dtype=np.float64)
+    dst = np.asarray(dst, dtype=np.float64)
+    if src.ndim != 2 or dst.ndim != 2 or src.shape[0] < 10 or dst.shape[0] < 10:
+        return None
+
+    if src.shape[0] > 900:
+        src = src[np.linspace(0, src.shape[0] - 1, 900).astype(np.int64)]
+    if dst.shape[0] > 900:
+        dst = dst[np.linspace(0, dst.shape[0] - 1, 900).astype(np.int64)]
+
+    c_src = src.mean(axis=0)
+    c_dst = dst.mean(axis=0)
+    coarse = [
+        (0.06, 0.50, 30, max(15, min_inliers // 4)),
+        (0.03, 0.15, 30, max(25, min_inliers // 2)),
+    ]
+    fine = [(0.0, max_dist, iters, min_inliers)]
+
+    candidates = []
+    t0 = np.eye(4)
+    t0[:3, 3] = c_dst - c_src
+    candidates.append(t0)
+
+    fp_src = _fit_plane_ransac(src, iters=80)
+    fp_dst = _fit_plane_ransac(dst, iters=80)
+    if fp_src is not None and fp_dst is not None:
+        n_src = fp_src[0]
+        n_dst = fp_dst[0]
+        for sgn in (1.0, -1.0):
+            R_tilt = _rot_between(n_src, sgn * n_dst)
+            tc = np.eye(4)
+            tc[:3, :3] = R_tilt
+            tc[:3, 3] = c_dst - R_tilt @ c_src
+            candidates.append(tc)
+
+    best = None
+    for T0 in candidates:
+        T, fit, rmse = _icp_run(src, dst, T0, coarse, keep_frac)
+        if best is None or rmse < best[2]:
+            best = (T, fit, rmse)
+
+    T, fit, rmse = _icp_run(src, dst, best[0], fine, keep_frac)
+    return T, fit, rmse
+
+
+_ALIGN_LOG = {"state": None, "time": 0.0}
+_ALIGN_LOG_LOCK = threading.Lock()
+
+
+def _log_align(request: Request, state_name: str, detail: str = ""):
+    """Log an align result only on a state change (or every 60 s as a heartbeat).
+
+    The auto-align runs in a loop; on a persistently failing scene it produced
+    ~580 identical "fail" rows in an afternoon. One row per transition keeps
+    the history meaningful and the table bounded."""
+    now = time.time()
+    with _ALIGN_LOG_LOCK:
+        changed = state_name != _ALIGN_LOG["state"]
+        stale = now - _ALIGN_LOG["time"] > 60.0
+        if not (changed or stale):
+            return
+        _ALIGN_LOG["state"] = state_name
+        _ALIGN_LOG["time"] = now
+    _log_user_event(request, "align", state_name, detail)
 
 
 @router.post("/align_icp")
 def api_align_icp(request: Request, body: AlignIcpBody):
     res = _icp_align(body.source, body.target, iters=body.iters, max_dist=body.max_dist)
     if res is None:
-        _log_user_event(request, "align", "fail", "not enough overlap")
+        _log_align(request, "fail", "not enough overlap")
         return {"ok": False, "error": "not enough overlap between the two clouds"}
     T, fitness, rmse = res
     t_norm = float(np.linalg.norm(T[:3, 3]))
     ang = float(np.arccos(np.clip((np.trace(T[:3, :3]) - 1.0) / 2.0, -1.0, 1.0)))
     if t_norm > 0.30 or ang > np.deg2rad(30.0):
-        _log_user_event(request, "align", "fail",
-                        f"correction too large (t={t_norm:.3f}m, r={np.rad2deg(ang):.1f}deg)")
+        _log_align(request, "fail",
+                   f"correction too large (t={t_norm:.3f}m, r={np.rad2deg(ang):.1f}deg)")
         return {"ok": False,
                 "error": f"correction too large (t={t_norm:.3f}m, r={np.rad2deg(ang):.1f}deg)"}
     if fitness < 0.5 or rmse > 0.02:
-        _log_user_event(request, "align", "fail",
-                        f"poor fit (fitness={fitness:.2f}, rmse={rmse * 1000:.0f}mm)")
+        _log_align(request, "fail",
+                   f"poor fit (fitness={fitness:.2f}, rmse={rmse * 1000:.0f}mm)")
         return {"ok": False,
                 "error": f"poor fit (fitness={fitness:.2f}, rmse={rmse * 1000:.0f}mm)"}
-    _log_user_event(request, "align", "ok",
-                    f"fitness={fitness:.3f} rmse={rmse * 1000:.1f}mm t={t_norm * 1000:.0f}mm")
+    _log_align(request, "ok",
+               f"fitness={fitness:.3f} rmse={rmse * 1000:.1f}mm t={t_norm * 1000:.0f}mm")
     return {"ok": True, "transform": T.T.reshape(-1).tolist(),
             "fitness": round(fitness, 3), "rmse": round(rmse, 5)}
 
