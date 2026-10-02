@@ -36,6 +36,19 @@ _AXIS_KWARG         = {"rx": "drx", "ry": "dry", "rz": "drz"}
 _AXIS_COMPONENT_IDX = {"rx": 1, "ry": 0, "rz": 5}
 
 
+def _notify_align(state, action: str, detail: str = "") -> None:
+    """Report per-step align progress to the event log without importing the
+    router (this runs on a background thread with no request). The endpoint
+    installs state.on_align_progress; throttling lives in the hook itself."""
+    hook = getattr(state, "on_align_progress", None)
+    if hook is None:
+        return
+    try:
+        hook(action, detail)
+    except Exception:
+        pass
+
+
 def _region_grow_measure(cam: Camera, state: "AppState"):
     """Depth-only measurement: grow the object's region from state's
     current seed pixel (Camera.sample_plane_region_grow(), no color image
@@ -401,6 +414,8 @@ def _converge_rz(robot: Robot, cam: Camera, state: "AppState", rec: AlignRecorde
         state.status = (f"align: rz step {step+1}/{ALIGN_RZ_MAX_ITERS}  "
                          f"roll={roll_deg:.1f}°  tilt={tilt_now:.1f}°")
         rec.log(f"  [Align] {state.status}")
+        _notify_align(state, "rz_step",
+                      f"step={step+1} roll={roll_deg:.1f} tilt={tilt_now:.1f}")
 
         if rmse_now > ALIGN_MAX_RMSE_MM:
             state.status = (f"align: plane fit degraded during rz correction "
@@ -664,6 +679,9 @@ def do_align(robot: Robot, cam: Camera, state: AppState):
                              f"rmse={rmse_mm:.2f}mm  depth_range={depth_range_mm:.1f}mm  "
                              f"{'fine' if fine else 'coarse'}")
             rec.log(f"  [Align] {state.status}")
+            _notify_align(state, "step",
+                          f"{axis} step={step+1} tilt={tilt:.1f} rmse={rmse_mm:.2f} "
+                          f"roll={getattr(state, 'last_roll_deg', None)}")
 
             # ── plane-fit-quality guard ──────────────────────────────────────
             # Historical note: this guard was added 2026-07-27i when object

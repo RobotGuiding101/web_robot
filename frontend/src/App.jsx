@@ -6,6 +6,7 @@ import CameraViewPage from './pages/CameraViewPage'
 import DrawingModePage from './pages/DrawingModePage'
 import DobotControllerPage from './pages/DobotControllerPage'
 import SystemSettingsPage from './pages/SystemSettingsPage'
+import LogsPage from './pages/LogsPage'
 import CameraStream from './components/CameraStream'
 import RequireAuth from './components/RequireAuth'
 import ApiErrorBanner from './components/ApiErrorBanner'
@@ -25,6 +26,7 @@ function App() {
         <Route path="/drawing" element={<RequireAuth><DrawingModePage /></RequireAuth>} />
         <Route path="/dobot" element={<RequireAuth><DobotControllerPage /></RequireAuth>} />
         <Route path="/settings" element={<RequireAuth><SystemSettingsPage /></RequireAuth>} />
+        <Route path="/logs" element={<RequireAuth><LogsPage /></RequireAuth>} />
       </Routes>
     </BrowserRouter>
   )

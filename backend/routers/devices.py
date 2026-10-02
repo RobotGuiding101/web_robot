@@ -116,19 +116,45 @@ async def get_relay_history(
 @router.get("/events")
 async def get_events(
     user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
     device: str = "",
+    username: str = "",
+    search: str = "",
     limit: int = 100,
+    offset: int = 0,
 ):
-    """Recent device-log events (robot, camera, align, estop, webrtc, relay).
-
-    Reads from the same dedicated writer engine so the live app's pool is not
-    touched. `device` filters by name, `limit` caps the page.
-    """
-    from routers.device_events import get_recent
-    events = get_recent(limit=min(limit, 500))
+    """Activity log with the acting user — "who did what" (robot / camera /
+    align / estop / relay). Newest first; filter by device, username, or a
+    free-text match on `detail`; page with limit + offset."""
+    stmt = (
+        select(DeviceLog, User.username)
+        .join(User, DeviceLog.user_id == User.id, isouter=True)
+    )
     if device:
-        events = [e for e in events if e["device"] == device]
-    return {"events": events}
+        stmt = stmt.where(DeviceLog.device == device)
+    if username:
+        stmt = stmt.where(User.username == username)
+    if search:
+        stmt = stmt.where(DeviceLog.detail.ilike(f"%{search}%"))
+    stmt = (
+        stmt.order_by(desc(DeviceLog.created_at))
+        .limit(max(1, min(limit, 500)))
+        .offset(max(0, offset))
+    )
+    rows = (await db.execute(stmt)).all()
+    return {
+        "events": [
+            {
+                "id": log.id,
+                "time": log.created_at.isoformat() if log.created_at else None,
+                "user": uname or log.user_id,
+                "device": log.device,
+                "action": log.state,
+                "detail": log.detail,
+            }
+            for log, uname in rows
+        ]
+    }
 
 
 @router.post("/events/prune")

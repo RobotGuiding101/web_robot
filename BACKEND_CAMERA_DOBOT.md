@@ -2,7 +2,16 @@
 
 > เอกสารสำหรับพรีเซนต์ — อธิบายว่า **ทำไมเลือกทำแบบนี้**, **ข้อดี**, **ข้อเสีย**, และ **อะไรแทนได้**
 > ขอบเขต: เฉพาะ subsystem กล้อง (RealSense D455) และหุ่น (Dobot CR5) ใน backend
-> อัปเดต: 2026-09-17
+> อัปเดต: 2026-10-03
+
+**อัปเดตล่าสุด (เทียบกับ 2026-09-17)**
+- เพิ่ม **กล้องตัวที่ 2 (cam2)** เป็น peer ของ cam1 — สแกน/เลือก/สลับกล้องได้ และจำกล้องที่เลือกข้าม restart (`camera_selection.json`)
+- จูน **MJPEG ใหม่**: cam1 `848×480 Q65 @15fps` (~3.3 Mbps), cam2 `848×480 Q70 @8fps` (~1.7 Mbps) — ยืนยันว่า **Pi 5 ไม่มี hardware H.264 encoder** (`h264_v4l2m2m` → "Could not find a valid device")
+- เพิ่ม **WebSocket `/ws/joints`** (angles ~20Hz + pose ~10Hz + connected) แทนการ poll สถานะทุกหน้า
+- **`robot_lock` (RLock)**: serialize ทุกคำสั่งเคลื่อนที่ (jog/move/align/draw/sequence) + reject jog ขณะ busy
+- **persist state**: `state_store.json` (marks/grid) + `user_settings` (home/camera) → ไม่หายเมื่อ restart (ปิดข้อจำกัดเดิม #6)
+- **security**: บังคับ `JWT_SECRET` ที่แข็งแรง (ไม่ start ถ้าเป็นค่า default), PostgreSQL bind `127.0.0.1` เท่านั้น
+- เพิ่ม **event log** (`device_logs.detail`) + `POST /api/devices/events/prune`; และ **unit tests** backend (pytest) / frontend (vitest)
 
 ---
 
@@ -10,10 +19,11 @@
 
 ```mermaid
 graph LR
-    B["Browser<br/>(React + canvas MJPEG)"] -->|HTTPS| CF[cloudflared]
+    B["Browser<br/>(React: canvas MJPEG + WS)"] -->|HTTPS| CF[cloudflared]
     CF --> NG[nginx]
     NG -->|/api/*| API["FastAPI (uvicorn)<br/>routers/mapcontrol.py"]
-    API --> CAM["Camera singleton<br/>(maps_point/camera.py)"]
+    NG -->|/ws/joints| API
+    API --> CAM["Camera singletons<br/>(cam1 + cam2)"]
     API --> ROB["Robot singleton<br/>(maps_point/robot.py)"]
     API --> ST["AppState singleton<br/>(maps_point/align.py)"]
     CAM -->|librealsense| RS[(RealSense D455<br/>depth + color + IMU)]
@@ -21,17 +31,22 @@ graph LR
     ROB -->|TCP 30003 move| DOB
     ST --> TRK["tracking thread<br/>(1 ตัว ตลอดชีวิตแอป)"]
     TRK --> CAM
-    API --> PG[(PostgreSQL<br/>users / settings)]
+    API -->|RLock| ROB
+    API --> PG[(PostgreSQL<br/>users / user_settings / device_logs)]
+    API -.boot resume.-> SEL[(camera_selection.json)]
 ```
 
-**3 ตัว singletons ระดับโมดูล** (`mapcontrol.py:35-38`): `robot`, `cam`, `state` + tracking thread 1 ตัว
-→ ทั้งแอปมี "กล้องหนึ่งตัว หุ่นหนึ่งตัว สถานะหนึ่งชุด" — ง่ายต่อการให้เหตุผลเรื่อง concurrency
+**3 ตัว singletons ระดับโมดูล** (`mapcontrol.py:35-38`): `robot`, `cam`, `state` + tracking thread 1 ตัว (และ `cam2` ใน `routers/camera.py`)
+→ ทั้งแอปมี "กล้องหนึ่งชุด หุ่นหนึ่งตัว สถานะหนึ่งชุด" — ง่ายต่อการให้เหตุผลเรื่อง concurrency
 
 | ตัวเลขที่วัดได้จริง (Pi 5, 4 cores) | ค่า |
 |---|---|
-| CPU backend ตอนสตรีม (2 viewer) | 46–52% ของ 1 core |
-| แบนด์วิดท์ต่อ viewer | 390 KB/s (640×360 @15fps, q70) |
-| capture | 848×480 @30fps (depth z16 + color bgr8 + IMU) |
+| capture (ต่อกล้อง) | 848×480 @30fps (depth z16 + color bgr8 + IMU) |
+| cam1 stream ปัจจุบัน | 848×480 Q65 @15fps ≈ **3.3 Mbps** |
+| cam2 stream ปัจจุบัน | 848×480 Q70 @8fps ≈ **1.7 Mbps** |
+| รวม 2 กล้อง | ≈ **5 Mbps** (อยู่ใน budget Wi-Fi 2.4 GHz) |
+| CPU backend ตอนสตรีม (2 viewer) | ~46–52% ของ 1 core (encode แชร์ทุก viewer; ตัวเลขเดิมก่อนขยายเป็น 2 กล้อง native) |
+| HW H.264 encode บน Pi 5 | **ไม่มี** — software x264 640×360@30 ≈ 26% ของ 1 core |
 | latency ของ MJPEG (LAN) | ~100–200 ms |
 
 ---
@@ -95,6 +110,14 @@ sequenceDiagram
 | ทำไม | ข้อดี | ข้อเสีย | แทนได้ด้วย |
 |---|---|---|---|
 | enumerate **ก่อน** เริ่มสตรีม ไม่งั้น librealsense deadlock · กล้องก่อนหุ่นเพื่อให้หน้าเว็บเห็นภาพเร็ว | • เปิดเครื่องแล้วพร้อมใช้ทันที<br/>• retry ครอบ กล้อง USB หลุดกลางทางยังกู้ได้ | • ถ้ากล้องค้างตอน start จะยืดเวลา boot<br/>• เป็น policy ตายตัว ไม่มีการตั้งค่าจาก UI | เปิดกล้องเองผ่านปุ่ม (ช้ากว่าแต่คุมได้) · systemd unit แยกสำหรับกล้อง · health-check loop ที่คอยปลุกกล้อง |
+
+### 1.6 สองกล้อง + เลือกกล้องแบบ dynamic
+
+**เลือกแบบนี้**: `cam1` (ใน `mapcontrol`) และ `cam2` (ใน `routers/camera.py`) เป็น peer — เปิดพร้อมกันตอน boot คนละ pipeline; สแกน (`/api/camera/scan`) เลือก (`/select`) สลับ (`/swap`) ได้ และ **จำกล้องที่เลือกไว้ข้าม restart**
+
+| ทำไม | ข้อดี | ข้อเสีย | แทนได้ด้วย |
+|---|---|---|---|
+| ต้องมี 2 มุมมอง (eye-in-hand + มุมกว้าง) และสลับได้ตามงาน | • เลือก/สลับกล้องได้โดยไม่แก้โค้ด<br/>• boot แล้วเปิดกล้องที่เลือกเอง (ไฟล์ `camera_selection.json`)<br/>• cam1/cam2 encode แชร์ cache ต่อ viewer | • 2 pipeline = กิน USB/CPU/แบนด์วิดท์เป็น 2 เท่า<br/>• สลับกล้องตอน align/draw รันไม่ได้ (ถูกบล็อก)<br/>• การเลือกเป็น global ไม่ใช่ per-user | เปิดทีละกล้อง (ประหยัดไฟ แต่สลับช้า) · กล้องตัวเดียวหมุน/ย้าย · กล้อง IP (RTSP) แยก |
 
 ---
 
@@ -166,11 +189,11 @@ sequenceDiagram
 
 ## 3. State & Concurrency
 
-**เลือกแบบนี้**: `AppState` เก็บทุกอย่างใน memory (points, grid, สถานะ align/draw) + เธรด tracking 1 ตัวที่รันตลอดชีวิตแอป
+**เลือกแบบนี้**: `AppState` เก็บ state การทำงานใน memory (points, grid, สถานะ align/draw) + เธรด tracking 1 ตัวตลอดชีวิตแอป — **แต่ persist ส่วนที่ต้องจำข้าม restart** ด้วย `state_store.json` (marks/grid) และ `user_settings` (home/camera) ส่วน **ทุกคำสั่งเคลื่อนที่ serialize ด้วย `robot_lock` (RLock)**
 
 | ทำไม | ข้อดี | ข้อเสีย | แทนได้ด้วย |
 |---|---|---|---|
-| งานนี้เป็น **single-operator single-robot** — เก็บใน memory เร็วกว่า DB รอบแล้วรอบเล่า และ state พวกนี้ไม่ควรอยู่ข้ามการรีสตาร์ตอยู่แล้ว | • อ่าน/เขียนเร็ว ไม่มี round-trip<br/>• debug ง่าย (`GET /api/map/status` เห็นทุกอย่าง)<br/>• ไม่มี migration/ไม่มี schema | • **`docker restart` = mark หายหมด** (จุด align, grid) ✗<br/>• หลายผู้ใช้พร้อมกันแชร์ state เดียวกัน (จงใจ แต่ต้องรู้ตัว)<br/>• เธรด tracking ไม่มี watchdog | เขียนลง DB/settings (อยู่ข้ามรีสตาร์ต แต่ช้า+เป็นภาระ) · Redis (กลาง ๆ) · file JSON snapshot (ง่ายสุดถ้าต้องการแค่ "จำได้") |
+| งานนี้เป็น **single-operator single-robot** — state บางอย่างเก็บใน memory เร็ว/ง่าย แต่ mark/grid/home ต้องอยู่ข้าม restart | • อ่าน/เขียนเร็ว ไม่มี round-trip<br/>• debug ง่าย (`GET /api/map/status` เห็นทุกอย่าง)<br/>• mark/grid/home รอด restart (snapshot + DB)<br/>• `robot_lock` กัน jog/align/draw ชนกัน | • tracking thread ยังไม่มี watchdog<br/>• หลายผู้ใช้แชร์ state เดียวกัน (จงใจ)<br/>• lock เป็น global → งานยาว (align/draw) บล็อก jog | DB/settings อย่างเดียว (ช้ากว่า) · Redis · file JSON snapshot (ใช้อยู่สำหรับ marks/grid) |
 
 **บทเรียน concurrency ที่สำคัญ 2 ข้อ**
 1. **DB session อยู่ตลอด request** → endpoint ที่บล็อกนาน (ต่อหุ่น/สตรีม MJPEG ที่เป็นนาที) ถือ connection ค้างไว้ ✗ → แก้โดยคืน connection ก่อนเข้า handler (`await db.close()`)
@@ -191,7 +214,10 @@ sequenceDiagram
 | re-assert tool frame ทุก move | เคยพังบน hardware (home ไปผิดที่หลัง align) | เพิ่ม round-trip | อ่าน+diff แทน apply เสมอ |
 | probe ทิศทางตอน align | ไม่รู้ Euler convention ของ CR5 | เสียเวลา 2–3 test moves | hardcode จากเอกสาร / Jacobian |
 | grid ที่สอนด้วยมือ + bilinear | ตัด hand-eye calibration ทั้งวง | ต้อง jog+mark ด้วยมือ, ผิวต้องเรียบ | hand-eye calib / plane fit อัตโนมัติ |
-| state ใน memory | single-operator, เร็ว, debug ง่าย | restart แล้ว mark หาย | DB / Redis / JSON snapshot |
+| state ใน memory (+ snapshot) | single-operator, เร็ว, debug ง่าย | restart แล้ว mark/grid/home **ไม่หาย** (persist แล้ว) | DB / Redis / JSON snapshot |
+| `robot_lock` serialize ทุก motion | jog/align/draw ชนกันได้ถ้าไม่ล็อก | งานยาว (align/draw) บล็อก jog | คิวคำสั่ง / per-device lock |
+| WS `/ws/joints` แทน poll | 1 connection/หน้า, latency ต่ำ | ต้อง auth ใน WS | SSE / poll |
+| สองกล้อง + จำค่าเลือก | สลับมุมมองได้ตามงาน | กิน USB/CPU/bandwidth ×2 | เปิดทีละกล้อง / RTSP |
 
 ---
 
@@ -203,9 +229,10 @@ sequenceDiagram
 | 2 | เธรด tracking รัน 24/7 | ~2.8% ตอนไม่มี mark | ย้าย guard ขึ้นก่อน `sample_depth()` / ทำ on-demand |
 | 3 | ไม่มี watchdog ของ capture thread | กล้องตายแล้วสตรีมค้างเงียบ | ตรวจ `_frame_count` ไม่ขยับเกิน N วิ → restart กล้องเอง |
 | 4 | MJPEG ยึด 1 worker ต่อ viewer | viewer เยอะ = threadpool ตึง | จำกัดจำนวน viewer / เปลี่ยนเป็น shared encoder thread + คิว |
-| 5 | ไม่มี unit/integration test เลย | refactor เสี่ยง | เริ่มจาก pure function (`_sort_corners`, `bilinear_cell`, `validate_grid`) ที่ทดสอบได้โดยไม่ต้องมี hardware |
-| 6 | state หายเมื่อ restart | mark/grid ต้องทำใหม่ | snapshot JSON ลงไฟล์/DB ตอนเปลี่ยน state |
+| 5 | ~~ไม่มี unit/integration test~~ ✅ **มีแล้ว** | — | pytest (`planegrid`/`config`/`models`/`auth`/`floorcalib`) + vitest (api / ApiErrorBanner / RequireAuth) |
+| 6 | ~~state หายเมื่อ restart~~ ✅ **แก้แล้ว** | — | `state_store.json` (marks/grid) + `user_settings` (home/camera) |
 | 7 | ไม่มี heartbeat กับหุ่น | หลุดแล้วรู้ช้า | poll `RobotMode` เป็นระยะ + ขึ้นเตือนบน UI |
+| 8 | 2 กล้องใช้ Wi-Fi budget รวมกัน (~5 Mbps) | ถ้า link แย่ ต้องลด Q/fps | 5 GHz / WebRTC / H.264 |
 
 ---
 
@@ -215,4 +242,4 @@ sequenceDiagram
 2. **เลือก MJPEG และ grid ที่สอนด้วยมือ** เพราะ "เรียบง่ายและตรวจสอบได้" ชนะ "ฉลาดแต่พังเงียบ" ในงานหุ่นยนต์
 3. **ทุกการตัดสินใจที่ดูแปลก ๆ มาจากเหตุการณ์จริงบน hardware** (deadlock ของ librealsense, home ไปผิดที่, rmse กระโดด) — ไม่ใช่การเดา
 4. **บทเรียนแพงสุดคือ timeout** — ไม่มี timeout ที่ socket เดียว ทำให้ทั้งแอปล่ม (หุ่นค้าง 2 นาที → DB pool ตาย)
-5. **จุดที่ควรลงทุนต่อ**: watchdog กล้อง, ลด `align` เป็นทุก 2 เฟรม, และ snapshot state — ได้ผลชัด ต้นทุนต่ำ
+5. **จุดที่ควรลงทุนต่อ**: watchdog กล้อง และลด `align` เป็นทุก 2 เฟรม (snapshot state ทำแล้ว)
