@@ -1,5 +1,7 @@
+import json
 import time
 import struct
+from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Request, Response, Query
 from fastapi.responses import StreamingResponse
@@ -39,6 +41,23 @@ cam2: Optional[Camera] = None
 cam2_lock = threading.Lock()
 _cam2_start_lock = threading.Lock()
 _cam2_last_active = 0.0
+
+_SELECTION_PATH = Path(__file__).resolve().parents[1] / "camera_selection.json"
+
+
+def load_saved_selection() -> dict:
+    try:
+        return json.loads(_SELECTION_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_selection(primary: Optional[str] = None, secondary: Optional[str] = None) -> None:
+    try:
+        _SELECTION_PATH.write_text(
+            json.dumps({"primary": primary, "secondary": secondary}), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def get_cam2() -> Camera:
@@ -340,6 +359,7 @@ def select_camera(body: CameraSelectBody):
             c2.set_serial(old_primary)
             c2.start()
 
+    save_selection(cam.serial, c2.serial if c2 else None)
     return {"ok": ok, "selected": cam.serial, "running": cam._running}
 
 
@@ -375,6 +395,7 @@ def swap_cameras():
     else:
         ok2 = False
 
+    save_selection(cam.serial, c2.serial if c2 else None)
     return {
         "ok": ok1,
         "selected": cam.serial,

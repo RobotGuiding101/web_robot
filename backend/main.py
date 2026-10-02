@@ -45,6 +45,16 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"[AutoStart] device list failed: {e}", flush=True)
 
+        saved = {}
+        try:
+            from routers.camera import load_saved_selection
+            saved = load_saved_selection()
+            if saved.get("primary"):
+                cam.set_serial(saved["primary"])
+                print(f"[AutoStart] resume primary serial={saved['primary']}", flush=True)
+        except Exception as e:
+            print(f"[AutoStart] resume serial failed: {e}", flush=True)
+
         for attempt in range(1, 4):
             if cam._running:
                 print(f"[AutoStart] camera already running (attempt {attempt})", flush=True)
@@ -61,7 +71,7 @@ async def lifespan(app: FastAPI):
 
         try:
             from routers.camera import start_cam2_once
-            c2 = start_cam2_once()
+            c2 = start_cam2_once(saved.get("secondary"))
             print(f"[AutoStart] cam2 running={bool(c2 and c2._running)}", flush=True)
         except Exception as e:
             print(f"[AutoStart] cam2 start failed: {e}", flush=True)
