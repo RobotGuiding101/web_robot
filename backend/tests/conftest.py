@@ -1,9 +1,14 @@
 """Shared pytest setup for backend unit tests."""
+import os
 import sys
 import types
 from pathlib import Path
 
 import pytest
+
+# routers/auth.py refuses to import without a strong JWT_SECRET; tests don't
+# exercise real auth, so give them a throwaway value.
+os.environ.setdefault("JWT_SECRET", "test-secret-not-for-production-0123456789")
 
 # Make `import database`, `import models`, `from maps_point import ...` work
 # regardless of the directory pytest is invoked from.

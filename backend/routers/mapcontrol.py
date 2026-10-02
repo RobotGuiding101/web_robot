@@ -205,13 +205,27 @@ def _do_move_sequence(robot_inst, points, mode, speed, pause_s):
         sequence_running = False
 
 
+# One lock for every robot motion. Rapid jog / move / align / draw / sequence
+# each run in their own thread; without serialising them they race the CR5's
+# single move queue. RLock so a locked action may re-enter safely.
+robot_lock = threading.RLock()
+
+
+def _run_locked(fn, *args, **kwargs):
+    """Run a (usually long) robot action while holding the move lock, so it
+    cannot overlap another motion from a different thread."""
+    with robot_lock:
+        return fn(*args, **kwargs)
+
+
 def _safe_call(fn, *args, **kwargs):
     """Run a Robot method as a thread target, logging any failure instead of
     letting the daemon thread die with an unhandled traceback. Keep the
     generic branch: a socket timeout (robot unplugged mid-session) used to
     vanish silently here, so the UI just looked like nothing happened."""
     try:
-        fn(*args, **kwargs)
+        with robot_lock:
+            fn(*args, **kwargs)
     except RobotMoveError as e:
         log(f"  [Robot] move rejected — {e}")
     except Exception as e:
@@ -285,13 +299,14 @@ def _grid_fully_marked() -> bool:
 
 STREAM_FPS = 30
 STREAM_FPS_IDLE = 30
-# Wi-Fi-first budget: the viewing machine sits on 2.4 GHz, where an ~11 Mbps
-# MJPEG pair bufferbloats hard (RTT spikes ~3ms -> ~180ms). 640x360 Q62 @25fps
-# drops cam1 to ~3 Mbps so both cameras fit a 2.4 GHz link with low latency.
-STREAM_W = 640
-STREAM_H = 360
-STREAM_JPEG_QUALITY = 62
-STREAM_TARGET_FPS = 25
+# cam1 at the D455's native 848x480 (no downscale — sharpest possible) with fps
+# traded down to 15 so it still fits the ~3 Mbps 2.4 GHz budget: full-res at
+# 20-25fps measured ~6.5 Mbps and bufferbloated. Raise STREAM_TARGET_FPS first
+# for smoother motion, or lower STREAM_JPEG_QUALITY if it still stutters.
+STREAM_W = 848
+STREAM_H = 480
+STREAM_JPEG_QUALITY = 65
+STREAM_TARGET_FPS = 15
 
 
 _DEPTH_CMAP = getattr(cv2, "COLORMAP_TURBO", cv2.COLORMAP_JET)
@@ -1172,6 +1187,8 @@ def api_jog(body: JogBody):
         return {"ok": False, "error": "axis must be x/y/z/rx/ry/rz"}
     if not robot.connected:
         return {"ok": False, "error": "not connected"}
+    if state.align_running or state.draw_running or sequence_running:
+        return {"ok": False, "error": "robot busy (align/draw/sequence running)"}
     # Apply speed (1-100%) before jog
     speed = max(1, min(100, body.speed))
     robot.dashboard.SpeedFactor(speed)
@@ -1186,6 +1203,8 @@ def api_jog_joint(body: JogJointBody):
         return {"ok": False, "error": "joint must be 1-6"}
     if not robot.connected:
         return {"ok": False, "error": "not connected"}
+    if state.align_running or state.draw_running or sequence_running:
+        return {"ok": False, "error": "robot busy (align/draw/sequence running)"}
     # Apply speed (1-100%) before jog
     speed = max(1, min(100, body.speed))
     robot.dashboard.SpeedFactor(speed)
@@ -1242,8 +1261,8 @@ def api_move_sequence(body: MoveSequenceBody):
     pause_s = max(0.0, min(10.0, float(body.pause_s if body.pause_s is not None else 0.5)))
 
     threading.Thread(
-        target=_do_move_sequence,
-        args=(robot, body.points, mode, speed, pause_s),
+        target=_run_locked,
+        args=(_do_move_sequence, robot, body.points, mode, speed, pause_s),
         daemon=True,
     ).start()
 
@@ -1278,7 +1297,7 @@ def api_align():
         return {"ok": False, "error": "need 4 points"}
     if state.align_running or state.draw_running:
         return {"ok": False, "error": "already running"}
-    threading.Thread(target=do_align, args=(robot, cam, state), daemon=True).start()
+    threading.Thread(target=_run_locked, args=(do_align, robot, cam, state), daemon=True).start()
     return {"ok": True}
 
 
@@ -1528,7 +1547,7 @@ def api_draw(body: DrawBody):
         return {"ok": False, "error": "already running"}
 
     _log_grid_mapping(strokes)
-    threading.Thread(target=do_draw, args=(robot, state, strokes), daemon=True).start()
+    threading.Thread(target=_run_locked, args=(do_draw, robot, state, strokes), daemon=True).start()
     return {"ok": True}
 
 
@@ -1668,7 +1687,7 @@ def _run_cli_command(raw: str) -> str:
             return "need 4 points first — click 4 corners on the video"
         if state.align_running or state.draw_running:
             return "already running"
-        threading.Thread(target=do_align, args=(robot, cam, state), daemon=True).start()
+        threading.Thread(target=_run_locked, args=(do_align, robot, cam, state), daemon=True).start()
         return "align started"
     elif cmd == "stop":
         state.align_stop.set()

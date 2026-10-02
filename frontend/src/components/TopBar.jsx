@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { apiFetch } from '../lib/api'
+import { useJointsSocket } from '../lib/useJointsSocket'
 
 const TopBar = ({ title, onEmergency, showConnect = true }) => {
   const [ip, setIp] = useState(
@@ -24,18 +25,12 @@ const TopBar = ({ title, onEmergency, showConnect = true }) => {
     }
   }, [])
 
-  // Poll robot connection status
+  // Connection state comes from the shared /ws/joints feed instead of polling
+  // /api/map/status on every page.
+  const joints = useJointsSocket()
   useEffect(() => {
-    const check = () => {
-      apiFetch('/api/map/status')
-        .then((r) => r.json())
-        .then((d) => setRobotConnected(!!d.connected))
-        .catch(() => setRobotConnected(false))
-    }
-    check()
-    const interval = setInterval(check, 8000)
-    return () => clearInterval(interval)
-  }, [])
+    if (joints && typeof joints.connected === 'boolean') setRobotConnected(joints.connected)
+  }, [joints])
 
   // ── Spacebar → Emergency Stop ─────────────────────────────────────────────
   useEffect(() => {

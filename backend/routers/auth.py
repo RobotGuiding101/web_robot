@@ -14,7 +14,14 @@ from models import User
 router = APIRouter()
 
 # ── config ───────────────────────────────────────────────────────────────────
-SECRET_KEY = os.environ.get("JWT_SECRET", "robot-arm-secret-change-me")
+# Refuse to start with a missing / placeholder secret — the old fallback was a
+# public constant, so anyone could forge a token for any user.
+_INSECURE_SECRETS = {"", "robot-arm-secret-change-me", "change-me-in-production", "change-me"}
+SECRET_KEY = os.environ.get("JWT_SECRET", "")
+if SECRET_KEY in _INSECURE_SECRETS or len(SECRET_KEY) < 16:
+    raise RuntimeError(
+        "JWT_SECRET is missing or a known placeholder — set a strong random value "
+        "in backend/.env (see .env.example). Refusing to start.")
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_HOURS = 72
 

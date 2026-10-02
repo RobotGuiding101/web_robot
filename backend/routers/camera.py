@@ -16,12 +16,14 @@ router = APIRouter()
 
 SCAN_TIMEOUT_S = 6.0
 
-# CAM2 shares the link with CAM1 (see mapcontrol.STREAM_TARGET_FPS) — kept
-# smaller (480x270 Q55 @20fps, ~1.5 Mbps) so both cams stay smooth on 2.4 GHz.
-CAM2_STREAM_W = 480
-CAM2_STREAM_H = 270
-CAM2_STREAM_QUALITY = 55
-CAM2_TARGET_FPS = 20
+# CAM2 shares the link with CAM1 (see mapcontrol.STREAM_TARGET_FPS) and streams
+# at the D455's native 848x480. At a fixed bitrate perceived sharpness is set
+# more by JPEG quality (blockiness) than by resolution, so Q70 @8fps reads
+# cleaner than the old Q55 while still fitting under ~5 Mbps with cam1.
+CAM2_STREAM_W = 848
+CAM2_STREAM_H = 480
+CAM2_STREAM_QUALITY = 70
+CAM2_TARGET_FPS = 8
 
 
 class CameraModeBody(BaseModel):
