@@ -1,20 +1,27 @@
 import time
 import struct
 from typing import Optional
-from fastapi import APIRouter, Response, Query
+from fastapi import APIRouter, Request, Response, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import threading
 import cv2
 import numpy as np
 
-from routers.mapcontrol import cam, state, _mjpeg_generator, _STREAM_HEADERS, _colorize_depth
+from routers.mapcontrol import cam, state, _mjpeg_generator, _STREAM_HEADERS, _colorize_depth, _log_user_event
 from maps_point.camera import list_devices, Camera
 from maps_point.render import draw_overlay
 
 router = APIRouter()
 
 SCAN_TIMEOUT_S = 6.0
+
+# CAM2 shares the LAN with CAM1 (see mapcontrol.STREAM_TARGET_FPS); a smaller
+# 640x360 frame keeps both cameras inside the ~24.7 Mbps link budget.
+CAM2_STREAM_W = 640
+CAM2_STREAM_H = 360
+CAM2_STREAM_QUALITY = 75
+CAM2_TARGET_FPS = 20
 
 
 class CameraModeBody(BaseModel):
@@ -133,8 +140,12 @@ def _cam2_encode(cf, df, mode: Optional[str], count: int):
         hit = _CAM2_ENC_CACHE.get(key)
         if hit is not None:
             return hit
-        ok, buf = cv2.imencode(".jpg", _cam2_transform(cf, df, mode),
-                               [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+        frame = _cam2_transform(cf, df, mode)
+        if frame.shape[1] != CAM2_STREAM_W or frame.shape[0] != CAM2_STREAM_H:
+            frame = cv2.resize(frame, (CAM2_STREAM_W, CAM2_STREAM_H),
+                               interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", frame,
+                               [int(cv2.IMWRITE_JPEG_QUALITY), CAM2_STREAM_QUALITY])
         if not ok:
             return None
         payload = buf.tobytes()
@@ -172,6 +183,8 @@ def _mjpeg_generator_cam2(target_serial: Optional[str] = None, mode: Optional[st
             return
 
     last_count = -1
+    last_sent = 0.0
+    min_dt = 1.0 / max(CAM2_TARGET_FPS, 1)
     while c2 and c2._running:
         _cam2_last_active = time.time()
         cf, df = c2.get_latest_frames_ref()
@@ -183,7 +196,12 @@ def _mjpeg_generator_cam2(target_serial: Optional[str] = None, mode: Optional[st
         if count == last_count:
             time.sleep(0.002)
             continue
+        now = time.monotonic()
+        if now - last_sent < min_dt:
+            time.sleep(0.002)
+            continue
         last_count = count
+        last_sent = now
 
         payload = _cam2_encode(cf, df, mode, count)
         if payload is None:
@@ -198,12 +216,13 @@ def get_camera_mode():
 
 
 @router.post("/mode")
-def set_camera_mode(body: CameraModeBody):
+def set_camera_mode(request: Request, body: CameraModeBody):
     """Set camera display mode (rgb, gray, or depth)."""
     m = body.mode.lower()
     if m not in ("rgb", "gray", "depth"):
         return {"ok": False, "error": f"Invalid mode '{body.mode}'. Expected 'rgb', 'gray', or 'depth'"}
     state.camera_mode = m
+    _log_user_event(request, "camera", "mode", f"cam1={m}")
     return {"ok": True, "mode": state.camera_mode}
 
 
@@ -214,22 +233,24 @@ def get_camera_mode2():
 
 
 @router.post("/mode2")
-def set_camera_mode2(body: CameraModeBody):
+def set_camera_mode2(request: Request, body: CameraModeBody):
     """Set CAM2 display mode (rgb, gray, or depth)."""
     m = body.mode.lower()
     if m not in ("rgb", "gray", "depth"):
         return {"ok": False, "error": f"Invalid mode '{body.mode}'. Expected 'rgb', 'gray', or 'depth'"}
     state.camera2_mode = m
+    _log_user_event(request, "camera", "mode", f"cam2={m}")
     return {"ok": True, "mode": state.camera2_mode}
 
 
 @router.post("/mode/toggle")
-def toggle_camera_mode():
+def toggle_camera_mode(request: Request):
     """Cycle between rgb, gray, and depth mode."""
     modes = ["rgb", "gray", "depth"]
     current = getattr(state, "camera_mode", "rgb")
     next_idx = (modes.index(current) + 1) % len(modes) if current in modes else 0
     state.camera_mode = modes[next_idx]
+    _log_user_event(request, "camera", "mode", f"cam1={state.camera_mode}")
     return {"ok": True, "mode": state.camera_mode}
 
 

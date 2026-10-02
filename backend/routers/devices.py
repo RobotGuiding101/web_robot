@@ -113,6 +113,24 @@ async def get_relay_history(
     return {"history": [{"state": l.state, "time": l.created_at.isoformat()} for l in logs]}
 
 
+@router.get("/events")
+async def get_events(
+    user: User = Depends(get_current_user),
+    device: str = "",
+    limit: int = 100,
+):
+    """Recent device-log events (robot, camera, align, estop, webrtc, relay).
+
+    Reads from the same dedicated writer engine so the live app's pool is not
+    touched. `device` filters by name, `limit` caps the page.
+    """
+    from routers.device_events import get_recent
+    events = get_recent(limit=min(limit, 500))
+    if device:
+        events = [e for e in events if e["device"] == device]
+    return {"events": events}
+
+
 @router.get("/ping")
 async def ping_robot():
     """Quick ping check for robot at 192.168.10.110."""

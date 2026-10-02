@@ -54,7 +54,20 @@
 
         #mount-tune input[type=range],
         #cam2-tune input[type=range] {
-            width: 110px;
+            width: 96px;
+        }
+
+        #mount-tune .tune-num,
+        #cam2-tune .tune-num {
+            width: 62px;
+            background: rgba(255, 255, 255, 0.08);
+            color: #fff;
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            border-radius: 4px;
+            font: inherit;
+            font-variant-numeric: tabular-nums;
+            padding: 1px 4px;
+            text-align: right;
         }
 
         #btn-icp {
@@ -292,33 +305,33 @@
     <div id="canvas-container"></div>
 
     <div id="mount-tune">
-        <label>X <input type="range" id="mt-px" min="-2" max="2" step="0.05" value="0"><span
-                id="mt-px-v">0</span></label>
-        <label>Y <input type="range" id="mt-py" min="-2" max="2" step="0.05" value="0"><span
-                id="mt-py-v">0</span></label>
-        <label>Z <input type="range" id="mt-pz" min="-2" max="2" step="0.01" value="-0.02"><span
-                id="mt-pz-v">-0.02</span></label>
-        <label>RotX <input type="range" id="mt-rx" min="-180" max="180" step="5" value="180"><span
-                id="mt-rx-v">180</span></label>
-        <label>RotY <input type="range" id="mt-ry" min="-180" max="180" step="5" value="0"><span
-                id="mt-ry-v">0</span></label>
-        <label>RotZ <input type="range" id="mt-rz" min="-180" max="180" step="5" value="180"><span
-                id="mt-rz-v">180</span></label>
+        <label>X <input type="range" id="mt-px" min="-2" max="2" step="0.001" value="0.04"><input
+                type="number" class="tune-num" id="mt-px-n" step="0.001" value="0.04"></label>
+        <label>Y <input type="range" id="mt-py" min="-2" max="2" step="0.001" value="0.054"><input
+                type="number" class="tune-num" id="mt-py-n" step="0.001" value="0.054"></label>
+        <label>Z <input type="range" id="mt-pz" min="-2" max="2" step="0.001" value="0.01"><input
+                type="number" class="tune-num" id="mt-pz-n" step="0.001" value="0.01"></label>
+        <label>RotX <input type="range" id="mt-rx" min="-180" max="180" step="0.1" value="180"><input
+                type="number" class="tune-num" id="mt-rx-n" step="0.1" value="180"></label>
+        <label>RotY <input type="range" id="mt-ry" min="-180" max="180" step="0.1" value="0"><input
+                type="number" class="tune-num" id="mt-ry-n" step="0.1" value="0"></label>
+        <label>RotZ <input type="range" id="mt-rz" min="-180" max="180" step="0.1" value="180"><input
+                type="number" class="tune-num" id="mt-rz-n" step="0.1" value="180"></label>
     </div>
 
     <div id="cam2-tune">
-        <label>X <input type="range" id="c2-px" min="-2" max="2" step="0.05" value="-0.05"><span
-                id="c2-px-v">-0.05</span></label>
-        <label>Y <input type="range" id="c2-py" min="-2" max="2" step="0.05" value="0.75"><span
-                id="c2-py-v">0.75</span></label>
-        <label>Z <input type="range" id="c2-pz" min="-2" max="2" step="0.05" value="0.75"><span
-                id="c2-pz-v">0.75</span></label>
-        <label>RotX <input type="range" id="c2-rx" min="-180" max="180" step="5" value="-75"><span
-                id="c2-rx-v">-75</span></label>
-        <label>RotY <input type="range" id="c2-ry" min="-180" max="180" step="5" value="0"><span
-                id="c2-ry-v">0</span></label>
-        <label>RotZ <input type="range" id="c2-rz" min="-180" max="180" step="5" value="0"><span
-                id="c2-rz-v">0</span></label>
+        <label>X <input type="range" id="c2-px" min="-2" max="2" step="0.001" value="0.003"><input
+                type="number" class="tune-num" id="c2-px-n" step="0.001" value="0.003"></label>
+        <label>Y <input type="range" id="c2-py" min="-2" max="2" step="0.001" value="0.718"><input
+                type="number" class="tune-num" id="c2-py-n" step="0.001" value="0.718"></label>
+        <label>Z <input type="range" id="c2-pz" min="-2" max="2" step="0.001" value="0.818"><input
+                type="number" class="tune-num" id="c2-pz-n" step="0.001" value="0.818"></label>
+        <label>RotX <input type="range" id="c2-rx" min="-180" max="180" step="0.1" value="-75"><input
+                type="number" class="tune-num" id="c2-rx-n" step="0.1" value="-75"></label>
+        <label>RotY <input type="range" id="c2-ry" min="-180" max="180" step="0.1" value="0"><input
+                type="number" class="tune-num" id="c2-ry-n" step="0.1" value="0"></label>
+        <label>RotZ <input type="range" id="c2-rz" min="-180" max="180" step="0.1" value="0"><input
+                type="number" class="tune-num" id="c2-rz-n" step="0.1" value="0"></label>
         <button id="btn-icp" type="button">Align (ICP)</button>
         <button id="btn-color" type="button">Color: Video</button>
         <label>3D mode
@@ -503,16 +516,21 @@
                 const pump = () => reader.read().then(({ value, done }) => {
                     if (done) return;
                     buf = catBuf(buf, value);
-                    let pos = 0;
+                    // Real-time: keep ONLY the last complete JPEG in this batch
+                    // and drop the older ones. Drawing every buffered frame made
+                    // the texture replay stale frames, so lag grew the longer a
+                    // stream ran (TCP buffer + decode backlog).
+                    let pos = 0, last = null;
                     for (; ;) {
                         const soi = findSeq(buf, [0xff, 0xd8], pos);
                         if (soi < 0) { pos = Math.max(0, buf.length - 1); break; }
                         const eoi = findSeq(buf, [0xff, 0xd9], soi + 2);
                         if (eoi < 0) { pos = soi; break; }
-                        drawJpeg(buf.slice(soi, eoi + 2));
+                        last = buf.subarray(soi, eoi + 2);
                         pos = eoi + 2;
                     }
-                    buf = buf.slice(pos);
+                    if (last) drawJpeg(last);
+                    if (pos > 0) buf = buf.subarray(pos);
                     return pump();
                 });
                 return pump();
@@ -544,16 +562,17 @@
                 const pump = () => reader.read().then(({ value, done }) => {
                     if (done) return;
                     buf = catBuf(buf, value);
-                    let pos = 0;
+                    let pos = 0, last = null;
                     for (; ;) {
                         const soi = findSeq(buf, [0xff, 0xd8], pos);
                         if (soi < 0) { pos = Math.max(0, buf.length - 1); break; }
                         const eoi = findSeq(buf, [0xff, 0xd9], soi + 2);
                         if (eoi < 0) { pos = soi; break; }
-                        drawJpeg2(buf.slice(soi, eoi + 2));
+                        last = buf.subarray(soi, eoi + 2);
                         pos = eoi + 2;
                     }
-                    buf = buf.slice(pos);
+                    if (last) drawJpeg2(last);
+                    if (pos > 0) buf = buf.subarray(pos);
                     return pump();
                 });
                 return pump();
@@ -711,8 +730,8 @@
         const endEffector = new THREE.Group();
         link6.add(endEffector);
 
-        const CAM_MOUNT_POS = new THREE.Vector3(0, 0, 0.06);
-        const CAM_MOUNT_ROT = new THREE.Euler(0, 0, 0);
+        const CAM_MOUNT_POS = new THREE.Vector3(0.04, 0.054, 0.01);
+        const CAM_MOUNT_ROT = new THREE.Euler(180 * Math.PI / 180, 0, 180 * Math.PI / 180);
         const PROJ_ROLL = Math.PI / 2;
         const projRollMat = new THREE.Matrix4().makeRotationZ(PROJ_ROLL);
         const projectorMount = new THREE.Object3D();
@@ -1243,6 +1262,17 @@
         }
         readPointCloud2();
 
+        function bindTunePair(prefix, id) {
+            const slider = document.getElementById(prefix + id);
+            const num = document.getElementById(prefix + id + '-n');
+            if (!slider || !num) return;
+            slider.addEventListener('input', () => { num.value = slider.value; });
+            num.addEventListener('input', () => {
+                const v = parseFloat(num.value);
+                if (Number.isFinite(v)) slider.value = String(v);
+            });
+        }
+
         function bindCam2Tune() {
             const ids = ['px', 'py', 'pz', 'rx', 'ry', 'rz'];
             const get = (id) => document.getElementById('c2-' + id);
@@ -1253,12 +1283,14 @@
                     +get('rx').value * rad,
                     +get('ry').value * rad,
                     +get('rz').value * rad);
-                ids.forEach((id) => {
-                    const lbl = document.getElementById('c2-' + id + '-v');
-                    if (lbl) lbl.textContent = get(id).value;
-                });
             };
-            ids.forEach((id) => { const el = get(id); if (el) el.addEventListener('input', apply); });
+            ids.forEach((id) => {
+                bindTunePair('c2-', id);
+                const el = get(id);
+                if (el) el.addEventListener('input', apply);
+                const num = document.getElementById('c2-' + id + '-n');
+                if (num) num.addEventListener('input', apply);
+            });
             apply();
         }
         bindCam2Tune();
@@ -1284,9 +1316,10 @@
             Object.keys(vals).forEach((id) => {
                 const el = document.getElementById(prefix + id);
                 if (!el) return;
-                el.value = String(Math.round(vals[id] * 100) / 100);
-                const lbl = document.getElementById(prefix + id + '-v');
-                if (lbl) lbl.textContent = el.value;
+                const v = String(Math.round(vals[id] * 1000) / 1000);
+                el.value = v;
+                const num = document.getElementById(prefix + id + '-n');
+                if (num) num.value = v;
             });
         }
 
@@ -1530,12 +1563,14 @@
                     +get('rx').value * rad,
                     +get('ry').value * rad,
                     +get('rz').value * rad);
-                ids.forEach((id) => {
-                    const lbl = document.getElementById('mt-' + id + '-v');
-                    if (lbl) lbl.textContent = get(id).value;
-                });
             };
-            ids.forEach((id) => { const el = get(id); if (el) el.addEventListener('input', apply); });
+            ids.forEach((id) => {
+                bindTunePair('mt-', id);
+                const el = get(id);
+                if (el) el.addEventListener('input', apply);
+                const num = document.getElementById('mt-' + id + '-n');
+                if (num) num.addEventListener('input', apply);
+            });
             apply();
         }
         bindMountTune();
@@ -1936,6 +1971,44 @@
             _updateCurvedArrows();
         }
 
+        // ── Model (Three.js, Y-up) → robot (Dobot, Z-up) frame conversion ──
+        // The .dae arm is assembled Y-up (link offsets along +Y, base spins on
+        // link1.rotation.y), while the Dobot base frame is Z-up. Without this
+        // remap the "Get Pos: OFF" readout reported model coords, so height
+        // landed in Y and depth in Z. Measured against the live robot:
+        //   robotX = modelX, robotY = -modelZ, robotZ = modelY
+        // (small residual offsets come from .dae link lengths ≠ real arm).
+        const MODEL_TO_ROBOT_OFFSET = { x: -40.6, y: -23.2, z: -7.4 };
+        function _modelToRobot(mx, my, mz) {
+            return {
+                x: mx + MODEL_TO_ROBOT_OFFSET.x,
+                y: -mz + MODEL_TO_ROBOT_OFFSET.y,
+                z: my + MODEL_TO_ROBOT_OFFSET.z,
+            };
+        }
+
+        // Orientation: same Y-up→Z-up basis change as position, followed by a
+        // constant 180° tool flip about the robot Z. Measured against the live
+        // robot: model euler (89.5,-0.1,3.1) ↔ robot (-177.5,0.2,177.0).
+        const _BASIS_M = new THREE.Matrix4().set(1, 0, 0, 0, 0, 0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1);
+        const _TOOL_FIX = new THREE.Matrix4().makeRotationZ(Math.PI);
+        const _orientMtx = new THREE.Matrix4();
+        const _orientEuler = new THREE.Euler();
+        function _modelOrientToRobot(quat) {
+            _orientMtx.makeRotationFromQuaternion(quat);
+            _orientMtx.premultiply(_BASIS_M);
+            _orientMtx.multiply(_TOOL_FIX);
+            // The Dobot reports RX/RY/RZ in ZYX order, so extract with the same
+            // convention or the numbers differ by a sign/axis branch even though
+            // the physical orientation is identical.
+            _orientEuler.setFromRotationMatrix(_orientMtx, 'ZYX');
+            return {
+                rx: _rad2degFn(_orientEuler.x),
+                ry: _rad2degFn(_orientEuler.y),
+                rz: _rad2degFn(_orientEuler.z),
+            };
+        }
+
         // ── Send current target pose to parent React app ──
         const _rad2degFn = THREE.MathUtils.radToDeg;
         const _tpEuler = new THREE.Euler();
@@ -1951,12 +2024,14 @@
                 return (!isNaN(n) && isFinite(n)) ? +n.toFixed(1) : fb;
             };
 
-            const mmX = safeCoord(_tcpPos.x * 1000);
-            const mmY = safeCoord(_tcpPos.y * 1000);
-            const mmZ = safeCoord(_tcpPos.z * 1000);
-            const rx = safeCoord(_rad2degFn(_tpEuler.x));
-            const ry = safeCoord(_rad2degFn(_tpEuler.y));
-            const rz = safeCoord(_rad2degFn(_tpEuler.z));
+            const rp = _modelToRobot(_tcpPos.x * 1000, _tcpPos.y * 1000, _tcpPos.z * 1000);
+            const mmX = safeCoord(rp.x);
+            const mmY = safeCoord(rp.y);
+            const mmZ = safeCoord(rp.z);
+            const ro = _modelOrientToRobot(_tpQuat);
+            const rx = safeCoord(ro.rx);
+            const ry = safeCoord(ro.ry);
+            const rz = safeCoord(ro.rz);
 
             const joints = [
                 safeCoord(_rad2degFn(link1.rotation.y)),
@@ -2340,20 +2415,21 @@
 
             // Read TCP position (metres → mm) and send to parent React app ~10x/sec
             endEffector.getWorldPosition(_tcpPos);
-            const mmX = +(_tcpPos.x * 1000).toFixed(1);
-            const mmY = +(_tcpPos.y * 1000).toFixed(1);
-            const mmZ = +(_tcpPos.z * 1000).toFixed(1);
+            const _rp = _modelToRobot(_tcpPos.x * 1000, _tcpPos.y * 1000, _tcpPos.z * 1000);
+            const mmX = +_rp.x.toFixed(1);
+            const mmY = +_rp.y.toFixed(1);
+            const mmZ = +_rp.z.toFixed(1);
 
             const now = performance.now();
             if (now - _lastPostMs > 100) {
                 _lastPostMs = now;
 
-                // End-effector world orientation → Euler (degrees)
+                // End-effector world orientation → robot-frame Euler (degrees)
                 endEffector.getWorldQuaternion(_tcpQuat);
-                _tcpEuler.setFromQuaternion(_tcpQuat);
-                const rx = +_rad2deg(_tcpEuler.x).toFixed(1);
-                const ry = +_rad2deg(_tcpEuler.y).toFixed(1);
-                const rz = +_rad2deg(_tcpEuler.z).toFixed(1);
+                const _ro = _modelOrientToRobot(_tcpQuat);
+                const rx = +_ro.rx.toFixed(1);
+                const ry = +_ro.ry.toFixed(1);
+                const rz = +_ro.rz.toFixed(1);
 
                 // Joint angles (degrees) from each link's rotation axis
                 const joints = [
