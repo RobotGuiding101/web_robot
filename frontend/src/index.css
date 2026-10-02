@@ -1453,13 +1453,14 @@ body {
   border: 1.5px solid #cdd6e3;
   border-radius: 14px;
   overflow: hidden;
-  height: 100%;
-  /* fill log-strip row */
+  min-height: 0;
+  /* ไม่ใช้ height: 100% — ให้ parent กำหนดขนาดเอง */
   box-shadow: 0 4px 16px rgba(74, 114, 160, 0.06);
 }
 
 .log-panel-box--server {
   border-top: 3px solid #4a72a0;
+  max-height: 240px;
 }
 
 .log-panel-box--robot {
