@@ -254,7 +254,9 @@ body {
   height: 8px;
   border-radius: 50%;
   background-color: #94a3b8;
-  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+  transition:
+    background-color 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 .topbar-ip-dot--on {
@@ -1816,6 +1818,21 @@ body {
   overflow: hidden;
   background: transparent;
   z-index: 2;
+}
+
+/* Canvas อยู่ใน Draw tab — เปลี่ยนจาก absolute overlay เป็น block ปกติ */
+.dm-canvas-wrap--tab {
+  position: relative;
+  inset: auto;
+  z-index: auto;
+  flex: 0 0 340px;
+  width: 100%;
+  background: #ffffff;
+  border-radius: 10px;
+  border: 1.5px solid #dbe3ed;
+  overflow: hidden;
+  cursor: crosshair;
+  flex-shrink: 0;
 }
 
 .dm-canvas-wrap canvas {
