@@ -190,6 +190,7 @@ const CameraStream = ({ id, src = '/api/map/video_feed', withMode = true, mode: 
 
     return () => {
       stopped = true
+      running = false
       ro.disconnect()
       clearInterval(watchdog)
       if (reconnectTimer) clearTimeout(reconnectTimer)

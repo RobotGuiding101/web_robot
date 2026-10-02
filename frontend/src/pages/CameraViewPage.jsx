@@ -638,7 +638,6 @@ const CameraViewPage = () => {
                             style={{
                               position: 'absolute',
                               inset: 0,
-                              display: stream2Error ? 'none' : 'block',
                             }}
                           >
                             <CameraStream
