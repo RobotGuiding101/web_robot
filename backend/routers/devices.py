@@ -131,6 +131,34 @@ async def get_events(
     return {"events": events}
 
 
+@router.post("/events/prune")
+async def prune_events(
+    device: str = "",
+    keep: int = 100,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete all but the newest `keep` rows (optionally for one device).
+
+    device_logs only ever grows; the auto-align loop in particular can write
+    hundreds of near-identical rows. This trims the table on demand."""
+    from sqlalchemy import delete
+    keep = max(1, min(int(keep), 5000))
+    sub = select(DeviceLog.id).where(DeviceLog.user_id == user.id)
+    if device:
+        sub = sub.where(DeviceLog.device == device)
+    sub = sub.order_by(desc(DeviceLog.created_at)).limit(keep)
+    keep_ids = list((await db.execute(sub)).scalars().all())
+    stmt = delete(DeviceLog).where(DeviceLog.user_id == user.id)
+    if keep_ids:
+        stmt = stmt.where(DeviceLog.id.notin_(keep_ids))
+    if device:
+        stmt = stmt.where(DeviceLog.device == device)
+    res = await db.execute(stmt)
+    await db.commit()
+    return {"ok": True, "deleted": int(res.rowcount or 0)}
+
+
 @router.get("/ping")
 async def ping_robot():
     """Quick ping check for robot at 192.168.10.110."""

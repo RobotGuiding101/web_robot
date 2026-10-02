@@ -334,6 +334,30 @@
                 type="number" class="tune-num" id="c2-rz-n" step="0.1" value="0"></label>
         <button id="btn-icp" type="button">Align (ICP)</button>
         <button id="btn-color" type="button">Color: Video</button>
+        <label>พื้นที่ cam
+            <select id="sel-area-cam">
+                <option value="1" selected>cam1</option>
+                <option value="2">cam2</option>
+            </select>
+        </label>
+        <button id="btn-area" type="button">📐 วัดพื้นที่วัตถุ</button>
+        <div id="area-result" style="font-size:10px;color:#9fd3ff;white-space:pre-line;max-width:220px;"></div>
+        <div id="cam-pos" style="font-size:10px;color:#ffd28a;white-space:pre-line;max-width:220px;"></div>
+        <div style="border-top:1px solid rgba(255,255,255,0.15);margin-top:5px;padding-top:5px;font-size:10px;color:#9fd3ff;">
+            <div>Planar calibrate (depth-free)</div>
+            <div style="display:flex;gap:4px;margin:3px 0;">
+                <button id="btn-calib-refresh" type="button" style="font:inherit;">↻ ภาพ</button>
+                <button id="btn-calib-reset" type="button" style="font:inherit;">reset</button>
+            </div>
+            <img id="calib-img" alt="คลิกจุดที่หุ่นแตะ"
+                style="width:210px;height:auto;cursor:crosshair;border:1px solid rgba(255,255,255,0.25);background:#05070a;" />
+            <div id="calib-status" style="white-space:pre-line;margin-top:2px;"></div>
+            <div style="display:flex;gap:4px;margin-top:3px;">
+                <button id="btn-bg" type="button" style="font:inherit;">📷 เก็บพื้นหลัง</button>
+                <button id="btn-area-h" type="button" style="font:inherit;">📐 พื้นที่ (H)</button>
+            </div>
+            <div id="area-h-result" style="white-space:pre-line;color:#9fd3ff;"></div>
+        </div>
         <label>3D mode
             <select id="sel-mode">
                 <option value="auto" selected>Auto (ตามกล้อง)</option>
@@ -1232,6 +1256,34 @@
         cam2Label.renderOrder = 999;
         scene.add(cam2Label);
 
+        // cam1 lives on the arm tip (projectorMount is a child of endEffector),
+        // so give it the same cone+label marker cam2 has — otherwise only cam2
+        // is visible and cam1's position can't be seen in the scene.
+        const cam1Marker = new THREE.Mesh(
+            new THREE.ConeGeometry(0.03, 0.1, 16),
+            new THREE.MeshStandardMaterial({ color: 0x2fa8ff, emissive: 0x1166cc,
+                emissiveIntensity: 0.6, metalness: 0.2, roughness: 0.5 }));
+        cam1Marker.rotation.x = -Math.PI / 2;
+        projectorMount.add(cam1Marker);
+
+        const cam1LabelCanvas = document.createElement('canvas');
+        cam1LabelCanvas.width = 256;
+        cam1LabelCanvas.height = 128;
+        const cam1LabelCtx = cam1LabelCanvas.getContext('2d');
+        cam1LabelCtx.fillStyle = '#2fa8ff';
+        cam1LabelCtx.font = 'bold 72px system-ui, sans-serif';
+        cam1LabelCtx.textAlign = 'center';
+        cam1LabelCtx.textBaseline = 'middle';
+        cam1LabelCtx.fillText('cam1', 128, 64);
+        const cam1Label = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: new THREE.CanvasTexture(cam1LabelCanvas),
+            transparent: true,
+            depthTest: false,
+        }));
+        cam1Label.scale.set(0.22, 0.11, 1);
+        cam1Label.renderOrder = 999;
+        scene.add(cam1Label);
+
         function readPointCloud2() {
             const token = localStorage.getItem('access_token') || '';
             if (!token) { setTimeout(readPointCloud2, 2000); return; }
@@ -1508,6 +1560,112 @@
             colorSrc = colorSrc === 'video' ? 'sensor' : 'video';
             applyCloudColor();
         });
+
+        const areaBtn = document.getElementById('btn-area');
+        if (areaBtn) areaBtn.addEventListener('click', () => {
+            const out = document.getElementById('area-result');
+            const camSel = document.getElementById('sel-area-cam');
+            const camN = camSel ? camSel.value : '1';
+            const token = localStorage.getItem('access_token') || '';
+            if (out) out.textContent = 'กำลังวัด…';
+            fetch('/api/map/object_area', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+                body: JSON.stringify({ cam: Number(camN) }),
+            })
+                .then((r) => r.json())
+                .then((d) => {
+                    if (!out) return;
+                    if (!d || d.ok === false) { out.textContent = 'ผิดพลาด: ' + ((d && d.error) || 'unknown'); return; }
+                    if (!d.count) { out.textContent = 'ไม่พบวัตถุ (ปรับ above_mm หรือหันกล้อง)'; return; }
+                    const lines = d.objects.map((o, i) => `#${i + 1}  ${o.area_cm2} cm²`);
+                    out.textContent = `cam${d.cam}: ${d.count} ชิ้น\n` + lines.join('\n') + `\nรวม ${d.total_cm2} cm²`;
+                })
+                .catch(() => { if (out) out.textContent = 'ผิดพลาด: เชื่อมต่อไม่ได้'; });
+        });
+
+        const calibImg = document.getElementById('calib-img');
+        const calibStatus = document.getElementById('calib-status');
+        const areaHOut = document.getElementById('area-h-result');
+        const calibCam = () => {
+            const s = document.getElementById('sel-area-cam');
+            return s ? Number(s.value) : 2;
+        };
+        const authHeaders = (json) => {
+            const h = { Authorization: 'Bearer ' + (localStorage.getItem('access_token') || '') };
+            if (json) h['Content-Type'] = 'application/json';
+            return h;
+        };
+        const refreshCalibFrame = () => {
+            if (calibImg) calibImg.src = `/api/map/color_frame?cam=${calibCam()}&_t=${Date.now()}`;
+        };
+        const refreshCalibStatus = () => {
+            fetch('/api/map/floorcalib', { headers: authHeaders() })
+                .then((r) => r.json())
+                .then((d) => {
+                    if (!calibStatus) return;
+                    const rmse = d.rmse_mm == null ? '-' : d.rmse_mm.toFixed(1) + ' mm';
+                    calibStatus.textContent = `จุด ${d.count}/${d.min_points}  rmse ${rmse}`;
+                })
+                .catch(() => { });
+        };
+        const cr = document.getElementById('btn-calib-refresh');
+        if (cr) cr.addEventListener('click', () => { refreshCalibFrame(); refreshCalibStatus(); });
+        const creset = document.getElementById('btn-calib-reset');
+        if (creset) creset.addEventListener('click', () => {
+            fetch('/api/map/floorcalib/reset', { method: 'POST', headers: authHeaders() })
+                .then((r) => r.json()).then(() => refreshCalibStatus()).catch(() => { });
+        });
+        if (calibImg) calibImg.addEventListener('click', (e) => {
+            const rect = calibImg.getBoundingClientRect();
+            const nw = calibImg.naturalWidth || rect.width;
+            const nh = calibImg.naturalHeight || rect.height;
+            const u = (e.clientX - rect.left) * nw / rect.width;
+            const v = (e.clientY - rect.top) * nh / rect.height;
+            fetch('/api/map/floorcalib/point', {
+                method: 'POST', headers: authHeaders(true),
+                body: JSON.stringify({ u, v }),
+            })
+                .then((r) => r.json())
+                .then((d) => {
+                    if (!calibStatus) return;
+                    if (d.ok === false) { calibStatus.textContent = 'ผิดพลาด: ' + (d.error || ''); return; }
+                    const rmse = d.rmse_mm == null ? '-' : d.rmse_mm.toFixed(1) + ' mm';
+                    calibStatus.textContent = `จุด ${d.count}/${d.min_points}  rmse ${rmse}`;
+                })
+                .catch(() => { });
+        });
+        const bgBtn = document.getElementById('btn-bg');
+        if (bgBtn) bgBtn.addEventListener('click', () => {
+            fetch('/api/map/plane_background', {
+                method: 'POST', headers: authHeaders(true),
+                body: JSON.stringify({ cam: calibCam() }),
+            })
+                .then((r) => r.json())
+                .then((d) => { if (areaHOut) areaHOut.textContent = d.ok ? `เก็บพื้นหลัง cam${d.cam} แล้ว (${d.width}x${d.height})` : 'ผิดพลาด: ' + d.error; })
+                .catch(() => { });
+        });
+        const areaHBtn = document.getElementById('btn-area-h');
+        if (areaHBtn) areaHBtn.addEventListener('click', () => {
+            if (areaHOut) areaHOut.textContent = 'กำลังวัด…';
+            fetch('/api/map/area_plane', {
+                method: 'POST', headers: authHeaders(true),
+                body: JSON.stringify({ cam: calibCam() }),
+            })
+                .then((r) => r.json())
+                .then((d) => {
+                    if (!areaHOut) return;
+                    if (d.ok === false) { areaHOut.textContent = 'ผิดพลาด: ' + d.error; return; }
+                    if (!d.count) { areaHOut.textContent = 'ไม่พบวัตถุ (ปรับ thr / เก็บ BG ใหม่)'; return; }
+                    const rmse = d.rmse_mm == null ? '-' : d.rmse_mm.toFixed(0);
+                    areaHOut.textContent = `${d.count} ชิ้น (rmse ${rmse}mm)\n`
+                        + d.objects.map((o, i) => `#${i + 1} ${o.area_cm2} cm²`).join('\n')
+                        + `\nรวม ${d.total_cm2} cm²`;
+                })
+                .catch(() => { });
+        });
+        refreshCalibStatus();
+
         const selMode = document.getElementById('sel-mode');
         if (selMode) selMode.addEventListener('change', () => {
             manualMode = selMode.value;
@@ -2393,6 +2551,8 @@
         // ===== 7. Render Loop =====
         // Cache TCP display elements
         const _tcpPos = new THREE.Vector3();
+        const _cam1World = new THREE.Vector3();
+        const camPosEl = document.getElementById('cam-pos');
         const _tcpQuat = new THREE.Quaternion();
         const _tcpEuler = new THREE.Euler();
         const _rad2deg = THREE.MathUtils.radToDeg;
@@ -2456,6 +2616,15 @@
             cam2Mount.updateWorldMatrix(true, false);
             cam2Label.position.copy(cam2Mount.position);
             cam2Label.position.y += 0.18;
+            projectorMount.updateWorldMatrix(true, false);
+            _cam1World.setFromMatrixPosition(projectorMount.matrixWorld);
+            cam1Label.position.copy(_cam1World);
+            cam1Label.position.y += 0.18;
+            if (camPosEl) {
+                camPosEl.textContent =
+                    `cam1: ${(_cam1World.x * 1000).toFixed(0)}, ${(_cam1World.y * 1000).toFixed(0)}, ${(_cam1World.z * 1000).toFixed(0)} mm\n` +
+                    `cam2: ${(cam2Mount.position.x * 1000).toFixed(0)}, ${(cam2Mount.position.y * 1000).toFixed(0)}, ${(cam2Mount.position.z * 1000).toFixed(0)} mm`;
+            }
             cloudMatVideo.uniforms.sizeFactor.value = renderer.domElement.height;
             cam2MatVideo.uniforms.sizeFactor.value = renderer.domElement.height;
             renderer.render(scene, camera);
