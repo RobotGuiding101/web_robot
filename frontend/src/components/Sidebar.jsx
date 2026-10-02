@@ -73,12 +73,25 @@ const LogoutIcon = ({ size = 18 }) => (
   </svg>
 )
 
+const IconLog = ({ size = 30 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="8" y1="6" x2="21" y2="6" />
+    <line x1="8" y1="12" x2="21" y2="12" />
+    <line x1="8" y1="18" x2="21" y2="18" />
+    <line x1="3" y1="6" x2="3.01" y2="6" />
+    <line x1="3" y1="12" x2="3.01" y2="12" />
+    <line x1="3" y1="18" x2="3.01" y2="18" />
+  </svg>
+)
+
 /* ── Nav items with SVG icons ────────────────────────────────────────────── */
 const NAV_ITEMS = [
   { Icon: IconHome,       label: 'Dashboard', path: '/dashboard' },
   { Icon: IconCamera,     label: 'Camera',    path: '/camera' },
   { Icon: IconPen,        label: 'Drawing',   path: '/drawing' },
   { Icon: IconController, label: 'Dobot',     path: '/dobot' },
+  { Icon: IconLog,        label: 'Logs',      path: '/logs' },
   { Icon: IconSettings,   label: 'Settings',  path: '/settings' },
 ]
 

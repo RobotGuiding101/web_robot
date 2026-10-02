@@ -69,6 +69,20 @@ def _log_user_event(request: Request, device: str, state_name: str, detail: str 
         pass
 
 
+def _bind_draw_done_hook(request: Request) -> None:
+    """Give the (thread-run) do_draw a way to log its outcome to device_logs
+    with the requesting user's id, since a background thread has no request."""
+    try:
+        header = request.headers.get("authorization", "")
+        if not header.startswith("Bearer "):
+            state.on_draw_done = None
+            return
+        sub = jwt.decode(header[7:], SECRET_KEY, algorithms=[ALGORITHM]).get("sub", "")
+        state.on_draw_done = lambda action, detail="": log_event(sub, "draw", action, detail)
+    except Exception:
+        state.on_draw_done = None
+
+
 class ConnectBody(BaseModel):
     ip: Optional[str] = None
     dashboard_port: Optional[int] = None
@@ -931,11 +945,12 @@ _ALIGN_LOG_LOCK = threading.Lock()
 
 
 def _log_align(request: Request, state_name: str, detail: str = ""):
-    """Log an align result only on a state change (or every 60 s as a heartbeat).
-
-    The auto-align runs in a loop; on a persistently failing scene it produced
-    ~580 identical "fail" rows in an afternoon. One row per transition keeps
-    the history meaningful and the table bounded."""
+    """Log an ICP-align result only on a state change (or every 60 s as a
+    heartbeat). Device is `align_icp` — the point-cloud align endpoint, kept
+    distinct from the 3-phase plane align (`maps_point/align.py`, device
+    `align`). The auto-align runs in a loop; on a persistently failing scene
+    it produced ~580 identical "fail" rows in an afternoon, so one row per
+    transition keeps the history meaningful and the table bounded."""
     now = time.time()
     with _ALIGN_LOG_LOCK:
         changed = state_name != _ALIGN_LOG["state"]
@@ -944,7 +959,7 @@ def _log_align(request: Request, state_name: str, detail: str = ""):
             return
         _ALIGN_LOG["state"] = state_name
         _ALIGN_LOG["time"] = now
-    _log_user_event(request, "align", state_name, detail)
+    _log_user_event(request, "align_icp", state_name, detail)
 
 
 @router.post("/align_icp")
@@ -1326,41 +1341,62 @@ def api_frame(body: FrameBody):
 
 
 # ── align ────────────────────────────────────────────────────────────────────
+def _bind_align_progress_hook(request: Request) -> None:
+    """Let the (thread-run) do_align log per-step progress to device_logs with
+    the requesting user's id. Progress rows are keyed by their `step`/`rz_step`
+    action only on a change of tilt/roll bucket, so a long run doesn't flood
+    the table."""
+    try:
+        header = request.headers.get("authorization", "")
+        if not header.startswith("Bearer "):
+            state.on_align_progress = None
+            return
+        sub = jwt.decode(header[7:], SECRET_KEY, algorithms=[ALGORITHM]).get("sub", "")
+        state.on_align_progress = lambda action, detail="": log_event(sub, "align", action, detail)
+    except Exception:
+        state.on_align_progress = None
+
+
 @router.post("/align")
-def api_align():
+def api_align(request: Request):
     if len(state.points) < 4:
         return {"ok": False, "error": "need 4 points"}
     if state.align_running or state.draw_running:
         return {"ok": False, "error": "already running"}
+    _log_user_event(request, "align", "start", f"points={len(state.points)}")
+    _bind_align_progress_hook(request)
     threading.Thread(target=_run_locked, args=(do_align, robot, cam, state), daemon=True).start()
     return {"ok": True}
 
 
 @router.post("/align/stop")
-def api_align_stop():
+def api_align_stop(request: Request):
     state.align_stop.set()
+    _log_user_event(request, "align", "stop", "stop requested")
     return {"ok": True}
 
 
 # ── draw grid ────────────────────────────────────────────────────────────────
 @router.post("/grid/size")
-def api_grid_size(body: GridSizeBody):
+def api_grid_size(request: Request, body: GridSizeBody):
     ok, msg = _set_grid_size(body.rows, body.cols)
     if not ok:
         return {"ok": False, "error": msg}
+    _log_user_event(request, "draw", "grid_size", f"{state.grid_rows}x{state.grid_cols}")
     return {"ok": True, "rows": state.grid_rows, "cols": state.grid_cols}
 
 
 @router.post("/grid/mark")
-def api_grid_mark(body: GridMarkBody):
+def api_grid_mark(request: Request, body: GridMarkBody):
     ok, msg = _mark_grid_point(body.row, body.col)
     if not ok:
         return {"ok": False, "error": msg}
+    _log_user_event(request, "draw", "grid_mark", f"R{body.row + 1}C{body.col + 1}")
     return {"ok": True, "message": msg, "grid_points": state.grid_points}
 
 
 @router.post("/grid/autofill")
-def api_grid_autofill():
+def api_grid_autofill(request: Request):
     """Fill the whole grid from the 4 image points already marked on the
     feed, so no jogging is needed. Each pixel maps to robot XY AND its own
     surface Z via the depth at that pixel (the camera rides on the arm, so
@@ -1411,6 +1447,8 @@ def api_grid_autofill():
     zs = [grid[i][j][2] for i in range(rows) for j in range(cols)]
     state.status = (f"grid auto-filled from 4 marked points (span={span:.1f}mm, "
                     f"surface Z={sum(zs)/len(zs):.1f})")
+    _log_user_event(request, "draw", "grid_autofill",
+                    f"span={span:.1f}mm z={sum(zs)/len(zs):.1f}")
     return {"ok": True, "grid_points": grid, "span_mm": span,
             "surface_z": sum(zs) / len(zs)}
 
@@ -1420,7 +1458,7 @@ class GridSetZBody(BaseModel):
 
 
 @router.post("/grid/setz")
-def api_grid_setz(body: GridSetZBody = GridSetZBody()):
+def api_grid_setz(request: Request, body: GridSetZBody = GridSetZBody()):
     """Re-teach ONLY the Z + orientation of every marked grid cell, keeping
     each cell's X/Y. With no body it uses the CURRENT pose Z (jog down until
     the pen touches the workpiece, then press). With {"z": <mm>} it uses that
@@ -1439,12 +1477,14 @@ def api_grid_setz(body: GridSetZBody = GridSetZBody()):
             p[2], p[3], p[4], p[5] = Z, Rx, Ry, Rz
     state.status = (f"grid Z set to {Z:.1f}mm "
                      f"({'current pose' if body.z is None else 'requested'})")
+    _log_user_event(request, "draw", "grid_setz",
+                    f"z={Z:.1f} from={'pose' if body.z is None else 'request'}")
     return {"ok": True, "z": Z, "from_current_pose": body.z is None,
             "grid_points": state.grid_points}
 
 
 @router.post("/grid/surfacez")
-def api_grid_surfacez():
+def api_grid_surfacez(request: Request):
     """Estimate the workpiece surface Z from the LIVE depth reading and move
     the grid onto it — no jogging. Valid while the tool is squared to the
     surface (run Align first) so the camera looks straight down at it:
@@ -1468,16 +1508,18 @@ def api_grid_surfacez():
     state.status = (f"grid Z -> measured surface {surface_z:.1f}mm "
                      f"(pose {pose_z:.1f} - depth {depth:.1f} + "
                      f"{CAM_TIP_OFFSET_MM:.1f} + {DRAW_SURFACE_GAP_MM:.1f})")
+    _log_user_event(request, "draw", "grid_surfacez", f"z={surface_z:.1f} depth={depth:.1f}")
     return {"ok": True, "z": surface_z, "pose_z": pose_z, "depth": depth,
             "tip_offset": CAM_TIP_OFFSET_MM, "gap": DRAW_SURFACE_GAP_MM,
             "grid_points": state.grid_points}
 
 
 @router.post("/grid/reset")
-def api_grid_reset():
+def api_grid_reset(request: Request):
     for i in range(state.grid_rows):
         for j in range(state.grid_cols):
             state.grid_points[i][j] = None
+    _log_user_event(request, "draw", "grid_reset", f"{state.grid_rows}x{state.grid_cols}")
     return {"ok": True}
 
 
@@ -1488,7 +1530,7 @@ class GridRestoreBody(BaseModel):
 
 
 @router.post("/grid/restore")
-def api_grid_restore(body: GridRestoreBody):
+def api_grid_restore(request: Request, body: GridRestoreBody):
     """Set the whole taught grid directly from poses (the same rows/cols/
     points shape /api/map/status reports back). The grid lives in memory, so
     every backend restart wipes a hand-taught grid — this puts one back
@@ -1518,6 +1560,8 @@ def api_grid_restore(body: GridRestoreBody):
     state.grid_points = grid
     span = _grid_span_mm()
     state.status = f"grid restored {body.rows}x{body.cols} (span={span:.1f}mm)"
+    _log_user_event(request, "draw", "grid_restore",
+                    f"{body.rows}x{body.cols} span={span:.1f}mm")
     return {"ok": True, "rows": body.rows, "cols": body.cols,
             "grid_points": grid, "span_mm": span}
 
@@ -1582,13 +1626,17 @@ def api_draw(body: DrawBody):
         return {"ok": False, "error": "already running"}
 
     _log_grid_mapping(strokes)
+    _log_user_event(request, "draw", "start",
+                    f"strokes={len(strokes)} grid={state.grid_rows}x{state.grid_cols}")
+    _bind_draw_done_hook(request)
     threading.Thread(target=_run_locked, args=(do_draw, robot, state, strokes), daemon=True).start()
     return {"ok": True}
 
 
 @router.post("/draw/stop")
-def api_draw_stop():
+def api_draw_stop(request: Request):
     state.draw_stop.set()
+    _log_user_event(request, "draw", "stop", "stop requested")
     return {"ok": True}
 
 

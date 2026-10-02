@@ -378,10 +378,25 @@ def do_draw(robot: Robot, state, strokes: list) -> None:
         else:
             state.status = f"draw done  ({len(poses)} waypoints)"
         log(f"  [Draw] {state.status}")
+        _notify_draw_done(state, "abort" if state.draw_stop.is_set() else "done",
+                          f"waypoints={len(poses)}")
         if not state.draw_stop.is_set():
             _return_to_start(robot, state, start_pose)
     except RobotMoveError as e:
         state.status = f"draw: robot rejected a move — {e} — aborted, check robot log"
         log(f"  [Draw] {state.status}")
+        _notify_draw_done(state, "fail", str(e))
     finally:
         state.draw_running = False
+
+
+def _notify_draw_done(state, action: str, detail: str = "") -> None:
+    """Report a finished draw run to the event log without importing the router
+    (no user context in this thread). The endpoint installs the callback."""
+    hook = getattr(state, "on_draw_done", None)
+    if hook is None:
+        return
+    try:
+        hook(action, detail)
+    except Exception:
+        pass
