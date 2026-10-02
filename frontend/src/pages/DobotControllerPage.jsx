@@ -7,7 +7,7 @@ const STEP_VALUES = [0.1, 1, 5, 10, 20, 50]
 const CARTESIAN_AXES = ['X', 'Y', 'Z', 'RX', 'RY', 'RZ']
 const JOINT_AXES = ['J1', 'J2', 'J3', 'J4', 'J5', 'J6']
 const LOG_MAX = 200
-const STATUS_POLL_MS = 1000
+const STATUS_POLL_MS = 1500
 
 // ── Jog Button Group ──────────────────────────────────────────────────────────
 const JogGroup = ({ axes, onMove, disabled }) => (
@@ -55,33 +55,29 @@ const LogPanel = ({ title, channel, accentClass }) => {
 
   useEffect(() => {
     let dead = false
+    let lastId = 0
 
-    const addLine = (entry) => {
-      if (pausedRef.current) { pendingRef.current.push(entry); return }
+    const apply = (data) => {
+      if (dead || !Array.isArray(data.entries)) return
+      if (typeof data.latest === 'number') lastId = data.latest
+      const fresh = data.entries.map(e => ({ t: e.t || '', msg: e.msg || e }))
+      if (fresh.length === 0) return
       setLines((prev) => {
-        const next = [...prev, entry]
+        const next = [...prev, ...fresh]
         return next.length > LOG_MAX ? next.slice(-LOG_MAX) : next
       })
     }
 
     apiFetch('/api/map/robot_logs')
       .then((r) => r.json())
-      .then((data) => {
-        if (!dead && Array.isArray(data.entries)) {
-          setLines(data.entries.map(e => ({ t: e.t || '', msg: e.msg || e })))
-        }
-      })
+      .then(apply)
       .catch(() => { })
 
     const pollInterval = setInterval(() => {
       if (dead || pausedRef.current) return
-      apiFetch('/api/map/robot_logs')
+      apiFetch(`/api/map/robot_logs?since=${lastId}`)
         .then((r) => r.json())
-        .then((data) => {
-          if (!dead && Array.isArray(data.entries)) {
-            setLines(data.entries.map(e => ({ t: e.t || '', msg: e.msg || e })))
-          }
-        })
+        .then(apply)
         .catch(() => { })
     }, 2000)
 
@@ -282,14 +278,59 @@ const DobotControllerPage = () => {
     return () => clearInterval(interval)
   }, [fetchStatus])
 
-  // ── Sync real robot joints → 3D model iframe ─────────────────────────────
+  // ── Live pose/joints over WebSocket (~10 Hz) for the coordinate readout.
+  // The 3D model gets its own joint feed inside the iframe, so this page no
+  // longer pushes setJoints; /status is only needed for the slower fields. ──
   useEffect(() => {
-    if (!viewerReady || !getCoordinatesEnabled) return
+    if (!viewerReady) return
+    let dead = false
+    let ws = null
+    let timer = null
+    const connect = () => {
+      if (dead) return
+      const token = localStorage.getItem('access_token') || ''
+      if (!token) { timer = setTimeout(connect, 2000); return }
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+      try {
+        ws = new WebSocket(proto + '//' + location.host + '/ws/joints?token=' + encodeURIComponent(token))
+      } catch {
+        timer = setTimeout(connect, 2000)
+        return
+      }
+      ws.onmessage = (ev) => {
+        if (!getCoordinatesRef.current) return
+        let d
+        try { d = JSON.parse(ev.data) } catch { return }
+        if (Array.isArray(d.pose) && d.pose.length === 6) {
+          setPos({
+            X: +Number(d.pose[0]).toFixed(2), Y: +Number(d.pose[1]).toFixed(2), Z: +Number(d.pose[2]).toFixed(2),
+            RX: +Number(d.pose[3]).toFixed(2), RY: +Number(d.pose[4]).toFixed(2), RZ: +Number(d.pose[5]).toFixed(2),
+          })
+        }
+        if (Array.isArray(d.angles) && d.angles.length === 6) {
+          setJoints({
+            J1: +Number(d.angles[0]).toFixed(2), J2: +Number(d.angles[1]).toFixed(2), J3: +Number(d.angles[2]).toFixed(2),
+            J4: +Number(d.angles[3]).toFixed(2), J5: +Number(d.angles[4]).toFixed(2), J6: +Number(d.angles[5]).toFixed(2),
+          })
+        }
+      }
+      ws.onclose = () => { ws = null; timer = setTimeout(connect, 1000) }
+    }
+    connect()
+    return () => {
+      dead = true
+      if (timer) clearTimeout(timer)
+      try { if (ws) ws.close() } catch { /* ignore */ }
+    }
+  }, [viewerReady])
+
+  // ── Tell the viewer when to stop following the arm: while Get Pos is OFF,
+  // cam1 is pinned in place instead of swinging with the dragged model. ──
+  useEffect(() => {
     const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
     if (!iframe || !iframe.contentWindow) return
-    const jArr = [joints.J1, joints.J2, joints.J3, joints.J4, joints.J5, joints.J6]
-    iframe.contentWindow.postMessage({ type: 'setJoints', joints: jArr }, '*')
-  }, [joints, viewerReady, getCoordinatesEnabled])
+    iframe.contentWindow.postMessage({ type: 'getPosState', enabled: getCoordinatesEnabled }, '*')
+  }, [getCoordinatesEnabled, viewerReady])
 
   // ── Receive 3D viewer TCP / Joint updates + Gizmo drag events ─
   useEffect(() => {

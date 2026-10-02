@@ -16,12 +16,12 @@ router = APIRouter()
 
 SCAN_TIMEOUT_S = 6.0
 
-# CAM2 shares the LAN with CAM1 (see mapcontrol.STREAM_TARGET_FPS); a smaller
-# 640x360 frame keeps both cameras inside the ~24.7 Mbps link budget.
-CAM2_STREAM_W = 640
-CAM2_STREAM_H = 360
-CAM2_STREAM_QUALITY = 75
-CAM2_TARGET_FPS = 30
+# CAM2 shares the link with CAM1 (see mapcontrol.STREAM_TARGET_FPS) — kept
+# smaller (480x270 Q55 @20fps, ~1.5 Mbps) so both cams stay smooth on 2.4 GHz.
+CAM2_STREAM_W = 480
+CAM2_STREAM_H = 270
+CAM2_STREAM_QUALITY = 55
+CAM2_TARGET_FPS = 20
 
 
 class CameraModeBody(BaseModel):
@@ -407,15 +407,21 @@ def camera_stream_secondary(serial: Optional[str] = None, mode: Optional[str] = 
 
 
 @router.get("/pointcloud2")
-def camera_pointcloud2(serial: Optional[str] = None):
+def camera_pointcloud2(serial: Optional[str] = None,
+                       max_pts: int = Query(default=0, alias="max")):
     """Secondary camera's SDK colored cloud, same binary layout as
-    /api/map/pointcloud (uint32 N + int16 mm xyz + uint8 rgb)."""
+    /api/map/pointcloud (uint32 N + int16 mm xyz + uint8 rgb).
+    ?max=N subsamples before serializing (see /api/map/pointcloud)."""
     c2 = ensure_cam2_running(target_serial=serial)
     if not c2 or not c2._running:
         return Response(status_code=503)
     pos, col = c2.get_latest_pointcloud()
     if pos is None or pos.shape[0] == 0:
         return Response(status_code=503)
+    if max_pts and pos.shape[0] > max_pts:
+        idx = np.linspace(0, pos.shape[0] - 1, max_pts).astype(np.int64)
+        pos = pos[idx]
+        col = col[idx]
     mm = np.clip(pos * 1000.0, -32767.0, 32767.0).astype("<i2")
     rgb = np.ascontiguousarray(col, dtype=np.uint8)
     body = struct.pack("<I", mm.shape[0]) + mm.tobytes() + rgb.tobytes()

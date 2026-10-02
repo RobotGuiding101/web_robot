@@ -4,8 +4,6 @@ import {
   Canvas,
   PencilBrush,
   Line,
-  Rect,
-  Ellipse,
 } from 'fabric'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
@@ -61,8 +59,6 @@ function getCanvasPathData(fc) {
     const base = { type, left: obj.left, top: obj.top }
     if (type === 'path') return { ...base, path: obj.path, stroke: obj.stroke, strokeWidth: obj.strokeWidth }
     if (type === 'line') return { ...base, x1: obj.x1, y1: obj.y1, x2: obj.x2, y2: obj.y2, stroke: obj.stroke, strokeWidth: obj.strokeWidth }
-    if (type === 'rect') return { ...base, width: obj.width, height: obj.height, stroke: obj.stroke, strokeWidth: obj.strokeWidth, fill: obj.fill }
-    if (type === 'ellipse') return { ...base, rx: obj.rx, ry: obj.ry, stroke: obj.stroke, strokeWidth: obj.strokeWidth, fill: obj.fill }
     return base
   })
 }
@@ -193,7 +189,6 @@ const DrawingModePage = () => {
 
   const [activeTool, setActiveTool] = useState(TOOLS.PEN)
   const [strokeColor, setStrokeColor] = useState('#1a2f45')
-  const [fillColor, setFillColor] = useState('transparent')
   const [strokeWidth, setStrokeWidth] = useState(2)
   const [canUndo, setCanUndo] = useState(false)
   const [canRedo, setCanRedo] = useState(false)
@@ -241,13 +236,9 @@ const DrawingModePage = () => {
 
   // Refs for latest state values (avoid stale closures)
   const strokeColorRef = useRef(strokeColor)
-  const fillColorRef = useRef(fillColor)
   const strokeWidthRef = useRef(strokeWidth)
-  const activeToolRef = useRef(activeTool)
   useEffect(() => { strokeColorRef.current = strokeColor }, [strokeColor])
-  useEffect(() => { fillColorRef.current = fillColor }, [fillColor])
   useEffect(() => { strokeWidthRef.current = strokeWidth }, [strokeWidth])
-  useEffect(() => { activeToolRef.current = activeTool }, [activeTool])
 
   // History stacks
   const historyRef = useRef([])
@@ -346,21 +337,7 @@ const DrawingModePage = () => {
       return
     }
 
-    if (activeTool === TOOLS.ERASER) {
-      fc.isDrawingMode = false
-      fc.selection = false
-      fc.getObjects().forEach((o) => { o.selectable = false; o.evented = true })
-
-      const onDown = (opt) => {
-        const target = fc.findTarget(opt.e)
-        if (target) { fc.remove(target); fc.renderAll(); saveHistory() }
-      }
-      fc.on('mouse:down', onDown)
-      mouseDownRef.current = onDown
-      return
-    }
-
-    // Shape tools
+    // Shape tool: only Line is exposed (see TOOL_META)
     fc.isDrawingMode = false
     fc.selection = false
     fc.getObjects().forEach((o) => { o.selectable = false; o.evented = false })
@@ -371,67 +348,18 @@ const DrawingModePage = () => {
       startPtRef.current = { x: ptr.x, y: ptr.y }
       const sc = strokeColorRef.current
       const sw = strokeWidthRef.current
-      const fc2 = fillColorRef.current
-      const tool = activeToolRef.current
 
-      if (tool === TOOLS.LINE) {
-        const line = new Line([ptr.x, ptr.y, ptr.x, ptr.y], {
-          stroke: sc, strokeWidth: sw, selectable: false, evented: false,
-        })
-        fc.add(line)
-        tempObjRef.current = line
-
-      } else if (tool === TOOLS.RECT) {
-        const rect = new Rect({
-          left: ptr.x, top: ptr.y, width: 1, height: 1,
-          stroke: sc, strokeWidth: sw,
-          fill: fc2 === 'transparent' ? 'transparent' : fc2,
-          selectable: false, evented: false,
-        })
-        fc.add(rect)
-        tempObjRef.current = rect
-
-      } else if (tool === TOOLS.CIRCLE) {
-        const ellipse = new Ellipse({
-          left: ptr.x, top: ptr.y, rx: 1, ry: 1,
-          stroke: sc, strokeWidth: sw,
-          fill: fc2 === 'transparent' ? 'transparent' : fc2,
-          selectable: false, evented: false,
-        })
-        fc.add(ellipse)
-        tempObjRef.current = ellipse
-      }
+      const line = new Line([ptr.x, ptr.y, ptr.x, ptr.y], {
+        stroke: sc, strokeWidth: sw, selectable: false, evented: false,
+      })
+      fc.add(line)
+      tempObjRef.current = line
     }
 
     const onMove = (opt) => {
       if (!isDrawingRef.current || !tempObjRef.current) return
       const ptr = fc.getScenePoint(opt.e)
-      const { x: sx, y: sy } = startPtRef.current
-      const obj = tempObjRef.current
-      const tool = activeToolRef.current
-
-      if (tool === TOOLS.LINE) {
-        obj.set({ x2: ptr.x, y2: ptr.y })
-
-      } else if (tool === TOOLS.RECT) {
-        const w = ptr.x - sx
-        const h = ptr.y - sy
-        obj.set({
-          left: w < 0 ? ptr.x : sx,
-          top: h < 0 ? ptr.y : sy,
-          width: Math.max(1, Math.abs(w)),
-          height: Math.max(1, Math.abs(h)),
-        })
-
-      } else if (tool === TOOLS.CIRCLE) {
-        const rx = Math.max(1, Math.abs(ptr.x - sx) / 2)
-        const ry = Math.max(1, Math.abs(ptr.y - sy) / 2)
-        obj.set({
-          left: Math.min(sx, ptr.x),
-          top: Math.min(sy, ptr.y),
-          rx, ry,
-        })
-      }
+      tempObjRef.current.set({ x2: ptr.x, y2: ptr.y })
       fc.renderAll()
     }
 
@@ -449,7 +377,7 @@ const DrawingModePage = () => {
     mouseMoveRef.current = onMove
     mouseUpRef.current = onUp
 
-  }, [activeTool, detachMouseListeners, saveHistory, strokeColor, strokeWidth, fillColor])
+  }, [activeTool, detachMouseListeners, saveHistory, strokeColor, strokeWidth])
 
   // Sync free drawing brush when color/width change (PEN tool)
   useEffect(() => {
@@ -649,15 +577,6 @@ const DrawingModePage = () => {
     const interval = setInterval(fetchTeachStatus, 1000)
     return () => clearInterval(interval)
   }, [fetchTeachStatus])
-
-  useEffect(() => {
-    const angles = teachStatus && Array.isArray(teachStatus.angles) ? teachStatus.angles : null
-    if (!angles || angles.length !== 6) return
-    const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
-    if (!iframe || !iframe.contentWindow) return
-    iframe.contentWindow.postMessage(
-      { type: 'setJoints', joints: angles.map((v) => Number(v)) }, '*')
-  }, [teachStatus])
 
   // ── Teach / Grid: transient inline message (auto-clear ~3s) ──────────────
   const showTeachMsg = useCallback((text, kind = 'ok') => {

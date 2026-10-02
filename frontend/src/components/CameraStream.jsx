@@ -70,6 +70,7 @@ const CameraStream = ({ id, src = '/api/map/video_feed', withMode = true, mode: 
     const ctx = canvas.getContext('2d')
 
     let stopped = false
+    let running = false
     let controller = null
     let reconnectTimer = null
     let pending = null
@@ -117,24 +118,36 @@ const CameraStream = ({ id, src = '/api/map/video_feed', withMode = true, mode: 
       }
     }
 
+    function stopStream() {
+      running = false
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+      try { if (controller) controller.abort() } catch { /* ignore */ }
+      controller = null
+    }
+
+    function startStream() {
+      if (stopped || running) return
+      if (!canvas.offsetWidth && !canvas.offsetHeight) return
+      running = true
+      readLoop()
+    }
+
     async function readLoop() {
+      if (!running) return
       if (!localStorage.getItem('access_token')) {
-        if (!stopped) reconnectTimer = setTimeout(readLoop, 2000)
+        if (running) reconnectTimer = setTimeout(readLoop, 2000)
         return
       }
-      if (!canvas.offsetWidth && !canvas.offsetHeight) {
-        if (!stopped) reconnectTimer = setTimeout(readLoop, 500)
-        return
-      }
-      controller = new AbortController()
-      const signal = controller.signal
+      const ctrl = new AbortController()
+      controller = ctrl
+      const signal = ctrl.signal
       lastFrameAt = performance.now()
       try {
         const res = await apiFetch(buildUrl(), { signal, cache: 'no-store' })
         if (!res.ok || !res.body) throw new Error('stream unavailable')
         const reader = res.body.getReader()
         let buf = new Uint8Array(0)
-        while (!stopped && !signal.aborted) {
+        while (running && !signal.aborted) {
           const { value, done } = await reader.read()
           if (done) break
           buf = concat(buf, value)
@@ -151,21 +164,33 @@ const CameraStream = ({ id, src = '/api/map/video_feed', withMode = true, mode: 
           if (pos > 0) buf = buf.slice(pos)
           if (buf.length > MAX_BUF) buf = new Uint8Array(0)
         }
-      } catch { if (cbRef.current.onError) cbRef.current.onError() }
-      if (!stopped) reconnectTimer = setTimeout(readLoop, RECONNECT_MS)
+      } catch { if (running && cbRef.current.onError) cbRef.current.onError() }
+      if (running) reconnectTimer = setTimeout(readLoop, RECONNECT_MS)
     }
 
     const watchdog = setInterval(() => {
-      if (performance.now() - lastFrameAt > STALL_MS) {
+      if (running && performance.now() - lastFrameAt > STALL_MS) {
         try { if (controller) controller.abort() } catch { /* ignore */ }
       }
     }, 1000)
 
+    // The global stream lives in App and is reparented into a page (visible) or
+    // back into the hidden dock. Reparenting changes the canvas size 0 <-> N,
+    // so a ResizeObserver is what tells us to actually stop/start the MJPEG —
+    // otherwise a stream opened on /camera would keep running on every later
+    // page (even /dashboard) until reload.
+    const ro = new ResizeObserver(() => {
+      if (canvas.offsetWidth || canvas.offsetHeight) startStream()
+      else stopStream()
+    })
+    ro.observe(canvas)
+
     renderLoop()
-    readLoop()
+    if (canvas.offsetWidth || canvas.offsetHeight) startStream()
 
     return () => {
       stopped = true
+      ro.disconnect()
       clearInterval(watchdog)
       if (reconnectTimer) clearTimeout(reconnectTimer)
       try { if (controller) controller.abort() } catch { /* ignore */ }
