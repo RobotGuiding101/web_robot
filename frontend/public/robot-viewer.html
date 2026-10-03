@@ -305,6 +305,7 @@
     <div id="canvas-container"></div>
 
     <div id="mount-tune">
+        <div style="font-weight:600;margin-bottom:4px;font-size:11px;color:#9fd3ff;">Cam1 mount (flange → projector)</div>
         <label>X <input type="range" id="mt-px" min="-2" max="2" step="0.001" value="0.04"><input
                 type="number" class="tune-num" id="mt-px-n" step="0.001" value="0.04"></label>
         <label>Y <input type="range" id="mt-py" min="-2" max="2" step="0.001" value="0.054"><input
@@ -320,6 +321,7 @@
     </div>
 
     <div id="cam2-tune">
+        <div style="font-weight:600;margin-bottom:4px;font-size:11px;color:#9fd3ff;">Cam2 extrinsic (base)</div>
         <label>X <input type="range" id="c2-px" min="-2" max="2" step="0.001" value="0.003"><input
                 type="number" class="tune-num" id="c2-px-n" step="0.001" value="0.003"></label>
         <label>Y <input type="range" id="c2-py" min="-2" max="2" step="0.001" value="0.718"><input
@@ -392,7 +394,10 @@
         <button type="button" id="btn-load" style="width:100%;margin-top:6px">Load session</button>
     </div>
 
-    <button id="btn-panels" type="button">⚙ Tune</button>
+    <div style="display:flex;gap:6px;margin-top:8px">
+        <button id="btn-panels" type="button">⚙ Tune</button>
+        <button id="btn-tune-cam1" type="button">Cam1</button>
+    </div>
 
     <script>
         // Check view/display mode from URL query (?mode=display or ?display=1)
@@ -1778,6 +1783,13 @@
                 if (!el) return;
                 el.style.display = el.style.display === 'flex' ? '' : 'flex';
             });
+        });
+
+        const cam1TuneBtn = document.getElementById('btn-tune-cam1');
+        if (cam1TuneBtn) cam1TuneBtn.addEventListener('click', () => {
+            const el = document.getElementById('mount-tune');
+            if (!el) return;
+            el.style.display = el.style.display === 'flex' ? '' : 'flex';
         });
 
         function applyCloudColor() {
