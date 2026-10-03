@@ -785,7 +785,7 @@
         // shifting endEffector also moves the reported Dobot X/Y/Z, the
         // MODEL_TO_ROBOT calibration and cam1's mount (projectorMount child).
         const gizmoTip = new THREE.Group();
-        gizmoTip.position.set(0.089, 0, 0.06);
+        gizmoTip.position.set(0.0899, 0.0077, 0.0686);
         endEffector.add(gizmoTip);
 
         const CAM_MOUNT_POS = new THREE.Vector3(0.06, 0.048, -0.017);
@@ -2477,7 +2477,7 @@
         // Cache latest real robot pose & joints passed from parent
         let latestRealPose = null;
         let latestRealJoints = null;
-        
+
         // ===== 6. Expose joint control & ghost control to parent React app via postMessage =====
         function _setLinkRotations(r) {
             link1.rotation.y = r[0];
@@ -2486,6 +2486,66 @@
             link4.rotation.z = r[3];
             link5.rotation.y = r[4]; link5.rotation.x = 0; link5.rotation.z = 0;
             link6.rotation.z = r[5]; link6.rotation.x = 0; link6.rotation.y = 0;
+        }
+
+        // ── Ghost Targets ───────────────────────────────────────────────
+        // Keep the real robot model normal. Each Snap creates a separate
+        // translucent snapshot at the exact current WORLD transform of every
+        // robot mesh, so the ghost stays behind while the real arm moves.
+        const _ghostTargetMat = new THREE.MeshStandardMaterial({
+            color: 0x808080,
+            roughness: 0.55,
+            metalness: 0.1,
+            transparent: true,
+            opacity: 0.7,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+        });
+
+        const _ghostTargets = [];
+
+        function createGhostTarget() {
+            // Make sure every link/mesh has its current world matrix.
+            robotBase.updateMatrixWorld(true);
+
+            const ghostGroup = new THREE.Group();
+            ghostGroup.name = 'GhostTarget';
+            ghostGroup.renderOrder = 10;
+
+            robotBase.traverse((child) => {
+                if (!child.isMesh) return;
+
+                // Clone only the visible robot meshes. Do NOT clone the
+                // robot hierarchy, gizmos, cameras, projector or hit helpers.
+                const ghostMesh = child.clone(false);
+                ghostMesh.name = 'Ghost_' + (child.name || 'Mesh');
+
+                // Use one translucent material for the whole ghost.
+                ghostMesh.material = _ghostTargetMat;
+
+                // child.matrixWorld is the exact pose at the moment of Snap.
+                ghostMesh.matrixAutoUpdate = false;
+                ghostMesh.matrix.copy(child.matrixWorld);
+                ghostMesh.matrixWorld.copy(child.matrixWorld);
+                ghostMesh.matrixWorldNeedsUpdate = false;
+
+                ghostGroup.add(ghostMesh);
+            });
+
+            scene.add(ghostGroup);
+            _ghostTargets.push(ghostGroup);
+        }
+
+        function clearGhostTargets() {
+            for (const ghost of _ghostTargets) {
+                ghost.traverse((child) => {
+                    if (child.isMesh) {
+                        child.geometry = child.geometry; // keep shared geometry
+                    }
+                });
+                scene.remove(ghost);
+            }
+            _ghostTargets.length = 0;
         }
 
         // Target link rotations (radians) the render loop eases toward. Real
@@ -2513,9 +2573,20 @@
                 }
                 ikMode = false;
             } else if (e.data.type === 'snapPos') {
-                // Snap gizmo to current arm tip and broadcast the pose as targetPoseUpdate
+                // Snap + leave a translucent target behind.
                 syncTargetToTip();
+                createGhostTarget();
                 _postTargetPose();
+
+            } else if (e.data.type === 'snapGhost') {
+                // Same behavior for the explicit ghost command.
+                syncTargetToTip();
+                createGhostTarget();
+                _postTargetPose();
+
+            } else if (e.data.type === 'clearGhost' || e.data.type === 'clearAllGhosts') {
+                clearGhostTargets();
+
             } else if (e.data.type === 'getPosState') {
                 camLockByGetPos = !e.data.enabled;
             }
