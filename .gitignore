@@ -26,3 +26,6 @@ dist/
 
 # Floor calibration (runtime)
 backend/floor_calib.json
+
+# Excel lock/temp files
+~\$*.xlsx
