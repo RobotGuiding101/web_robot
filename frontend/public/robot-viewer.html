@@ -785,7 +785,13 @@
         // ===== 4. End-Effector marker + IK Target sphere =====
         const endEffector = new THREE.Group();
         link6.add(endEffector);
-        endEffector.position.set(0.089, 0, 0.06);
+        // The draggable gizmo sits at the model's physical tool tip, but the
+        // robot's TCP reference (endEffector) must stay at link6's origin:
+        // shifting endEffector also moves the reported Dobot X/Y/Z, the
+        // MODEL_TO_ROBOT calibration and cam1's mount (projectorMount child).
+        const gizmoTip = new THREE.Group();
+        gizmoTip.position.set(0.089, 0, 0.06);
+        endEffector.add(gizmoTip);
 
         const CAM_MOUNT_POS = new THREE.Vector3(0.06, 0.048, -0.017);
         const CAM_MOUNT_ROT = new THREE.Euler(-178 * Math.PI / 180, 0, 180 * Math.PI / 180);
@@ -2337,7 +2343,7 @@
         const _cross = new THREE.Vector3();
 
         function _ccdStep(seg, axis, min, max, weight, target, TOLERANCE, DAMPING) {
-            endEffector.getWorldPosition(_effPos);
+            gizmoTip.getWorldPosition(_effPos);
             if (_effPos.distanceTo(target) < TOLERANCE) return false;
             seg.getWorldPosition(_jointPos);
             _toEff.subVectors(_effPos, _jointPos);
@@ -2382,7 +2388,7 @@
             const TOLERANCE = 0.0015;
             const DAMPING = 0.70;
             for (let iter = 0; iter < ITERATIONS; iter++) {
-                endEffector.getWorldPosition(_effPos);
+                gizmoTip.getWorldPosition(_effPos);
                 if (_effPos.distanceTo(targetPos) < TOLERANCE) break;
                 for (let i = IK_ARM_JOINTS - 1; i >= 0; i--) {
                     const { seg, axis, min, max, weight } = ikJoints[i];
@@ -2397,7 +2403,7 @@
         function syncTargetToTip() {
             if (isDisplayOnly) return;
             const p = new THREE.Vector3();
-            endEffector.getWorldPosition(p);
+            gizmoTip.getWorldPosition(p);
             targetMesh.position.copy(p);
             endEffector.getWorldQuaternion(targetMesh.quaternion);
             targetMesh.updateMatrixWorld(true);
@@ -2450,8 +2456,8 @@
         const _tpQuat = new THREE.Quaternion();
 
         function _postTargetPose() {
-            targetMesh.getWorldPosition(_tcpPos);
-            targetMesh.getWorldQuaternion(_tpQuat);
+            endEffector.getWorldPosition(_tcpPos);
+            endEffector.getWorldQuaternion(_tpQuat);
             _tpEuler.setFromQuaternion(_tpQuat);
 
             const safeCoord = (val, fb = 0) => {
