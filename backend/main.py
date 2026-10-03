@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from jose import JWTError, jwt
 from database import engine, Base
 from routers import auth, robot, camera, mapcontrol
+from routers import scan as scan_router
 from routers.auth import get_current_user, SECRET_KEY, ALGORITHM
 from routers import settings as settings_router
 from routers import devices as devices_router
@@ -140,6 +141,10 @@ app.include_router(mapcontrol.router,
                    dependencies=[Depends(get_current_user)])
 app.include_router(devices_router.router,
                    dependencies=[Depends(get_current_user)])
+# scan router: REST routes carry their own auth dependency; router-level
+# dependencies would also run for its websocket routes and reject them with
+# 401 (the token is a query param there, not an Authorization header).
+app.include_router(scan_router.router)
 
 
 @app.get("/")
