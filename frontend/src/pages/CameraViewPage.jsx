@@ -12,13 +12,16 @@ const ServerLogPanel = () => {
   const [lines, setLines] = useState([])
   const [paused, setPaused] = useState(false)
   const bottomRef = useRef(null)
+  const bodyRef   = useRef(null)
   const pausedRef = useRef(false)
   const pendingRef = useRef([])
   const lastIdRef = useRef(0)
   pausedRef.current = paused
 
   useEffect(() => {
-    if (!paused) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (!paused && bodyRef.current) {
+      bodyRef.current.scrollTop = bodyRef.current.scrollHeight
+    }
   }, [lines, paused])
 
   useEffect(() => {
@@ -90,7 +93,7 @@ const ServerLogPanel = () => {
           <button className="log-btn log-btn--clear" onClick={handleClear}>Clear</button>
         </div>
       </div>
-      <div className="log-panel-body">
+      <div className="log-panel-body" ref={bodyRef}>
         {lines.length === 0
           ? <span className="log-empty">No log entries yet…</span>
           : lines.map((l, i) => (
@@ -100,7 +103,6 @@ const ServerLogPanel = () => {
             </div>
           ))
         }
-        <div ref={bottomRef} />
       </div>
       {paused && pendingRef.current.length > 0 && (
         <div className="log-paused-banner">
@@ -775,19 +777,19 @@ const CameraViewPage = () => {
                     </div>
 
                     {/* ── Coordinate Readout ── */}
-                    <div className="coord-bar" style={{ margin: 0, padding: '10px' }}>
+                    <div className="coord-bar" style={{ margin: 0, padding: '6px 8px' }}>
                       {/* Cartesian */}
                       <div className="coord-group">
                         <div className="coord-group-header">
                           <span className="coord-group-dot coord-group-dot--cartesian" />
-                          <span className="coord-group-label">Cartesian (mm / deg)</span>
+                          <span className="coord-group-label" style={{ fontSize: '10px' }}>Cartesian (mm / deg)</span>
                         </div>
-                        <div className="coord-items">
+                        <div className="coord-items" style={{ padding: '4px', gap: '3px' }}>
                           {cartLabels.map((axis, i) => (
-                            <div key={axis} className="coord-item">
-                              <span className="coord-axis">{axis}</span>
-                              <span className="coord-val">
-                                {(pose[i] !== undefined && pose[i] !== null ? Number(pose[i]) : 0).toFixed(2)}
+                            <div key={axis} className="coord-item" style={{ padding: '2px 0' }}>
+                              <span className="coord-axis" style={{ fontSize: '9px' }}>{axis}</span>
+                              <span className="coord-val" style={{ fontSize: '10px' }}>
+                                {(pose[i] !== undefined && pose[i] !== null ? Number(pose[i]) : 0).toFixed(1)}
                               </span>
                             </div>
                           ))}
@@ -798,14 +800,14 @@ const CameraViewPage = () => {
                       <div className="coord-group">
                         <div className="coord-group-header">
                           <span className="coord-group-dot coord-group-dot--joint" />
-                          <span className="coord-group-label">Joint Angles (deg)</span>
+                          <span className="coord-group-label" style={{ fontSize: '10px' }}>Joint Angles (deg)</span>
                         </div>
-                        <div className="coord-items">
+                        <div className="coord-items" style={{ padding: '4px', gap: '3px' }}>
                           {jointLabels.map((axis, i) => (
-                            <div key={axis} className="coord-item">
-                              <span className="coord-axis">{axis}</span>
-                              <span className="coord-val">
-                                {(angles[i] !== undefined && angles[i] !== null ? Number(angles[i]) : 0).toFixed(2)}
+                            <div key={axis} className="coord-item" style={{ padding: '2px 0' }}>
+                              <span className="coord-axis" style={{ fontSize: '9px' }}>{axis}</span>
+                              <span className="coord-val" style={{ fontSize: '10px' }}>
+                                {(angles[i] !== undefined && angles[i] !== null ? Number(angles[i]) : 0).toFixed(1)}
                               </span>
                             </div>
                           ))}
