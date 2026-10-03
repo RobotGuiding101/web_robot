@@ -2456,8 +2456,8 @@
         const _tpQuat = new THREE.Quaternion();
 
         function _postTargetPose() {
-            endEffector.getWorldPosition(_tcpPos);
-            endEffector.getWorldQuaternion(_tpQuat);
+            targetMesh.getWorldPosition(_tcpPos);
+            targetMesh.getWorldQuaternion(_tpQuat);
             _tpEuler.setFromQuaternion(_tpQuat);
 
             const safeCoord = (val, fb = 0) => {
