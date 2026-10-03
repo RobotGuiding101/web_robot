@@ -784,6 +784,7 @@
         // ===== 4. End-Effector marker + IK Target sphere =====
         const endEffector = new THREE.Group();
         link6.add(endEffector);
+        endEffector.position.set(0.089, 0, 0.06);
 
 const CAM_MOUNT_POS = new THREE.Vector3(0.06, 0.048, -0.017);
     const CAM_MOUNT_ROT = new THREE.Euler(-178 * Math.PI / 180, 0, 180 * Math.PI / 180);
@@ -1999,12 +2000,14 @@ const CAM_MOUNT_POS = new THREE.Vector3(0.06, 0.048, -0.017);
         // Orange target sphere (draggable)
         const targetMesh = new THREE.Mesh(
             new THREE.SphereGeometry(0.025, 24, 24),
-            new THREE.MeshPhongMaterial({ color: 0xff6b35, emissive: 0xff3300, emissiveIntensity: 0.35, shininess: 90 })
+            new THREE.MeshPhongMaterial({ color: 0xff6b35, emissive: 0xff3300, emissiveIntensity: 0.35, shininess: 90, transparent: true, opacity: 0 })
         );
+        targetMesh.visible = false;
         // Ring around it for visibility
         const ringGeo = new THREE.TorusGeometry(0.042, 0.005, 12, 32);
-        const ringMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
+        const ringMat = new THREE.MeshBasicMaterial({ color: 0xffaa00, transparent: true, opacity: 0 });
         const ring = new THREE.Mesh(ringGeo, ringMat);
+        ring.visible = false;
         targetMesh.add(ring);
 
         let transformControls = null;
