@@ -119,6 +119,29 @@ class Camera:
         with _START_LOCK:
             return self._start_locked(retries=retries, retry_delay=retry_delay)
 
+    def set_inter_cam_sync(self, mode: int) -> bool:
+        """Set D455 Inter Cam Sync Mode on the depth sensor: 0=off, 1=master,
+        2=slave. Two D455s only expose aligned timestamps when one is master
+        and the other is a slave wired to it — matching point clouds from
+        unsynced cameras drift and shake. Best-effort: true HW sync also needs
+        the physical sync cable; without it this is a no-op the device accepts
+        anyway. Must be called BEFORE pipe.start()."""
+        if not HAS_RS or not self.serial:
+            return False
+        try:
+            ctx = rs.context()
+            for d in ctx.query_devices():
+                if d.get_info(rs.camera_info.serial_number) != self.serial:
+                    continue
+                for s in d.sensors:
+                    if s.supports(rs.option.inter_cam_sync_mode):
+                        s.set_option(rs.option.inter_cam_sync_mode, float(mode))
+                        log(f"  [Cam] {self.serial} inter_cam_sync_mode={mode}")
+                        return True
+        except Exception as e:
+            log(f"  [Cam] inter_cam_sync set failed: {e}")
+        return False
+
     def _start_locked(self, retries=3, retry_delay=1.0) -> bool:
         if self._running:
             log("  [Cam] already running; start() is a no-op")
@@ -138,7 +161,10 @@ class Camera:
         imu_cfg.enable_stream(rs.stream.depth, self.w, self.h, rs.format.z16, 30)
         imu_cfg.enable_stream(rs.stream.color, self.w, self.h, rs.format.bgr8, 30)
         imu_cfg.enable_stream(rs.stream.accel)
-        
+        # Inter-cam sync is set by the caller (main.py) before start(), not
+        # here: a per-camera env value would otherwise overwrite the role the
+        # caller assigned once start() runs for the second camera.
+
         for attempt in range(retries):
             try:
                 self.pipe   = rs.pipeline()

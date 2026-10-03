@@ -56,6 +56,13 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"[AutoStart] resume serial failed: {e}", flush=True)
 
+        # D455 inter-cam sync (0 off / 1 master / 2 slave), needs the physical
+        # sync cable. cam2 is set master before it starts, cam1 slave before
+        # it starts — the two must agree on which is master or timestamps
+        # never lock.
+        from maps_point.config import CAM_INTER_SYNC
+        cam.set_inter_cam_sync(CAM_INTER_SYNC)
+
         for attempt in range(1, 4):
             if cam._running:
                 print(f"[AutoStart] camera already running (attempt {attempt})", flush=True)

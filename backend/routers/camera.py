@@ -112,6 +112,11 @@ def start_cam2_once(target_serial: Optional[str] = None) -> Optional[Camera]:
             return None
         try:
             c2.set_serial(serial)
+            # Role must be set AFTER set_serial — before this point c2.serial
+            # still equals CAM1's, so an earlier main.py call would have
+            # reprogrammed cam1 instead.
+            from maps_point.config import CAM2_INTER_SYNC
+            c2.set_inter_cam_sync(CAM2_INTER_SYNC)
             print(f"[Cam2] starting serial={serial}", flush=True)
             c2.start()
         except Exception as e:
