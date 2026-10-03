@@ -53,6 +53,16 @@ const IconSettings = ({ size = 36, color = 'currentColor' }) => (
   </svg>
 )
 
+const IconLog = ({ size = 36, color = 'currentColor' }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+    <polyline points="14 2 14 8 20 8" />
+    <line x1="8" y1="13" x2="16" y2="13" />
+    <line x1="8" y1="17" x2="16" y2="17" />
+    <line x1="10" y1="9" x2="16" y2="9" />
+  </svg>
+)
+
 const IconArrow = ({ size = 18, color = 'currentColor' }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
     <line x1="5" y1="12" x2="19" y2="12" />
@@ -88,14 +98,23 @@ const MENU_ITEMS = [
     accentBg: 'linear-gradient(135deg, #edf1f7 0%, #e2e9f2 100%)',
     tag: 'Auto',
   },
+]
+
+// แถวล่าง: Drawing อยู่ซ้าย, Settings+Log อยู่ขวาแบ่ง 50/50
+const BOTTOM_RIGHT_ITEMS = [
   {
     label: 'System Settings',
     desc: 'IP, ports, cameras & security',
     Icon: IconSettings,
     path: '/settings',
-    accent: '#4a72a0',
-    accentBg: 'linear-gradient(135deg, #edf1f7 0%, #e2e9f2 100%)',
     tag: 'Config',
+  },
+  {
+    label: 'Activity Log',
+    desc: 'Device events & server log history',
+    Icon: IconLog,
+    path: '/logs',
+    tag: 'Log',
   },
 ]
 
@@ -272,7 +291,8 @@ const DashboardPage = () => {
 
           {/* ── Menu Grid ── */}
           <div className="dashboard-grid-new">
-            {MENU_ITEMS.map((item) => (
+            {/* แถวบน: Dobot | Camera */}
+            {MENU_ITEMS.slice(0, 2).map((item) => (
               <button
                 key={item.path}
                 className="dash-card"
@@ -280,22 +300,61 @@ const DashboardPage = () => {
                 onClick={() => navigate(item.path)}
               >
                 <div className="dash-card-top">
-                  <span className="dash-card-icon">
-                    <item.Icon size={36} color={item.accent} />
-                  </span>
-                  <span className="dash-card-tag">
-                    {item.tag}
-                  </span>
+                  <span className="dash-card-icon"><item.Icon size={36} color={item.accent} /></span>
+                  <span className="dash-card-tag">{item.tag}</span>
                 </div>
                 <div className="dash-card-body">
                   <span className="dash-card-label">{item.label}</span>
                   <span className="dash-card-desc">{item.desc}</span>
                 </div>
-                <span className="dash-card-arrow">
-                  <IconArrow size={18} color={item.accent} />
-                </span>
+                <span className="dash-card-arrow"><IconArrow size={18} color={item.accent} /></span>
               </button>
             ))}
+
+            {/* แถวล่างซ้าย: Drawing */}
+            {(() => {
+              const item = MENU_ITEMS[2]
+              const DrawingIcon = item.Icon
+              return (
+                <button
+                  className="dash-card"
+                  style={{ '--accent': item.accent, '--accent-bg': item.accentBg }}
+                  onClick={() => navigate(item.path)}
+                >
+                  <div className="dash-card-top">
+                    <span className="dash-card-icon"><DrawingIcon size={36} color={item.accent} /></span>
+                    <span className="dash-card-tag">{item.tag}</span>
+                  </div>
+                  <div className="dash-card-body">
+                    <span className="dash-card-label">{item.label}</span>
+                    <span className="dash-card-desc">{item.desc}</span>
+                  </div>
+                  <span className="dash-card-arrow"><IconArrow size={18} color={item.accent} /></span>
+                </button>
+              )
+            })()}
+
+            {/* แถวล่างขวา: Settings + Log แบ่ง 50/50 */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+              {BOTTOM_RIGHT_ITEMS.map((item) => (
+                <button
+                  key={item.path}
+                  className="dash-card"
+                  style={{ '--accent': '#4a72a0', '--accent-bg': 'linear-gradient(135deg, #edf1f7 0%, #e2e9f2 100%)' }}
+                  onClick={() => navigate(item.path)}
+                >
+                  <div className="dash-card-top">
+                    <span className="dash-card-icon"><item.Icon size={36} color="#4a72a0" /></span>
+                    <span className="dash-card-tag">{item.tag}</span>
+                  </div>
+                  <div className="dash-card-body">
+                    <span className="dash-card-label">{item.label}</span>
+                    <span className="dash-card-desc">{item.desc}</span>
+                  </div>
+                  <span className="dash-card-arrow"><IconArrow size={18} color="#4a72a0" /></span>
+                </button>
+              ))}
+            </div>
           </div>
 
         </div>
