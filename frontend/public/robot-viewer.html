@@ -374,6 +374,24 @@
         <label><input type="checkbox" id="chk-cloud2"> แสดง cloud cam2</label>
     </div>
 
+    <div class="panel" id="scan-panel" style="margin-top:8px">
+        <div style="font-weight:600;margin-bottom:6px">Scan &amp; Fuse</div>
+        <label><input type="checkbox" id="chk-scanlive"> Live fused (2 กล้อง)</label>
+        <div style="display:flex;gap:6px;margin:6px 0">
+            <button type="button" id="btn-cap1">+ cam1</button>
+            <button type="button" id="btn-cap2">+ cam2</button>
+        </div>
+        <div id="scan-count" style="font-size:12px;opacity:.8">views: 0</div>
+        <div id="ext-status" style="font-size:11px;opacity:.8">cam2 extrinsic: —</div>
+        <div style="display:flex;gap:6px;margin:6px 0">
+            <button type="button" id="btn-fuse">Fuse</button>
+            <button type="button" id="btn-save">Save</button>
+            <button type="button" id="btn-clear">Clear</button>
+        </div>
+        <select id="sel-session" style="width:100%"></select>
+        <button type="button" id="btn-load" style="width:100%;margin-top:6px">Load session</button>
+    </div>
+
     <button id="btn-panels" type="button">⚙ Tune</button>
 
     <script>
@@ -1251,7 +1269,7 @@
                     mesh2ValAttr.needsUpdate = true;
                 })
                 .catch(() => { })
-                .finally(() => { setTimeout(readDepthGrid2, 200); });
+                .finally(() => { setTimeout(readDepthGrid2, 100); });
         }
         readDepthGrid2();
 
@@ -1329,6 +1347,144 @@
         }
         readPointCloud2();
 
+        // ===== Scan / Fuse (cam2 static + cam1 multi-view) =====
+        const SCAN_MAX_PTS = 40000;
+        const scanPos = new Float32Array(SCAN_MAX_PTS * 3);
+        const scanCol = new Float32Array(SCAN_MAX_PTS * 3);
+        const scanGeo = new THREE.BufferGeometry();
+        const scanPosAttr = new THREE.BufferAttribute(scanPos, 3);
+        scanPosAttr.setUsage(THREE.DynamicDrawUsage);
+        const scanColAttr = new THREE.BufferAttribute(scanCol, 3);
+        scanColAttr.setUsage(THREE.DynamicDrawUsage);
+        scanGeo.setAttribute('position', scanPosAttr);
+        scanGeo.setAttribute('color', scanColAttr);
+        const scanMat = new THREE.PointsMaterial({ size: 0.006, vertexColors: true });
+        const scanPoints = new THREE.Points(scanGeo, scanMat);
+        scanPoints.visible = false;
+        scene.add(scanPoints);
+
+        function fillScanCloud(mm, rgb, count) {
+            for (let i = 0; i < count; i++) {
+                const j = i * 3;
+                scanPos[j] = mm[j] / 1000.0;
+                scanPos[j + 1] = -mm[j + 1] / 1000.0;
+                scanPos[j + 2] = -mm[j + 2] / 1000.0;
+                scanCol[j] = rgb[j] / 255.0;
+                scanCol[j + 1] = rgb[j + 1] / 255.0;
+                scanCol[j + 2] = rgb[j + 2] / 255.0;
+            }
+            scanGeo.setDrawRange(0, count);
+            scanPosAttr.needsUpdate = true;
+            scanColAttr.needsUpdate = true;
+        }
+
+        function parseScanCloud(ab) {
+            if (ab.byteLength < 4) return null;
+            const n = new DataView(ab).getUint32(0, true);
+            if (!n) return null;
+            return {
+                n, mm: new Int16Array(ab, 4, n * 3),
+                rgb: new Uint8Array(ab, 4 + n * 6, n * 3),
+            };
+        }
+
+        let scanWs = null;
+        function connectScanLive() {
+            const token = localStorage.getItem('access_token') || '';
+            if (!token) { setTimeout(connectScanLive, 2000); return; }
+            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            scanWs = new WebSocket(proto + '//' + location.host + '/api/scan/ws?token=' + encodeURIComponent(token));
+            scanWs.binaryType = 'arraybuffer';
+            scanWs.onmessage = (ev) => {
+                const c = parseScanCloud(ev.data);
+                if (!c) return;
+                const count = Math.min(c.n, SCAN_MAX_PTS);
+                fillScanCloud(c.mm, c.rgb, count);
+            };
+            scanWs.onclose = () => {
+                scanWs = null;
+                if (document.getElementById('chk-scanlive')?.checked) setTimeout(connectScanLive, 1000);
+            };
+        }
+
+        const scanAuth = () => ({ Authorization: 'Bearer ' + (localStorage.getItem('access_token') || '') });
+
+        async function scanRefreshCount() {
+            try {
+                const r = await fetch('/api/scan/views', { headers: scanAuth() });
+                const d = await r.json();
+                const el = document.getElementById('scan-count');
+                if (el) el.textContent = 'views: ' + (d.views ? d.views.length : 0) + (d.fused ? ' · fused' : '') + (d.map_n ? ' · map: ' + d.map_n : '');
+            } catch { /* ignore */ }
+        }
+
+        document.getElementById('chk-scanlive')?.addEventListener('change', (e) => {
+            scanPoints.visible = e.target.checked;
+            if (e.target.checked) connectScanLive();
+            else if (scanWs) { scanWs.close(); scanWs = null; }
+        });
+
+        async function scanCapture(cam) {
+            try {
+                await fetch('/api/scan/capture', {
+                    method: 'POST', headers: { ...scanAuth(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ cam }),
+                });
+                scanRefreshCount();
+            } catch { /* ignore */ }
+        }
+        document.getElementById('btn-cap1')?.addEventListener('click', () => scanCapture(1));
+        document.getElementById('btn-cap2')?.addEventListener('click', () => scanCapture(2));
+
+        document.getElementById('btn-fuse')?.addEventListener('click', async () => {
+            try {
+                await fetch('/api/scan/fuse', { method: 'POST', headers: scanAuth() });
+                const r = await fetch('/api/scan/cloud', { headers: scanAuth() });
+                if (!r.ok) return;
+                const c = parseScanCloud(await r.arrayBuffer());
+                if (c) { fillScanCloud(c.mm, c.rgb, Math.min(c.n, SCAN_MAX_PTS)); scanPoints.visible = true; document.getElementById('chk-scanlive').checked = false; }
+                scanRefreshCount();
+            } catch { /* ignore */ }
+        });
+
+        document.getElementById('btn-clear')?.addEventListener('click', async () => {
+            try { await fetch('/api/scan/views/clear', { method: 'POST', headers: scanAuth() }); scanRefreshCount(); } catch { /* ignore */ }
+        });
+
+        document.getElementById('btn-save')?.addEventListener('click', async () => {
+            try {
+                const r = await fetch('/api/scan/save', { method: 'POST', headers: { ...scanAuth(), 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+                const d = await r.json();
+                scanLoadSessions();
+            } catch { /* ignore */ }
+        });
+
+        async function scanLoadSessions() {
+            try {
+                const r = await fetch('/api/scan/sessions', { headers: scanAuth() });
+                const d = await r.json();
+                const sel = document.getElementById('sel-session');
+                if (!sel) return;
+                sel.innerHTML = (d.sessions || []).map((s) =>
+                    `<option value="${s.session}">${s.name || s.session} (${s.n})</option>`).join('');
+            } catch { /* ignore */ }
+        }
+
+        document.getElementById('btn-load')?.addEventListener('click', async () => {
+            const sel = document.getElementById('sel-session');
+            if (!sel || !sel.value) return;
+            try {
+                await fetch('/api/scan/load/' + encodeURIComponent(sel.value), { method: 'POST', headers: scanAuth() });
+                const r = await fetch('/api/scan/cloud', { headers: scanAuth() });
+                if (!r.ok) return;
+                const c = parseScanCloud(await r.arrayBuffer());
+                if (c) { fillScanCloud(c.mm, c.rgb, Math.min(c.n, SCAN_MAX_PTS)); scanPoints.visible = true; document.getElementById('chk-scanlive').checked = false; }
+            } catch { /* ignore */ }
+        });
+
+        scanRefreshCount();
+        scanLoadSessions();
+
         function bindTunePair(prefix, id) {
             const slider = document.getElementById(prefix + id);
             const num = document.getElementById(prefix + id + '-n');
@@ -1343,6 +1499,7 @@
         function bindCam2Tune() {
             const ids = ['px', 'py', 'pz', 'rx', 'ry', 'rz'];
             const get = (id) => document.getElementById('c2-' + id);
+            let saveTimer = null;
             const apply = () => {
                 const rad = Math.PI / 180;
                 cam2Mount.position.set(+get('px').value, +get('py').value, +get('pz').value);
@@ -1350,6 +1507,8 @@
                     +get('rx').value * rad,
                     +get('ry').value * rad,
                     +get('rz').value * rad);
+                clearTimeout(saveTimer);
+                saveTimer = setTimeout(saveCam2Extrinsic, 400);
             };
             ids.forEach((id) => {
                 bindTunePair('c2-', id);
@@ -1361,6 +1520,47 @@
             apply();
         }
         bindCam2Tune();
+
+        // Persist the viewer's cam2 mount tune to /api/scan/extrinsics so fuse
+        // and the live fused stream use the same transform the operator tuned.
+        async function saveCam2Extrinsic() {
+            const get = (id) => document.getElementById('c2-' + id);
+            const body = { cam2_to_base: {
+                xyz: [+get('px').value, +get('py').value, +get('pz').value],
+                rpy: [+get('rx').value, +get('ry').value, +get('rz').value],
+            } };
+            try {
+                await fetch('/api/scan/extrinsics', {
+                    method: 'POST', headers: { ...scanAuth(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const el = document.getElementById('ext-status');
+                if (el) el.textContent = 'cam2 extrinsic: saved ✓';
+            } catch { /* ignore */ }
+        }
+
+        async function loadCam2Extrinsic() {
+            try {
+                const r = await fetch('/api/scan/extrinsics', { headers: scanAuth() });
+                const d = await r.json();
+                const ex = d.extrinsics && d.extrinsics.cam2_to_base;
+                if (!ex || !ex.xyz || !ex.rpy) return;
+                const set = (id, v) => {
+                    const el = document.getElementById('c2-' + id);
+                    if (el) el.value = String(Number(v).toFixed(3));
+                    const num = document.getElementById('c2-' + id + '-n');
+                    if (num) num.value = String(Number(v).toFixed(3));
+                };
+                set('px', ex.xyz[0]); set('py', ex.xyz[1]); set('pz', ex.xyz[2]);
+                set('rx', ex.rpy[0]); set('ry', ex.rpy[1]); set('rz', ex.rpy[2]);
+                const rad = Math.PI / 180;
+                cam2Mount.position.set(+ex.xyz[0], +ex.xyz[1], +ex.xyz[2]);
+                cam2Mount.rotation.set(+ex.rpy[0] * rad, +ex.rpy[1] * rad, +ex.rpy[2] * rad);
+                const el = document.getElementById('ext-status');
+                if (el) el.textContent = 'cam2 extrinsic: loaded';
+            } catch { /* ignore */ }
+        }
+        loadCam2Extrinsic();
 
         function worldCloud(obj, localArr, count, stride) {
             obj.updateWorldMatrix(true, false);
@@ -1439,65 +1639,26 @@
                 syncMountSliders(projectorMount, 'mt-');
             }
         }
-        async function runIcpAlign(silent) {
-            if (icpBusy) return;
-            if (performance.now() - _lastParentMove < ARM_STILL_MS) return;
-            const token = localStorage.getItem('access_token') || '';
-            if (!token) return;
-            icpBusy = true;
-            try {
-                const [c1, c2] = await Promise.all([
-                    fetchCloudBinary('/api/map/pointcloud', 2000),
-                    fetchCloudBinary('/api/camera/pointcloud2', 2000),
-                ]);
-                const n1 = Math.min(c1.n, MAX_PTS);
-                const n2 = Math.min(c2.n, CAM2_MAX_PTS);
-                const tmp1 = new Float32Array(n1 * 3);
-                const tmp2 = new Float32Array(n2 * 3);
-                fillCloudPositions(tmp1, c1.mm, n1);
-                fillCloudPositions(tmp2, c2.mm, n2);
-                const s1 = Math.max(1, Math.floor(n1 / 1500));
-                const s2 = Math.max(1, Math.floor(n2 / 1500));
-                const source = worldCloud(depthPoints, tmp1, n1, s1);
-                const target = worldCloud(cam2Points, tmp2, n2, s2);
-                const parentAtSend = new THREE.Matrix4();
-                if (projectorMount.parent) {
-                    projectorMount.parent.updateWorldMatrix(true, false);
-                    parentAtSend.copy(projectorMount.parent.matrixWorld);
-                }
-                const r = await fetch('/api/map/align_icp', {
-                    method: 'POST',
-                    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ source, target, iters: 20 }),
-                });
-                const data = r.ok ? await r.json() : null;
-                if (!data || !data.ok) {
-                    if (!silent) alert('ICP: ' + ((data && data.error) || 'failed'));
-                    return;
-                }
-                if (data.fitness == null || data.fitness < 0.5 || data.rmse > 0.02) return;
-                if (projectorMount.parent) {
-                    projectorMount.parent.updateWorldMatrix(true, false);
-                    if (!matClose(projectorMount.parent.matrixWorld, parentAtSend, 1e-6)) return;
-                }
-                const T = new THREE.Matrix4().fromArray(data.transform);
-                const tLen = new THREE.Vector3().setFromMatrixPosition(T).length();
-                const tAng = 2 * Math.acos(Math.min(1, Math.abs(
-                    new THREE.Quaternion().setFromRotationMatrix(T).w)));
-                if (tLen > 0.10 || tAng > 0.20) return;
-                projectorMount.updateWorldMatrix(true, false);
-                const parent = projectorMount.parent;
-                parent.updateWorldMatrix(true, false);
-                const m = new THREE.Matrix4().copy(parent.matrixWorld).invert();
-                m.multiply(T);
-                m.multiply(parent.matrixWorld);
-                m.multiply(projectorMount.matrix);
-                const p = new THREE.Vector3();
-                const q = new THREE.Quaternion();
-                const s = new THREE.Vector3();
-                m.decompose(p, q, s);
-                const dp = projectorMount.position.distanceTo(p);
-                const dq = 1 - Math.abs(projectorMount.quaternion.dot(q));
+        // Server-side auto-align: the backend runs ICP continuously (cam2->base)
+        // and pushes the result over /ws/align — this page only applies what
+        // arrives, no per-tick HTTP. The result updates cam2Mount directly
+        // (it IS cam2_to_base), syncs the tune sliders and persists it.
+        let alignWs = null;
+        let alignWsTimer = null;
+        let alignLastP = null;
+        let alignLastQ = null;
+        let cam2GoalP = null;
+        let cam2GoalQ = null;
+
+        function applyAlignMsg(d) {
+            if (!d || d.fitness == null || d.fitness < 0.5 || d.rmse > 0.02) return;
+            const rad = Math.PI / 180;
+            const p = new THREE.Vector3(d.xyz[0], d.xyz[1], d.xyz[2]);
+            const q = new THREE.Quaternion().setFromEuler(
+                new THREE.Euler(d.rpy[0] * rad, d.rpy[1] * rad, d.rpy[2] * rad));
+            if (alignLastP) {
+                const dp = alignLastP.distanceTo(p);
+                const dq = 1 - Math.abs(alignLastQ.dot(q));
                 if (dp < 0.008 && dq < 2e-4) {
                     alignStable++;
                     if (alignStable >= 3) {
@@ -1508,27 +1669,59 @@
                     return;
                 }
                 alignStable = 0;
-                if (alignGoalP === null) {
-                    alignGoalP = p.clone();
-                    alignGoalQ = q.clone();
-                } else {
-                    alignGoalP.lerp(p, 0.4);
-                    alignGoalQ.slerp(q, 0.4);
-                }
-            } catch (err) {
-                if (!silent) alert('ICP request failed');
-            } finally {
-                icpBusy = false;
+            }
+            alignLastP = p.clone();
+            alignLastQ = q.clone();
+            cam2GoalP = p;
+            cam2GoalQ = q;
+        }
+
+        function glideCam2Align() {
+            if (cam2GoalP === null) return;
+            cam2Mount.position.lerp(cam2GoalP, 0.12);
+            cam2Mount.quaternion.slerp(cam2GoalQ, 0.12);
+            const dp = cam2Mount.position.distanceTo(cam2GoalP);
+            const dq = 1 - Math.abs(cam2Mount.quaternion.dot(cam2GoalQ));
+            if (dp < 0.0005 && dq < 1e-6) {
+                cam2Mount.position.copy(cam2GoalP);
+                cam2Mount.quaternion.copy(cam2GoalQ);
+                cam2GoalP = null;
+                cam2GoalQ = null;
+                syncMountSliders(cam2Mount, 'c2-');
+                saveCam2Extrinsic();
             }
         }
 
-        const icpBtn = document.getElementById('btn-icp');
-        if (icpBtn) icpBtn.addEventListener('click', () => runIcpAlign(false));
+        function connectAlignWs() {
+            const token = localStorage.getItem('access_token') || '';
+            if (!token) { alignWsTimer = setTimeout(connectAlignWs, 2000); return; }
+            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            try {
+                alignWs = new WebSocket(proto + '//' + location.host + '/api/scan/ws/align?token=' + encodeURIComponent(token));
+            } catch (err) {
+                alignWsTimer = setTimeout(connectAlignWs, 2000);
+                return;
+            }
+            alignWs.onmessage = (ev) => {
+                let d = null;
+                try { d = JSON.parse(ev.data); } catch (err) { return; }
+                applyAlignMsg(d);
+            };
+            alignWs.onclose = () => {
+                alignWs = null;
+                if (autoChk && autoChk.checked) alignWsTimer = setTimeout(connectAlignWs, 1000);
+            };
+        }
 
-        let autoTimer = null;
+        const icpBtn = document.getElementById('btn-icp');
+        if (icpBtn) icpBtn.addEventListener('click', () => setAuto(true));
+
         function setAuto(on) {
-            if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
-            if (on) autoTimer = setInterval(() => runIcpAlign(true), 700);
+            if (alignWs) { alignWs.close(); alignWs = null; }
+            if (alignWsTimer) { clearTimeout(alignWsTimer); alignWsTimer = null; }
+            alignLastP = null; alignLastQ = null; alignStable = 0;
+            cam2GoalP = null; cam2GoalQ = null;
+            if (on) connectAlignWs();
         }
         const autoChk = document.getElementById('chk-auto');
         if (autoChk) {
@@ -2759,6 +2952,7 @@
             updateProjector2();
             trackArmStill();
             applyAlignTarget();
+            glideCam2Align();
             cam2Mount.updateWorldMatrix(true, false);
             cam2Label.position.copy(cam2Mount.position);
             cam2Label.position.y += 0.18;
