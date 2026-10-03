@@ -106,7 +106,7 @@ def _mount_for(cam_index: int) -> np.ndarray:
         entry = ex.get("cam2_to_base")
         if entry:
             return _xyzrpy_to_T(entry)
-        return _xyzrpy_to_T({"xyz": [0.003, 0.718, 0.818], "rpy": [-75, 0, 0]})
+        return _xyzrpy_to_T({"xyz": [0.027, 0.743, 0.789], "rpy": [-75, 0, 0]})
     entry = ex.get("cam1_to_flange")
     if entry:
         return _xyzrpy_to_T(entry)
