@@ -304,8 +304,7 @@
 
     <div id="canvas-container"></div>
 
-<<<<<<< HEAD
-    <div id="mount-tune" style="display:flex">
+<div id="mount-tune" style="display:flex">
         <div style="font-weight:600;margin-bottom:4px;font-size:11px;color:#9fd3ff;">Cam1 mount (flange → projector)</div>
         <label>X <input type="range" id="mt-px" min="-2" max="2" step="0.001" value="0.06"><input
                 type="number" class="tune-num" id="mt-px-n" step="0.001" value="0.06"></label>
@@ -319,32 +318,14 @@
                 type="number" class="tune-num" id="mt-ry-n" step="0.1" value="0"></label>
         <label>RotZ <input type="range" id="mt-rz" min="-180" max="180" step="0.1" value="180"><input
                 type="number" class="tune-num" id="mt-rz-n" step="0.1" value="180"></label>
-=======
-    <div id="mount-tune">
-        <div style="font-weight:600;margin-bottom:4px;font-size:11px;color:#9fd3ff;">Cam1 mount (flange → projector)
-        </div>
-        <label>X <input type="range" id="mt-px" min="-2" max="2" step="0.001" value="0.04"><input type="number"
-                class="tune-num" id="mt-px-n" step="0.001" value="0.04"></label>
-        <label>Y <input type="range" id="mt-py" min="-2" max="2" step="0.001" value="0.054"><input type="number"
-                class="tune-num" id="mt-py-n" step="0.001" value="0.054"></label>
-        <label>Z <input type="range" id="mt-pz" min="-2" max="2" step="0.001" value="0.01"><input type="number"
-                class="tune-num" id="mt-pz-n" step="0.001" value="0.01"></label>
-        <label>RotX <input type="range" id="mt-rx" min="-180" max="180" step="0.1" value="180"><input type="number"
-                class="tune-num" id="mt-rx-n" step="0.1" value="180"></label>
-        <label>RotY <input type="range" id="mt-ry" min="-180" max="180" step="0.1" value="0"><input type="number"
-                class="tune-num" id="mt-ry-n" step="0.1" value="0"></label>
-        <label>RotZ <input type="range" id="mt-rz" min="-180" max="180" step="0.1" value="180"><input type="number"
-                class="tune-num" id="mt-rz-n" step="0.1" value="180"></label>
->>>>>>> ffd14a582f9520adcbbdbc735844976d30736f6f
     </div>
 
     <div id="cam2-tune" style="display:flex">
         <div style="font-weight:600;margin-bottom:4px;font-size:11px;color:#9fd3ff;">Cam2 extrinsic (base)</div>
-<<<<<<< HEAD
-        <label>X <input type="range" id="c2-px" min="-2" max="2" step="0.001" value="0.026"><input
-                type="number" class="tune-num" id="c2-px-n" step="0.001" value="0.026"></label>
-        <label>Y <input type="range" id="c2-py" min="-2" max="2" step="0.001" value="0.737"><input
-                type="number" class="tune-num" id="c2-py-n" step="0.001" value="0.737"></label>
+        <label>X <input type="range" id="c2-px" min="-2" max="2" step="0.001" value="0.032"><input
+                type="number" class="tune-num" id="c2-px-n" step="0.001" value="0.032"></label>
+        <label>Y <input type="range" id="c2-py" min="-2" max="2" step="0.001" value="0.742"><input
+                type="number" class="tune-num" id="c2-py-n" step="0.001" value="0.742"></label>
         <label>Z <input type="range" id="c2-pz" min="-2" max="2" step="0.001" value="0.798"><input
                 type="number" class="tune-num" id="c2-pz-n" step="0.001" value="0.798"></label>
         <label>RotX <input type="range" id="c2-rx" min="-180" max="180" step="0.1" value="-74.3"><input
@@ -353,20 +334,6 @@
                 type="number" class="tune-num" id="c2-ry-n" step="0.1" value="0"></label>
         <label>RotZ <input type="range" id="c2-rz" min="-180" max="180" step="0.1" value="0"><input
                 type="number" class="tune-num" id="c2-rz-n" step="0.1" value="0"></label>
-=======
-        <label>X <input type="range" id="c2-px" min="-2" max="2" step="0.001" value="0.003"><input type="number"
-                class="tune-num" id="c2-px-n" step="0.001" value="0.003"></label>
-        <label>Y <input type="range" id="c2-py" min="-2" max="2" step="0.001" value="0.718"><input type="number"
-                class="tune-num" id="c2-py-n" step="0.001" value="0.718"></label>
-        <label>Z <input type="range" id="c2-pz" min="-2" max="2" step="0.001" value="0.818"><input type="number"
-                class="tune-num" id="c2-pz-n" step="0.001" value="0.818"></label>
-        <label>RotX <input type="range" id="c2-rx" min="-180" max="180" step="0.1" value="-75"><input type="number"
-                class="tune-num" id="c2-rx-n" step="0.1" value="-75"></label>
-        <label>RotY <input type="range" id="c2-ry" min="-180" max="180" step="0.1" value="0"><input type="number"
-                class="tune-num" id="c2-ry-n" step="0.1" value="0"></label>
-        <label>RotZ <input type="range" id="c2-rz" min="-180" max="180" step="0.1" value="0"><input type="number"
-                class="tune-num" id="c2-rz-n" step="0.1" value="0"></label>
->>>>>>> ffd14a582f9520adcbbdbc735844976d30736f6f
         <button id="btn-icp" type="button">Align (ICP)</button>
         <button id="btn-color" type="button">Color: Video</button>
         <label>พื้นที่ cam
@@ -818,8 +785,8 @@
         const endEffector = new THREE.Group();
         link6.add(endEffector);
 
-        const CAM_MOUNT_POS = new THREE.Vector3(0.04, 0.054, 0.01);
-        const CAM_MOUNT_ROT = new THREE.Euler(180 * Math.PI / 180, 0, 180 * Math.PI / 180);
+const CAM_MOUNT_POS = new THREE.Vector3(0.06, 0.048, -0.017);
+    const CAM_MOUNT_ROT = new THREE.Euler(-178 * Math.PI / 180, 0, 180 * Math.PI / 180);
         const PROJ_ROLL = Math.PI / 2;
         const projRollMat = new THREE.Matrix4().makeRotationZ(PROJ_ROLL);
         const projectorMount = new THREE.Object3D();
