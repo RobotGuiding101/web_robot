@@ -369,6 +369,7 @@
             </select>
         </label>
         <label><input type="checkbox" id="chk-auto" checked> Auto-align (ยึดตาม cam2)</label>
+        <label><input type="checkbox" id="chk-mark1"> แสดง cam1 marker</label>
         <label><input type="checkbox" id="chk-mark2"> แสดง cam2 marker</label>
         <label><input type="checkbox" id="chk-mesh1" checked> แสดง mesh cam1</label>
         <label><input type="checkbox" id="chk-cloud1"> แสดง cloud cam1</label>
@@ -1739,6 +1740,15 @@
             cam2Marker.visible = mark2Chk.checked;
             cam2Label.visible = mark2Chk.checked;
         });
+        const mark1Chk = document.getElementById('chk-mark1');
+        const applyMark1 = (on) => {
+            cam1Marker.visible = on;
+            cam1Label.visible = on;
+        };
+        if (mark1Chk) {
+            mark1Chk.addEventListener('change', () => applyMark1(mark1Chk.checked));
+            applyMark1(mark1Chk.checked);
+        }
         const cloud1Chk = document.getElementById('chk-cloud1');
         if (cloud1Chk) cloud1Chk.addEventListener('change', () => {
             depthPoints.visible = cloud1Chk.checked;
@@ -1778,11 +1788,11 @@
 
         const panelsBtn = document.getElementById('btn-panels');
         if (panelsBtn) panelsBtn.addEventListener('click', () => {
-            ['mount-tune', 'cam2-tune'].forEach((pid) => {
-                const el = document.getElementById(pid);
-                if (!el) return;
-                el.style.display = el.style.display === 'flex' ? '' : 'flex';
-            });
+            // ⚙ Tune opens only the cam2 panel; cam1's panel stays closed
+            // unless its own button is pressed.
+            const el = document.getElementById('cam2-tune');
+            if (!el) return;
+            el.style.display = el.style.display === 'flex' ? '' : 'flex';
         });
 
         const cam1TuneBtn = document.getElementById('btn-tune-cam1');
