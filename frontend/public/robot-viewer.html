@@ -287,14 +287,6 @@
     </div>
     <!-- Gizmo Toolbar -->
     <div id="gizmo-toolbar">
-        <button id="btn-snap" class="gizmo-btn gizmo-btn-snap"
-            title="Snap Gizmo back to arm tip &amp; capture Ghost Shadow (R)">
-            ⊙ Snap เงา <span class="kbd">R</span>
-        </button>
-        <button id="btn-clear-ghost" class="gizmo-btn gizmo-btn-clear" style="display:none;"
-            title="Clear ghost shadow (C)">
-            ✖ ลบเงา <span class="kbd">C</span>
-        </button>
     </div>
 
     <!-- Floating tooltip for joint angle during hover / drag -->
@@ -2308,17 +2300,7 @@
             window.addEventListener('pointerup', onCurvedPointerUp, { passive: false });
             window.addEventListener('pointercancel', onCurvedPointerUp, { passive: false });
 
-            // Toolbar buttons
-            const bs = document.getElementById('btn-snap');
-            if (bs) bs.addEventListener('click', handleSnap);
-            const btnClearGhost = document.getElementById('btn-clear-ghost');
-            if (btnClearGhost) btnClearGhost.addEventListener('click', clearAllGhosts);
 
-            window.addEventListener('keydown', (e) => {
-                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-                if (e.key === 'r' || e.key === 'R') handleSnap();
-                if (e.key === 'c' || e.key === 'C') clearAllGhosts();
-            });
         }
 
         // ===== 5. CCD Inverse Kinematics =====
@@ -2491,293 +2473,10 @@
             }, '*');
         }
 
-        // ===== Multiple Transparent Grey Ghosts (เงาสีเทาแบบโปร่ง ทำได้หลายรอบ) =====
-        let ghostList = []; // Array of { id, index, group, tipMesh, joints, pose }
-        let selectedGhostIndex = -1;
-        const MAX_GHOSTS = 25;
-
-        // Clean transparent slate-grey material (สีเทาแบบโปร่ง สบายตา มองเห็นโครงแขนกลชัดเจน)
-        const ghostMat = new THREE.MeshStandardMaterial({
-            color: 0x475569,          // Slate grey (#475569)
-            roughness: 0.55,
-            metalness: 0.1,
-            transparent: true,
-            opacity: 0.38,
-            depthWrite: false,
-            side: THREE.DoubleSide,
-        });
-
-        // Vibrant glowing cyan highlight material for selected ghost
-        const ghostMatHighlight = new THREE.MeshStandardMaterial({
-            color: 0x06b6d4,          // Cyan (#06b6d4)
-            roughness: 0.3,
-            metalness: 0.2,
-            transparent: true,
-            opacity: 0.72,
-            depthWrite: false,
-            side: THREE.DoubleSide,
-        });
-
-        function highlightGhost(targetIndex) {
-            selectedGhostIndex = (typeof targetIndex === 'number' && targetIndex >= 0 && targetIndex < ghostList.length) ? targetIndex : -1;
-            for (let i = 0; i < ghostList.length; i++) {
-                const g = ghostList[i];
-                if (!g || !g.group) continue;
-                const isSelected = (i === selectedGhostIndex);
-                const matToUse = isSelected ? ghostMatHighlight : ghostMat;
-                g.group.traverse((child) => {
-                    if (child.isMesh && child !== g.tipMesh) {
-                        child.material = matToUse;
-                    }
-                });
-                if (g.tipMesh && g.tipMesh.material) {
-                    g.tipMesh.material.color.setHex(isSelected ? 0x06b6d4 : 0x334155);
-                    g.tipMesh.material.opacity = isSelected ? 0.95 : 0.65;
-                }
-            }
-        }
-
-        function clearAllGhosts() {
-            for (const g of ghostList) {
-                if (g.group) scene.remove(g.group);
-            }
-            ghostList = [];
-            selectedGhostIndex = -1;
-            _updateGhostUI();
-            _postGhostList();
-            window.parent.postMessage({ type: 'ghostCleared' }, '*');
-        }
-
-        function removeLastGhost() {
-            if (ghostList.length === 0) return;
-            const last = ghostList.pop();
-            if (last && last.group) scene.remove(last.group);
-            if (selectedGhostIndex >= ghostList.length) {
-                selectedGhostIndex = ghostList.length - 1;
-            }
-            highlightGhost(selectedGhostIndex);
-            _updateGhostUI();
-            _postGhostList();
-        }
-
-        function deleteGhost(targetIndex) {
-            if (typeof targetIndex !== 'number' || targetIndex < 0 || targetIndex >= ghostList.length) return;
-            const item = ghostList.splice(targetIndex, 1)[0];
-            if (item && item.group) scene.remove(item.group);
-            ghostList.forEach((g, idx) => { g.index = idx + 1; });
-            if (selectedGhostIndex === targetIndex) {
-                selectedGhostIndex = ghostList.length > 0 ? Math.min(targetIndex, ghostList.length - 1) : -1;
-            } else if (selectedGhostIndex > targetIndex) {
-                selectedGhostIndex--;
-            }
-            highlightGhost(selectedGhostIndex);
-            _updateGhostUI();
-            _postGhostList();
-        }
-
-        function _updateGhostUI() {
-            const btnClear = document.getElementById('btn-clear-ghost');
-            if (btnClear) {
-                if (ghostList.length > 0) {
-                    btnClear.style.display = 'flex';
-                    btnClear.innerHTML = `ลบเงา (${ghostList.length}) <span class="kbd">C</span>`;
-                } else {
-                    btnClear.style.display = 'none';
-                }
-            }
-        }
-
-        function _postGhostList() {
-            const cleanGhosts = ghostList.map(g => ({
-                id: g.id,
-                index: g.index,
-                pose: g.pose,
-                joints: g.joints,
-            }));
-            const cleanLatest = cleanGhosts.length > 0 ? cleanGhosts[cleanGhosts.length - 1] : null;
-            try {
-                window.parent.postMessage({
-                    type: 'ghostListUpdate',
-                    count: cleanGhosts.length,
-                    selectedIndex: selectedGhostIndex,
-                    ghosts: cleanGhosts,
-                    latest: cleanLatest,
-                }, '*');
-            } catch (err) {
-                console.error('Failed to post ghostListUpdate:', err);
-            }
-        }
-
         // Cache latest real robot pose & joints passed from parent
         let latestRealPose = null;
         let latestRealJoints = null;
-
-        function captureGhostArm(customPose, customJoints) {
-            if (loadedCount < totalModels) return;
-
-            // Ensure transforms are up to date
-            robotBase.updateMatrixWorld(true);
-
-            // Clone full robot hierarchy
-            const newGhost = robotBase.clone(true);
-
-            // Apply transparent grey material and disable raycasting
-            newGhost.traverse((child) => {
-                if (child.isMesh) {
-                    child.material = ghostMat;
-                    child.castShadow = false;
-                    child.receiveShadow = false;
-                    child.raycast = () => { };
-                }
-            });
-
-            // Save ghost joints (degrees): prioritize real robot joints
-            let joints = customJoints || latestRealJoints;
-            if (!joints || !Array.isArray(joints) || joints.length < 6) {
-                joints = [
-                    +_rad2degFn(link1.rotation.y).toFixed(2),
-                    +_rad2degFn(link2.rotation.z).toFixed(2),
-                    +_rad2degFn(link3.rotation.z).toFixed(2),
-                    +_rad2degFn(link4.rotation.z).toFixed(2),
-                    +_rad2degFn(link5.rotation.y).toFixed(2),
-                    +_rad2degFn(link6.rotation.z).toFixed(2),
-                ];
-            } else {
-                joints = joints.map(v => +Number(v).toFixed(2));
-            }
-
-            // Save ghost TCP pose: prioritize REAL robot coordinates!
-            let pose = customPose || latestRealPose;
-            const parseCoord = (obj, keyL, keyU, fallback = 0) => {
-                if (!obj) return fallback;
-                const v = obj[keyL] !== undefined ? obj[keyL] : obj[keyU];
-                const n = Number(v);
-                return (!isNaN(n) && isFinite(n)) ? +n.toFixed(1) : fallback;
-            };
-
-            const rawX = pose ? parseCoord(pose, 'x', 'X', null) : null;
-            if (rawX === null) {
-                endEffector.getWorldPosition(_tcpPos);
-                endEffector.getWorldQuaternion(_tpQuat);
-                _tpEuler.setFromQuaternion(_tpQuat);
-                const safeNum = (v, fb = 0) => {
-                    const n = Number(v);
-                    return (!isNaN(n) && isFinite(n)) ? +n.toFixed(1) : fb;
-                };
-                pose = {
-                    x: safeNum(_tcpPos.x * 1000),
-                    y: safeNum(_tcpPos.y * 1000),
-                    z: safeNum(_tcpPos.z * 1000),
-                    rx: safeNum(_rad2degFn(_tpEuler.x)),
-                    ry: safeNum(_rad2degFn(_tpEuler.y)),
-                    rz: safeNum(_rad2degFn(_tpEuler.z)),
-                };
-            } else {
-                endEffector.getWorldPosition(_tcpPos);
-                const fallbackZ = (!isNaN(Number(_tcpPos.z)) && isFinite(Number(_tcpPos.z))) ? +(_tcpPos.z * 1000).toFixed(1) : 0;
-                pose = {
-                    x: rawX,
-                    y: parseCoord(pose, 'y', 'Y', 0),
-                    z: parseCoord(pose, 'z', 'Z', fallbackZ),
-                    rx: parseCoord(pose, 'rx', 'RX', 0),
-                    ry: parseCoord(pose, 'ry', 'RY', 0),
-                    rz: parseCoord(pose, 'rz', 'RZ', 0),
-                };
-            }
-
-            // Subtle dark-grey tip sphere marker
-            const ghostTip = new THREE.Mesh(
-                new THREE.SphereGeometry(0.015, 16, 16),
-                new THREE.MeshBasicMaterial({ color: 0x334155, transparent: true, opacity: 0.65 })
-            );
-            ghostTip.position.copy(_tcpPos);
-            newGhost.add(ghostTip);
-
-            scene.add(newGhost);
-
-            // Append to list (supports multiple rounds!)
-            const item = {
-                id: Date.now() + '_' + (ghostList.length + 1),
-                index: ghostList.length + 1,
-                group: newGhost,
-                tipMesh: ghostTip,
-                joints,
-                pose,
-            };
-            ghostList.push(item);
-
-            // Cap maximum ghosts to prevent performance issues
-            if (ghostList.length > MAX_GHOSTS) {
-                const oldest = ghostList.shift();
-                if (oldest && oldest.group) scene.remove(oldest.group);
-            }
-
-            selectedGhostIndex = ghostList.length - 1;
-            highlightGhost(selectedGhostIndex);
-            _updateGhostUI();
-            _postGhostList();
-        }
-
-        function restoreGhostPose(targetIndex) {
-            let target = null;
-            let idx = -1;
-            if (typeof targetIndex === 'number' && ghostList[targetIndex]) {
-                target = ghostList[targetIndex];
-                idx = targetIndex;
-            } else if (ghostList.length > 0) {
-                target = ghostList[ghostList.length - 1];
-                idx = ghostList.length - 1;
-            }
-            if (!target || !target.joints) return;
-            const j = target.joints;
-            link1.rotation.y = deg(j[0]);
-            link2.rotation.z = deg(j[1]);
-            link3.rotation.z = deg(j[2]);
-            link4.rotation.z = deg(j[3]);
-            link5.rotation.y = deg(j[4]);
-            link5.rotation.x = 0;
-            link5.rotation.z = 0;
-            link6.rotation.z = deg(j[5]);
-            link6.rotation.x = 0;
-            link6.rotation.y = 0;
-            link1.updateMatrixWorld(true);
-            jointTarget = null;
-            syncTargetToTip();
-            if (target.pose) {
-                window.parent.postMessage({
-                    type: 'targetPoseUpdate',
-                    x: target.pose.x,
-                    y: target.pose.y,
-                    z: target.pose.z,
-                    rx: target.pose.rx,
-                    ry: target.pose.ry,
-                    rz: target.pose.rz,
-                    joints: target.joints,
-                }, '*');
-            } else {
-                _postTargetPose();
-            }
-            highlightGhost(idx);
-        }
-
-        function selectGhost(targetIndex) {
-            if (typeof targetIndex !== 'number' || targetIndex < 0 || targetIndex >= ghostList.length) {
-                highlightGhost(-1);
-                return;
-            }
-            restoreGhostPose(targetIndex);
-        }
-
-        function handleSnap(overridePose, overrideJoints) {
-            // 1. Capture current arm as a new transparent grey ghost using real coordinates
-            captureGhostArm(overridePose, overrideJoints);
-            // 2. Snap Gizmo back to arm tip
-            syncTargetToTip();
-            // 3. Send target pose via _postTargetPose() — same path as drag release
-            //    so XYZ goes through _modelToRobot() conversion identically
-            _postTargetPose();
-        }
-
+        
         // ===== 6. Expose joint control & ghost control to parent React app via postMessage =====
         function _setLinkRotations(r) {
             link1.rotation.y = r[0];
@@ -2812,20 +2511,10 @@
                     jointTarget = tgt;
                 }
                 ikMode = false;
-            } else if (e.data.type === 'snapGhost') {
-                handleSnap(e.data.realPose, e.data.realJoints);
-            } else if (e.data.type === 'clearGhost' || e.data.type === 'clearAllGhosts') {
-                clearAllGhosts();
-            } else if (e.data.type === 'removeLastGhost') {
-                removeLastGhost();
-            } else if (e.data.type === 'restoreGhost') {
-                restoreGhostPose(e.data.index);
-            } else if (e.data.type === 'selectGhost') {
-                selectGhost(e.data.index);
-            } else if (e.data.type === 'highlightGhost') {
-                highlightGhost(e.data.index);
-            } else if (e.data.type === 'deleteGhost') {
-                deleteGhost(e.data.index);
+            } else if (e.data.type === 'snapPos') {
+                // Snap gizmo to current arm tip and broadcast the pose as targetPoseUpdate
+                syncTargetToTip();
+                _postTargetPose();
             } else if (e.data.type === 'getPosState') {
                 camLockByGetPos = !e.data.enabled;
             }
