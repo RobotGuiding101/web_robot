@@ -48,6 +48,7 @@ router = APIRouter(prefix="/api/map", tags=["MapControl"])
 robot = Robot(ROBOT_IP)
 cam = Camera()
 state = AppState()
+state.robot_motion_ts = 0.0      # set by _safe_call/_run_locked on every motion
 state_store.load(state)             # restore marks/grid from the last session
 state_store.start_autosave(state)   # persist again on change
 start_tracking_thread(cam, state)   # keeps state.points glued to the object
@@ -234,6 +235,9 @@ def _run_locked(fn, *args, **kwargs):
     """Run a (usually long) robot action while holding the move lock, so it
     cannot overlap another motion from a different thread."""
     with robot_lock:
+        # Timestamp every motion so cam2's mesh knows the arm may be in view
+        # (see routers/camera.py _get_cam2_depth_persistent).
+        state.robot_motion_ts = time.time()
         return fn(*args, **kwargs)
 
 
@@ -243,6 +247,7 @@ def _safe_call(fn, *args, **kwargs):
     generic branch: a socket timeout (robot unplugged mid-session) used to
     vanish silently here, so the UI just looked like nothing happened."""
     try:
+        state.robot_motion_ts = time.time()
         with robot_lock:
             fn(*args, **kwargs)
     except RobotMoveError as e:

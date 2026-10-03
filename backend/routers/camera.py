@@ -457,16 +457,90 @@ def camera_pointcloud2(serial: Optional[str] = None,
                     headers=_STREAM_HEADERS)
 
 
+_cam2_depth_map = None            # float32 212x120 persistent depth grid
+_cam2_occ_ts = None               # per-cell first-occluded timestamp (idle accept)
+_cam2_depth_lock = threading.Lock()
+# New depth below this fraction of the stored value is an occluder (the arm or
+# something placed in front), not the surface — keep the stored value so the
+# mesh survives. 0.9 also covers the viewer's >80mm neighbour-jump hole rule.
+CAM2_OCCLUDE_RATIO = 0.9
+# A cell that stays occluded this long while the arm is idle is a real scene
+# change (object placed in front), not the arm — accept the new value.
+CAM2_OCCLUDE_ACCEPT_S = 8.0
+# D455 depth under ~30cm is unreliable; returns closer than this are discarded
+# (treated as unseen) so the near arm never paints garbage onto the mesh.
+CAM2_MIN_DEPTH_MM = 300.0
+# While the robot has moved within this window the arm may be in front of cam2,
+# so the occlude-keep rule stays on. Once the arm is idle, every valid cell
+# updates every frame — fast scene changes are tracked instead of frozen.
+CAM2_ARM_COOLDOWN_S = 2.0
+
+
+def reset_cam2_depth_map() -> None:
+    """Drop the persistent cam2 depth grid (the Clear button / camera restart)."""
+    global _cam2_depth_map, _cam2_occ_ts
+    with _cam2_depth_lock:
+        _cam2_depth_map = None
+        _cam2_occ_ts = None
+
+
+def _get_cam2_depth_persistent():
+    """Depth grid for the cam2 3D mesh that survives occluders (the sweeping
+    arm, or anything passing between cam2 and the surface).
+
+    The viewer hides any cell whose depth jumps >80mm from a neighbour, so a
+    closer occluder written over the surface punches a hole. A return below
+    CAM2_MIN_DEPTH_MM is discarded (unreliable near-range) and treated as
+    unseen. Anything significantly closer than the stored value is kept OUT of
+    the map while the arm is moving; once the arm is idle a cell that stays
+    occluded for CAM2_OCCLUDE_ACCEPT_S is accepted (a real scene change, e.g. an
+    object placed in front), while brief occlusions never touch the mesh.
+    Cleared via the Clear button."""
+    global _cam2_depth_map, _cam2_occ_ts
+    c2 = ensure_cam2_running()
+    if c2 is None or not c2._running:
+        reset_cam2_depth_map()
+        return None
+    cf, df = c2.get_latest_frames_ref()
+    with _cam2_depth_lock:
+        if df is None:
+            return _cam2_depth_map
+        d = cv2.resize(df, (212, 120), interpolation=cv2.INTER_NEAREST).astype(np.float32)
+        valid_new = d >= CAM2_MIN_DEPTH_MM
+        now = time.time()
+        arm_active = bool(getattr(state, "align_running", False)
+                          or getattr(state, "draw_running", False)
+                          or now - getattr(state, "robot_motion_ts", 0.0) < CAM2_ARM_COOLDOWN_S)
+        if _cam2_depth_map is None:
+            _cam2_depth_map = np.where(valid_new, d, 0.0)
+            _cam2_occ_ts = np.zeros(d.shape, dtype=np.float32)
+        else:
+            prev = _cam2_depth_map
+            occluder = valid_new & (prev > 0) & (d < prev * CAM2_OCCLUDE_RATIO)
+            if arm_active:
+                # The arm may be the occluder — keep the stored surface and let
+                # the persistence clock restart once the arm stops moving.
+                _cam2_occ_ts[:] = 0.0
+                update = valid_new & ~occluder
+            else:
+                # Arm idle: a newly-occluded cell starts a timer; only accept it
+                # after it has persisted CAM2_OCCLUDE_ACCEPT_S (a real change),
+                # so a briefly-blocking arm never punches holes in the mesh.
+                first = occluder & (_cam2_occ_ts == 0)
+                _cam2_occ_ts[first] = now
+                _cam2_occ_ts[~occluder] = 0.0
+                accept = occluder & (now - _cam2_occ_ts > CAM2_OCCLUDE_ACCEPT_S)
+                update = valid_new & (~occluder | accept)
+            prev[update] = d[update]
+        return _cam2_depth_map
+
+
 @router.get("/depth_grid2")
 def camera_depth_grid2(serial: Optional[str] = None):
-    c2 = ensure_cam2_running(target_serial=serial)
-    if not c2 or not c2._running:
+    d = _get_cam2_depth_persistent()
+    if d is None:
         return Response(status_code=503)
-    cf, df = c2.get_latest_frames_ref()
-    if df is None:
-        return Response(status_code=503)
-    d = cv2.resize(df, (212, 120), interpolation=cv2.INTER_NEAREST)
-    d = np.ascontiguousarray(d, dtype="<u2")
+    d = np.ascontiguousarray(np.clip(d, 0, 65535).astype("<u2"))
     hdr = struct.pack("<HH", 212, 120)
     return Response(content=hdr + d.tobytes(), media_type="application/octet-stream",
                     headers=_STREAM_HEADERS)
