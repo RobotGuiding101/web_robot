@@ -144,6 +144,7 @@ const DobotControllerPage = () => {
   const [stepValue, setStepValue] = useState(1)
   const [speed, setSpeed] = useState(10)  // SpeedFactor 1-100%, loaded from DB
   const [pos, setPos] = useState({ X: 0, Y: 0, Z: 150, RX: 0, RY: 0, RZ: 0 })
+  const [tipPos, setTipPos] = useState({ X: 0, Y: 0, Z: 0 })
   const [joints, setJoints] = useState({ J1: 0, J2: 0, J3: 0, J4: 0, J5: 0, J6: 0 })
   const [lastMoved, setLastMoved] = useState(null)
 
@@ -427,6 +428,15 @@ const DobotControllerPage = () => {
 
       // Legacy tcpUpdate — only update UI coords when auto-sync is off
       if (e.data.type === 'tcpUpdate') {
+        // Tool-tip position is model-derived, so show it regardless of the
+        // Get Pos toggle (the model always follows the real joints).
+        if (typeof e.data.tipX === 'number') {
+          setTipPos({
+            X: +Number(e.data.tipX).toFixed(2),
+            Y: +Number(e.data.tipY).toFixed(2),
+            Z: +Number(e.data.tipZ).toFixed(2),
+          })
+        }
         if (!getCoordinatesRef.current) {
           if (typeof e.data.x === 'number') {
             setPos({
@@ -953,6 +963,20 @@ const DobotControllerPage = () => {
                   </div>
                   <div className="coord-items">
                     {Object.entries(pos).map(([k, v]) => (
+                      <div key={k} className="coord-item">
+                        <span className="coord-axis">{k}</span>
+                        <span className="coord-val">{v.toFixed(2)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="coord-group">
+                  <div className="coord-group-header">
+                    <span className="coord-group-dot" style={{ background: '#f59e0b' }} />
+                    <span className="coord-group-label">Tip — ปลายแหลม (mm)</span>
+                  </div>
+                  <div className="coord-items">
+                    {Object.entries(tipPos).map(([k, v]) => (
                       <div key={k} className="coord-item">
                         <span className="coord-axis">{k}</span>
                         <span className="coord-val">{v.toFixed(2)}</span>

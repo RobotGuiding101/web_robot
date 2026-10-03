@@ -2402,7 +2402,7 @@
         // landed in Y and depth in Z. Measured against the live robot:
         //   robotX = modelX, robotY = -modelZ, robotZ = modelY
         // (small residual offsets come from .dae link lengths ≠ real arm).
-        const MODEL_TO_ROBOT_OFFSET = { x: -40.6, y: -23.2, z: -7.4 };
+        const MODEL_TO_ROBOT_OFFSET = { x: -40.65, y: -23.19, z: -7.43 };
         function _modelToRobot(mx, my, mz) {
             return {
                 x: mx + MODEL_TO_ROBOT_OFFSET.x,
@@ -2418,6 +2418,11 @@
         const _TOOL_FIX = new THREE.Matrix4().makeRotationZ(Math.PI);
         const _orientMtx = new THREE.Matrix4();
         const _orientEuler = new THREE.Euler();
+        // Residual between the model's FK orientation and the robot's real
+        // GetPose() (measured 2026-10-04: model RY=-0.10 vs robot +0.21,
+        // model RZ=176.90 vs robot 177.04) — added so the "Get Pos: OFF"
+        // readout (model FK) matches the "ON" readout (robot).
+        const _ORIENT_FIX = { rx: 0.01, ry: 0.27, rz: 0.11 };
         function _modelOrientToRobot(quat) {
             _orientMtx.makeRotationFromQuaternion(quat);
             _orientMtx.premultiply(_BASIS_M);
@@ -2427,9 +2432,9 @@
             // the physical orientation is identical.
             _orientEuler.setFromRotationMatrix(_orientMtx, 'ZYX');
             return {
-                rx: _rad2degFn(_orientEuler.x),
-                ry: _rad2degFn(_orientEuler.y),
-                rz: _rad2degFn(_orientEuler.z),
+                rx: _rad2degFn(_orientEuler.x) + _ORIENT_FIX.rx,
+                ry: _rad2degFn(_orientEuler.y) + _ORIENT_FIX.ry,
+                rz: _rad2degFn(_orientEuler.z) + _ORIENT_FIX.rz,
             };
         }
 
@@ -2439,8 +2444,12 @@
         const _tpQuat = new THREE.Quaternion();
 
         function _postTargetPose() {
-            targetMesh.getWorldPosition(_tcpPos);
-            targetMesh.getWorldQuaternion(_tpQuat);
+            // Send the FLANGE (endEffector) pose, NOT the tip. The model's IK
+            // already solved so the tip reaches the dragged point, leaving the
+            // flange one tool-offset back — so commanding the robot's flange to
+            // this pose puts the physical TIP exactly on the dragged point.
+            endEffector.getWorldPosition(_tcpPos);
+            endEffector.getWorldQuaternion(_tpQuat);
             _tpEuler.setFromQuaternion(_tpQuat);
 
             const safeCoord = (val, fb = 0) => {
@@ -2559,7 +2568,7 @@
             if (e.data.type === 'setJoints') {
                 const j = e.data.joints; // array [j1..j6] in degrees
                 if (!Array.isArray(j) || j.length < 6) return;
-                if (e.data.realPose) latestRealPose = e.data.realPose;
+                if (Array.isArray(e.data.realPose) && e.data.realPose.length >= 6) latestRealPose = e.data.realPose.slice(0, 6);
                 latestRealJoints = j.slice(0, 6);
                 const tgt = [deg(j[0]), deg(j[1]), deg(j[2]), deg(j[3]), deg(j[4]), deg(j[5])];
                 if (!jointSynced) {
@@ -2608,9 +2617,10 @@
                 return;
             }
             jointsWs.onmessage = (ev) => {
-                if (camLockByGetPos) return;
                 let d;
                 try { d = JSON.parse(ev.data); } catch (err) { return; }
+                if (Array.isArray(d.pose) && d.pose.length >= 6) latestRealPose = d.pose.slice(0, 6);
+                if (camLockByGetPos) return;
                 const j = d && d.angles;
                 if (!Array.isArray(j) || j.length < 6) return;
                 latestRealJoints = j.slice(0, 6);
@@ -2644,6 +2654,14 @@
         const _tcpEuler = new THREE.Euler();
         const _rad2deg = THREE.MathUtils.radToDeg;
         let _lastPostMs = 0;
+        // Tip display from the REAL robot pose (when Get Pos is ON): the model's
+        // FK drifts from the arm (link lengths differ), so tip = flange +
+        // R(robot euler) * (TOOLFIX^-1 * gizmoTip_local) instead.
+        const _tipEuler = new THREE.Euler();
+        const _tipMat = new THREE.Matrix4();
+        const _tipOff = new THREE.Vector3();
+        const _tipOffLocal = gizmoTip.position.clone()
+            .applyMatrix4(new THREE.Matrix4().makeRotationZ(Math.PI).invert());
 
         function animate() {
             requestAnimationFrame(animate);
@@ -2707,9 +2725,9 @@
             // Read TCP position (metres → mm) and send to parent React app ~10x/sec
             endEffector.getWorldPosition(_tcpPos);
             const _rp = _modelToRobot(_tcpPos.x * 1000, _tcpPos.y * 1000, _tcpPos.z * 1000);
-            const mmX = +_rp.x.toFixed(1);
-            const mmY = +_rp.y.toFixed(1);
-            const mmZ = +_rp.z.toFixed(1);
+            const mmX = +_rp.x.toFixed(2);
+            const mmY = +_rp.y.toFixed(2);
+            const mmZ = +_rp.z.toFixed(2);
 
             const now = performance.now();
             if (now - _lastPostMs > 100) {
@@ -2718,9 +2736,9 @@
                 // End-effector world orientation → robot-frame Euler (degrees)
                 endEffector.getWorldQuaternion(_tcpQuat);
                 const _ro = _modelOrientToRobot(_tcpQuat);
-                const rx = +_ro.rx.toFixed(1);
-                const ry = +_ro.ry.toFixed(1);
-                const rz = +_ro.rz.toFixed(1);
+                const rx = +_ro.rx.toFixed(2);
+                const ry = +_ro.ry.toFixed(2);
+                const rz = +_ro.rz.toFixed(2);
 
                 // Joint angles (degrees) from each link's rotation axis
                 const joints = [
@@ -2732,10 +2750,30 @@
                     +_rad2deg(link6.rotation.z).toFixed(2),
                 ];
 
+                // Physical tool tip. When following the real robot (Get Pos ON)
+                // compute it from the robot's own pose so it doesn't inherit the
+                // model's FK drift; while free-dragging (OFF) use the model tip.
+                let tipX, tipY, tipZ;
+                if (!camLockByGetPos && latestRealPose) {
+                    _tipEuler.set(deg(latestRealPose[3]), deg(latestRealPose[4]), deg(latestRealPose[5]), 'ZYX');
+                    _tipMat.makeRotationFromEuler(_tipEuler);
+                    _tipOff.copy(_tipOffLocal).applyMatrix4(_tipMat).multiplyScalar(1000);
+                    tipX = +(latestRealPose[0] + _tipOff.x).toFixed(2);
+                    tipY = +(latestRealPose[1] + _tipOff.y).toFixed(2);
+                    tipZ = +(latestRealPose[2] + _tipOff.z).toFixed(2);
+                } else {
+                    gizmoTip.getWorldPosition(_tcpPos);
+                    const _tpr = _modelToRobot(_tcpPos.x * 1000, _tcpPos.y * 1000, _tcpPos.z * 1000);
+                    tipX = +_tpr.x.toFixed(2);
+                    tipY = +_tpr.y.toFixed(2);
+                    tipZ = +_tpr.z.toFixed(2);
+                }
+
                 window.parent.postMessage({
                     type: 'tcpUpdate',
                     x: mmX, y: mmY, z: mmZ,
                     rx, ry, rz,
+                    tipX, tipY, tipZ,
                     joints,
                 }, '*');
             }
