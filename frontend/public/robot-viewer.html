@@ -296,7 +296,7 @@
 
     <div id="canvas-container"></div>
 
-    <div id="mount-tune" style="display:flex">
+    <div id="mount-tune">
         <div style="font-weight:600;margin-bottom:4px;font-size:11px;color:#9fd3ff;">Cam1 mount (flange → projector)
         </div>
         <label>X <input type="range" id="mt-px" min="-2" max="2" step="0.001" value="0.06"><input type="number"
@@ -313,7 +313,7 @@
                 class="tune-num" id="mt-rz-n" step="0.1" value="180"></label>
     </div>
 
-    <div id="cam2-tune" style="display:flex">
+    <div id="cam2-tune">
         <div style="font-weight:600;margin-bottom:4px;font-size:11px;color:#9fd3ff;">Cam2 extrinsic (base)</div>
         <label>X <input type="range" id="c2-px" min="-2" max="2" step="0.001" value="0.032"><input type="number"
                 class="tune-num" id="c2-px-n" step="0.001" value="0.032"></label>
@@ -760,15 +760,18 @@
             link5.add(c.scene); onModelLoaded();
         }, undefined, onModelLoaded);
 
-        loader.load('models/Link6.dae', (c) => {
+        loader.load('models/Link6s.dae', (c) => {
             c.scene.rotation.set(deg(180), deg(0), deg(180));
             c.scene.traverse((child) => {
                 if (child.isMesh) {
-                    child.material = new THREE.MeshStandardMaterial({
-                        color: 0xff2222,
-                        metalness: 0.3,
-                        roughness: 0.5,
+                    child.material = new THREE.MeshBasicMaterial({
+                        color: 0xff0000,
+                        side: THREE.DoubleSide,
                     });
+                } else if (child.isLight || child.isCamera) {
+                    // The Blender export embeds 14 blue point lights + cameras —
+                    // disable them so they don't wash out the model's color.
+                    child.visible = false;
                 }
             });
             link6.add(c.scene); onModelLoaded();
@@ -1794,21 +1797,19 @@
             cam2Points.visible = false;
         }
 
+        // ⚙ Tune toggles BOTH the Cam1 mount and Cam2 extrinsic panels together.
+        function toggleTunePanels() {
+            const c1 = document.getElementById('mount-tune');
+            const c2 = document.getElementById('cam2-tune');
+            const show = !(c2 && c2.style.display === 'flex');
+            [c1, c2].forEach((el) => { if (el) el.style.display = show ? 'flex' : ''; });
+        }
+
         const panelsBtn = document.getElementById('btn-panels');
-        if (panelsBtn) panelsBtn.addEventListener('click', () => {
-            // ⚙ Tune opens only the cam2 panel; cam1's panel stays closed
-            // unless its own button is pressed.
-            const el = document.getElementById('cam2-tune');
-            if (!el) return;
-            el.style.display = el.style.display === 'flex' ? '' : 'flex';
-        });
+        if (panelsBtn) panelsBtn.addEventListener('click', toggleTunePanels);
 
         const cam1TuneBtn = document.getElementById('btn-tune-cam1');
-        if (cam1TuneBtn) cam1TuneBtn.addEventListener('click', () => {
-            const el = document.getElementById('mount-tune');
-            if (!el) return;
-            el.style.display = el.style.display === 'flex' ? '' : 'flex';
-        });
+        if (cam1TuneBtn) cam1TuneBtn.addEventListener('click', toggleTunePanels);
 
         function applyCloudColor() {
             const v1 = colorSrc === 'video' && effMode(1) === 'rgb';
