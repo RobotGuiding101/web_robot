@@ -2767,22 +2767,9 @@
             captureGhostArm(overridePose, overrideJoints);
             // 2. Snap Gizmo back to arm tip
             syncTargetToTip();
-            // 3. Send target pose update
-            const targetGhost = ghostList.length > 0 ? ghostList[ghostList.length - 1] : null;
-            if (targetGhost && targetGhost.pose) {
-                window.parent.postMessage({
-                    type: 'targetPoseUpdate',
-                    x: targetGhost.pose.x,
-                    y: targetGhost.pose.y,
-                    z: targetGhost.pose.z,
-                    rx: targetGhost.pose.rx,
-                    ry: targetGhost.pose.ry,
-                    rz: targetGhost.pose.rz,
-                    joints: targetGhost.joints,
-                }, '*');
-            } else {
-                _postTargetPose();
-            }
+            // 3. Send target pose via _postTargetPose() — same path as drag release
+            //    so XYZ goes through _modelToRobot() conversion identically
+            _postTargetPose();
         }
 
         // ===== 6. Expose joint control & ghost control to parent React app via postMessage =====
