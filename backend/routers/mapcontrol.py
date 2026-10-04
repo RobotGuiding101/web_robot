@@ -1677,6 +1677,7 @@ def api_status():
         "last_tilt": state.last_tilt,
         "initial_tilt": getattr(state, 'initial_tilt', None),
         "final_tilt": getattr(state, 'final_tilt', None),
+        "final_rmse": getattr(state, 'final_rmse', None),
         "last_rmse": state.last_rmse,
         "last_depth_range": state.last_depth_range,
         "last_roll_deg": state.last_roll_deg,
