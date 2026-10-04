@@ -299,10 +299,10 @@
     <div id="mount-tune">
         <div style="font-weight:600;margin-bottom:4px;font-size:11px;color:#9fd3ff;">Cam1 mount (flange → projector)
         </div>
-        <label>X <input type="range" id="mt-px" min="-2" max="2" step="0.001" value="0.06"><input type="number"
-                class="tune-num" id="mt-px-n" step="0.001" value="0.06"></label>
-        <label>Y <input type="range" id="mt-py" min="-2" max="2" step="0.001" value="0.048"><input type="number"
-                class="tune-num" id="mt-py-n" step="0.001" value="0.048"></label>
+        <label>X <input type="range" id="mt-px" min="-2" max="2" step="0.001" value="0.1"><input type="number"
+                class="tune-num" id="mt-px-n" step="0.001" value="0.1"></label>
+        <label>Y <input type="range" id="mt-py" min="-2" max="2" step="0.001" value="0.134"><input type="number"
+                class="tune-num" id="mt-py-n" step="0.001" value="0.134"></label>
         <label>Z <input type="range" id="mt-pz" min="-2" max="2" step="0.001" value="-0.017"><input type="number"
                 class="tune-num" id="mt-pz-n" step="0.001" value="-0.017"></label>
         <label>RotX <input type="range" id="mt-rx" min="-180" max="180" step="0.1" value="-178"><input type="number"
@@ -315,12 +315,12 @@
 
     <div id="cam2-tune">
         <div style="font-weight:600;margin-bottom:4px;font-size:11px;color:#9fd3ff;">Cam2 extrinsic (base)</div>
-        <label>X <input type="range" id="c2-px" min="-2" max="2" step="0.001" value="0.032"><input type="number"
-                class="tune-num" id="c2-px-n" step="0.001" value="0.032"></label>
-        <label>Y <input type="range" id="c2-py" min="-2" max="2" step="0.001" value="0.742"><input type="number"
-                class="tune-num" id="c2-py-n" step="0.001" value="0.742"></label>
-        <label>Z <input type="range" id="c2-pz" min="-2" max="2" step="0.001" value="0.798"><input type="number"
-                class="tune-num" id="c2-pz-n" step="0.001" value="0.798"></label>
+        <label>X <input type="range" id="c2-px" min="-2" max="2" step="0.001" value="0.027"><input type="number"
+                class="tune-num" id="c2-px-n" step="0.001" value="0.027"></label>
+        <label>Y <input type="range" id="c2-py" min="-2" max="2" step="0.001" value="0.729"><input type="number"
+                class="tune-num" id="c2-py-n" step="0.001" value="0.729"></label>
+        <label>Z <input type="range" id="c2-pz" min="-2" max="2" step="0.001" value="0.88"><input type="number"
+                class="tune-num" id="c2-pz-n" step="0.001" value="0.88"></label>
         <label>RotX <input type="range" id="c2-rx" min="-180" max="180" step="0.1" value="-74.3"><input type="number"
                 class="tune-num" id="c2-rx-n" step="0.1" value="-74.3"></label>
         <label>RotY <input type="range" id="c2-ry" min="-180" max="180" step="0.1" value="0"><input type="number"
@@ -817,7 +817,7 @@
         gizmoTip.position.set(0.0899, 0.0077, 0.0686);
         endEffector.add(gizmoTip);
 
-        const CAM_MOUNT_POS = new THREE.Vector3(0.06, 0.048, -0.017);
+        const CAM_MOUNT_POS = new THREE.Vector3(0.1, 0.134, -0.017);
         const CAM_MOUNT_ROT = new THREE.Euler(-178 * Math.PI / 180, 0, 180 * Math.PI / 180);
         const PROJ_ROLL = Math.PI / 2;
         const projRollMat = new THREE.Matrix4().makeRotationZ(PROJ_ROLL);
@@ -2430,8 +2430,10 @@
         // remap the "Get Pos: OFF" readout reported model coords, so height
         // landed in Y and depth in Z. Measured against the live robot:
         //   robotX = modelX, robotY = -modelZ, robotZ = modelY
-        // (small residual offsets come from .dae link lengths ≠ real arm).
-        const MODEL_TO_ROBOT_OFFSET = { x: -40.65, y: -23.19, z: -7.43 };
+        // (residual offsets come from .dae link lengths ≠ real arm; re-measured
+        // 2026-10-04 at Home against the live robot after the link4 re-tune —
+        // ON and OFF readouts now agree at that pose).
+        const MODEL_TO_ROBOT_OFFSET = { x: -0.54, y: -17.61, z: -10.48 };
         function _modelToRobot(mx, my, mz) {
             return {
                 x: mx + MODEL_TO_ROBOT_OFFSET.x,
@@ -2787,11 +2789,12 @@
                     +_rad2deg(link6.rotation.z).toFixed(2),
                 ];
 
-                // Physical tool tip. When following the real robot (Get Pos ON)
-                // compute it from the robot's own pose so it doesn't inherit the
-                // model's FK drift; while free-dragging (OFF) use the model tip.
+                // Physical tool tip. Compute it from the robot's own pose
+                // whenever the model is following the real arm (Get Pos ON, or
+                // OFF while not dragging) so it doesn't inherit the model's FK
+                // drift; only while free-dragging the model use the model tip.
                 let tipX, tipY, tipZ;
-                if (!camLockByGetPos && latestRealPose) {
+                if (latestRealPose && !isDragging && !activeDragJoint) {
                     _tipEuler.set(deg(latestRealPose[3]), deg(latestRealPose[4]), deg(latestRealPose[5]), 'ZYX');
                     _tipMat.makeRotationFromEuler(_tipEuler);
                     _tipOff.copy(_tipOffLocal).applyMatrix4(_tipMat).multiplyScalar(1000);
