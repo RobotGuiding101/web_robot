@@ -823,19 +823,15 @@ const DrawingModePage = () => {
       const data = await res.json()
       if (data.ok) {
         setErrorStatus('ok')
-        showTeachMsg('Clear Error สำเร็จ')
       } else {
         setErrorStatus('error')
-        showTeachMsg(data.error || 'Clear Error ไม่สำเร็จ', 'error')
       }
     } catch {
       setErrorStatus('error')
-      showTeachMsg('Clear Error ไม่สำเร็จ', 'error')
     } finally {
       setTimeout(() => setErrorStatus(null), 3000)
     }
-    fetchTeachStatus()
-  }, [fetchTeachStatus, showTeachMsg])
+  }, [])
 
   const handleInit = useCallback(async () => {
     if (initLoading) return
@@ -1257,7 +1253,7 @@ const DrawingModePage = () => {
                             onClick={handleClearError}
                             title="Clear robot errors and reset alarms"
                           >
-                            {errorStatus === 'ok' ? 'Cleared ✓' : errorStatus === 'error' ? 'Error ✕' : 'Clear Error'}
+                            {errorStatus === 'ok' ? 'Cleared' : errorStatus === 'error' ? 'Error' : 'Clear Error'}
                           </button>
                           <button
                             type="button"
@@ -1266,7 +1262,7 @@ const DrawingModePage = () => {
                             disabled={initLoading}
                             title="Connect and initialize / enable robot motors"
                           >
-                            {initLoading ? <><span className="init-btn-spinner" /> Initing…</> : initStatus === 'ok' ? 'Ready ✓' : initStatus === 'error' ? 'Error ✕' : 'Init'}
+                            {initLoading ? <><span className="init-btn-spinner" /> Initing…</> : initStatus === 'ok' ? 'Ready' : initStatus === 'error' ? 'Error' : 'Init'}
                           </button>
                           <button
                             type="button"
@@ -1275,7 +1271,7 @@ const DrawingModePage = () => {
                             disabled={homeLoading || !teachConnected}
                             title="Send robot to Home position"
                           >
-                            {homeLoading ? <><span className="init-btn-spinner" /> Homing…</> : homeStatus === 'ok' ? 'Homed ✓' : homeStatus === 'error' ? 'Error ✕' : 'Home'}
+                            {homeLoading ? <><span className="init-btn-spinner" /> Homing…</> : homeStatus === 'ok' ? 'Homed' : homeStatus === 'error' ? 'Error' : 'Home'}
                           </button>
                         </div>
                       </div>
