@@ -1069,11 +1069,12 @@ const DobotControllerPage = () => {
 
             {/* ── Target Pose & Move Card ── */}
               <div className="target-pose-card">
+                {/* ── Header ── */}
                 <div className="target-pose-header">
                   <span className="target-pose-title">เป้าหมายจากการลาก</span>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     {targetPose
-                      ? <span className="target-pose-ready">✓ พร้อมสั่ง</span>
+                      ? <span className="target-pose-ready">พร้อมสั่ง</span>
                       : <span className="target-pose-empty">ลาก Gizmo ใน 3D เพื่อตั้งเป้าหมาย</span>
                     }
                     <button
@@ -1082,40 +1083,32 @@ const DobotControllerPage = () => {
                       onClick={handleSnapPos}
                       title="จับตำแหน่งปัจจุบันของโมเดล 3D เป็นเป้าหมาย (ไม่ต้องลาก Gizmo)"
                     >
-                      📌 Snap
+                      Snap
                     </button>
                   </div>
                 </div>
 
+                {/* ── Coord readout ── */}
                 {targetPose && (
                   <div className="target-pose-coords">
-                    <div className="tp-col">
-                      <div className="tp-label">X</div><div className="tp-val">{targetPose.x}</div>
-                      <div className="tp-diff">{(targetPose.x - pos.X).toFixed(1)}</div>
-                    </div>
-                    <div className="tp-col">
-                      <div className="tp-label">Y</div><div className="tp-val">{targetPose.y}</div>
-                      <div className="tp-diff">{(targetPose.y - pos.Y).toFixed(1)}</div>
-                    </div>
-                    <div className="tp-col">
-                      <div className="tp-label">Z</div><div className="tp-val">{targetPose.z}</div>
-                      <div className="tp-diff">{(targetPose.z - pos.Z).toFixed(1)}</div>
-                    </div>
-                    <div className="tp-col">
-                      <div className="tp-label">Rx</div><div className="tp-val">{targetPose.rx}</div>
-                      <div className="tp-diff">{(targetPose.rx - pos.RX).toFixed(1)}</div>
-                    </div>
-                    <div className="tp-col">
-                      <div className="tp-label">Ry</div><div className="tp-val">{targetPose.ry}</div>
-                      <div className="tp-diff">{(targetPose.ry - pos.RY).toFixed(1)}</div>
-                    </div>
-                    <div className="tp-col">
-                      <div className="tp-label">Rz</div><div className="tp-val">{targetPose.rz}</div>
-                      <div className="tp-diff">{(targetPose.rz - pos.RZ).toFixed(1)}</div>
-                    </div>
+                    {[
+                      { label: 'X',  tVal: targetPose.x,  cVal: pos.X  },
+                      { label: 'Y',  tVal: targetPose.y,  cVal: pos.Y  },
+                      { label: 'Z',  tVal: targetPose.z,  cVal: pos.Z  },
+                      { label: 'Rx', tVal: targetPose.rx, cVal: pos.RX },
+                      { label: 'Ry', tVal: targetPose.ry, cVal: pos.RY },
+                      { label: 'Rz', tVal: targetPose.rz, cVal: pos.RZ },
+                    ].map(({ label, tVal, cVal }) => (
+                      <div key={label} className="tp-col">
+                        <div className="tp-label">{label}</div>
+                        <div className="tp-val">{tVal}</div>
+                        <div className="tp-diff">{(Number(tVal) - Number(cVal)).toFixed(1)}</div>
+                      </div>
+                    ))}
                   </div>
                 )}
 
+                {/* ── Move actions ── */}
                 <div className="target-pose-actions">
                   <div className="move-mode-pills">
                     {[['movj', 'MovJ'], ['movl', 'MovL'], ['joint', 'Joint']].map(([val, label]) => (
@@ -1123,13 +1116,9 @@ const DobotControllerPage = () => {
                         key={val}
                         className={`move-mode-pill ${moveMode === val ? 'active' : ''}`}
                         onClick={() => setMoveMode(val)}
-                        title={val === 'movj' ? 'Joint interpolation (safer, recommended)' : val === 'movl' ? 'Linear Cartesian move' : 'Direct joint angles'}
-                      >
-                        {label}
-                      </button>
+                      >{label}</button>
                     ))}
                   </div>
-
                   <div className="target-pose-btns">
                     <button
                       id="btn-move-to-target"
@@ -1140,73 +1129,62 @@ const DobotControllerPage = () => {
                       }`}
                       onClick={handleMoveTo}
                       disabled={!targetPose || !connected || moveToLoading}
-                      title={!connected ? 'Robot not connected' : !targetPose ? 'Drag Gizmo in 3D viewer first' : 'Send robot to target position'}
                     >
                       {moveToLoading ? <><span className="init-btn-spinner" /> Executing…</>
-                        : moveToStatus === 'ok' ? <>✓ Sent!</>
-                        : moveToStatus === 'error' ? <>✕ Error</>
-                        : <>▶ Move Robot to Target</>}
+                        : moveToStatus === 'ok' ? 'Sent!'
+                        : moveToStatus === 'error' ? 'Error'
+                        : 'Move Robot to Target'}
                     </button>
-
                     <button
                       id="btn-reset-target"
                       className="reset-target-btn"
                       onClick={() => { setTargetPose(null); setGetCoordinatesEnabled(true); setTimeout(fetchStatus, 50) }}
-                      title="Clear target pose and resume auto position sync"
-                    >
-                      ↺ Reset
-                    </button>
+                    >Reset</button>
                   </div>
-
-                   {moveToError && (
-                    <div className="move-to-error">{moveToError}</div>
-                  )}
+                  {moveToError && <div className="move-to-error">{moveToError}</div>}
                 </div>
-              </div>
 
-              {/* ── Snap List Card ── */}
-              <div className="snap-list-card">
-                <div className="snap-list-header">
-                  <span className="snap-list-title">📌 Snap List ({snapList.length} จุด)</span>
+                {/* ── Divider ── */}
+                <div style={{ height: '1px', background: 'rgba(59,130,246,0.15)', margin: '0 12px' }} />
+
+                {/* ── Snap List header ── */}
+                <div className="target-pose-header" style={{ borderBottom: 'none', paddingBottom: '6px' }}>
+                  <span className="target-pose-title">Snap List ({snapList.length} จุด)</span>
                   {snapList.length > 0 && (
-                    <button
-                      className="snap-list-clear-btn"
-                      onClick={() => setSnapList([])}
-                      title="ล้างรายการทั้งหมด"
-                    >✕ ล้าง</button>
+                    <button className="reset-target-btn" onClick={() => setSnapList([])}>ล้าง</button>
                   )}
                 </div>
 
+                {/* ── Snap items ── */}
                 {snapList.length === 0 ? (
-                  <div className="snap-list-empty">กด 📌 Snap เพื่อบันทึกตำแหน่ง</div>
+                  <div style={{ padding: '8px 14px 10px', fontSize: '11px', color: '#64748b', fontStyle: 'italic' }}>
+                    กด Snap เพื่อบันทึกตำแหน่ง
+                  </div>
                 ) : (
                   <div className="snap-list-items">
-                    {snapList.map((snap, idx) => (
+                    {snapList.map((snap) => (
                       <div key={snap.id} className="snap-item">
                         <div className="snap-item-left">
                           <span className="snap-item-label">{snap.label}</span>
-                          <span className="snap-item-coords">
-                            X:{snap.x} Y:{snap.y} Z:{snap.z}
-                          </span>
+                          <span className="snap-item-coords">X:{snap.x} Y:{snap.y} Z:{snap.z}</span>
                         </div>
                         <div className="snap-item-actions">
                           <button
                             className="snap-item-move-btn"
                             onClick={() => handleMoveToSnap(snap)}
                             disabled={!connected || moveToLoading}
-                            title={`ไปยัง ${snap.label}`}
-                          >▶</button>
+                          >Move</button>
                           <button
                             className="snap-item-del-btn"
                             onClick={() => handleDeleteSnap(snap.id)}
-                            title="ลบจุดนี้"
-                          >✕</button>
+                          >Del</button>
                         </div>
                       </div>
                     ))}
                   </div>
                 )}
 
+                {/* ── Sequence controls (show when 2+ snaps) ── */}
                 {snapList.length > 1 && (
                   <div className="snap-list-footer">
                     <div className="snap-seq-controls">
@@ -1229,23 +1207,18 @@ const DobotControllerPage = () => {
                         />s
                       </label>
                     </div>
-
                     {!snapRunning ? (
-                      <button
-                        className="snap-run-btn"
-                        onClick={handleRunSnapSequence}
-                        disabled={!connected}
-                      >▶▶ Run All {snapList.length} จุด</button>
+                      <button className="snap-run-btn" onClick={handleRunSnapSequence} disabled={!connected}>
+                        Run All {snapList.length} จุด
+                      </button>
                     ) : (
                       <>
                         <button className="snap-stop-btn" onClick={handleStopSnapSequence}>
-                          ■ หยุด ({snapRunIndex}/{snapList.length})
+                          หยุด ({snapRunIndex}/{snapList.length})
                         </button>
                         <div className="snap-progress-bar">
-                          <div
-                            className="snap-progress-fill"
-                            style={{ width: `${Math.max(5, (snapRunIndex / snapList.length) * 100)}%` }}
-                          />
+                          <div className="snap-progress-fill"
+                            style={{ width: `${Math.max(5, (snapRunIndex / snapList.length) * 100)}%` }} />
                         </div>
                       </>
                     )}
