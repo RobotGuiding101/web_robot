@@ -644,7 +644,21 @@ const DobotControllerPage = () => {
   }, [])
 
   const handleDeleteSnap = useCallback((id) => {
-    setSnapList(prev => prev.filter(s => s.id !== id).map((s, i) => ({ ...s, label: `จุด ${i + 1}` })))
+    setSnapList(prev => {
+      const idx = prev.findIndex(s => s.id === id)
+      const next = prev.filter(s => s.id !== id).map((s, i) => ({ ...s, label: `จุด ${i + 1}` }))
+      const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
+      if (iframe && iframe.contentWindow) {
+        if (next.length === 0) {
+          // หมดแล้ว clear ทั้งหมด
+          iframe.contentWindow.postMessage({ type: 'clearGhost' }, '*')
+        } else if (idx >= 0) {
+          // ลบเฉพาะ ghost ที่ index นั้น
+          iframe.contentWindow.postMessage({ type: 'deleteGhostTarget', index: idx }, '*')
+        }
+      }
+      return next
+    })
   }, [])
 
   const handleMoveToSnap = useCallback(async (snap) => {
@@ -1151,7 +1165,13 @@ const DobotControllerPage = () => {
                 <div className="target-pose-header" style={{ borderBottom: 'none', paddingBottom: '6px' }}>
                   <span className="target-pose-title">Snap List ({snapList.length} จุด)</span>
                   {snapList.length > 0 && (
-                    <button className="reset-target-btn" onClick={() => setSnapList([])}>ล้าง</button>
+                    <button className="reset-target-btn" onClick={() => {
+                      setSnapList([])
+                      const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
+                      if (iframe && iframe.contentWindow) {
+                        iframe.contentWindow.postMessage({ type: 'clearGhost' }, '*')
+                      }
+                    }}>ล้าง</button>
                   )}
                 </div>
 
