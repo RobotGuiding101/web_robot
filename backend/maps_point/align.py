@@ -136,6 +136,8 @@ class AppState:
         self._prev_bbox = None
         self.align_running = False
         self.align_stop    = threading.Event()
+        self.initial_tilt     = None   # tilt ก่อน align เริ่ม (phase 1)
+        self.final_tilt       = None   # tilt ตอน align done — ไม่ถูก overwrite
         self.last_tilt        = None
         self.last_rmse        = None
         self.last_depth_range = None
@@ -347,6 +349,7 @@ def _finish_centered(robot: Robot, cam: Camera, state: "AppState", rec: AlignRec
         _, _, tilt, _, _, roll = result
         state.last_tilt, state.last_roll_deg = tilt, roll
     state.status = f"align done  tilt={tilt:.1f}°  roll={roll:.1f}°"
+    state.final_tilt = tilt   # freeze ค่า tilt ตอน align done ไม่ถูก overwrite
     rec.log(f"  [Align] {state.status}")
 
 
@@ -549,6 +552,7 @@ def do_align(robot: Robot, cam: Camera, state: AppState):
             rec.log(f"  [Align] {state.status}")
             return
         state.last_tilt, state.last_rmse, state.last_depth_range = start[2], start[3], start[4]
+        state.initial_tilt = start[2]   # freeze ค่า tilt ก่อน align เคลื่อนที่
         rec.snap(robot, cam, state, "phase1_initial_measurement")
         if start[3] > ALIGN_MAX_RMSE_MM:
             state.status = (f"align: initial plane fit is poor (rmse={start[3]:.2f}mm > "

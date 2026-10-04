@@ -1361,11 +1361,33 @@ const DrawingModePage = () => {
                               </div>
                               <div className="dm-align-stat-box">
                                 <span className="dm-align-stat-lbl">Plane Tilt</span>
-                                <span className="dm-align-stat-val">{fmtMark(teachStatus && teachStatus.last_tilt)}°</span>
+                                <span className="dm-align-stat-val">{fmtMark(teachStatus && (teachStatus.initial_tilt ?? teachStatus.last_tilt))}°</span>
                               </div>
                               <div className="dm-align-stat-box">
                                 <span className="dm-align-stat-lbl">Fit RMSE</span>
                                 <span className="dm-align-stat-val">{fmtMark(teachStatus && teachStatus.last_rmse)} mm</span>
+                              </div>
+                            </div>
+
+                            {/* ── 3 ช่องใหม่ tilt derived ── */}
+                            <div className="dm-align-stats" style={{ marginTop: '6px' }}>
+                              <div className="dm-align-stat-box">
+                                <span className="dm-align-stat-lbl">Final Tilt</span>
+                                <span className="dm-align-stat-val">
+                                  {teachStatus && teachStatus.final_tilt != null ? `${fmtMark(teachStatus.final_tilt)}°` : '—'}
+                                </span>
+                              </div>
+                              <div className="dm-align-stat-box">
+                                <span className="dm-align-stat-lbl">Final Tilt−90°</span>
+                                <span className="dm-align-stat-val">
+                                  {teachStatus && teachStatus.final_tilt != null ? `${fmtMark(teachStatus.final_tilt - 90)}°` : '—'}
+                                </span>
+                              </div>
+                              <div className="dm-align-stat-box">
+                                <span className="dm-align-stat-lbl">Live Tilt−90°</span>
+                                <span className="dm-align-stat-val">
+                                  {teachStatus && teachStatus.last_tilt != null ? `${fmtMark(teachStatus.last_tilt - 90)}°` : '—'}
+                                </span>
                               </div>
                             </div>
                           </div>
