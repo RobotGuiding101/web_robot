@@ -136,6 +136,7 @@ class AppState:
         self._prev_bbox = None
         self.align_running = False
         self.align_stop    = threading.Event()
+        self.initial_rmse     = None   # rmse ก่อนเริ่มแก้แนวในรอบล่าสุด
         self.final_tilt       = None   # tilt ตอน align done — ไม่ถูก overwrite
         self.final_rmse       = None   # rmse ตอน align done — ไม่ถูก overwrite
         self.last_tilt        = None
@@ -519,6 +520,8 @@ def do_align(robot: Robot, cam: Camera, state: AppState):
 
     state.align_running = True
     state.align_stop.clear()
+    state.initial_rmse = None
+    state.final_rmse = None
     rec = AlignRecorder()
     try:
         # ── phase 0: move to the marked area's center, at HOME_Z + offset ──
@@ -552,6 +555,7 @@ def do_align(robot: Robot, cam: Camera, state: AppState):
             state.status = "align: no valid plane fit — no guessing"
             rec.log(f"  [Align] {state.status}")
             return
+        state.initial_rmse = start[3]
         state.last_tilt, state.last_rmse, state.last_depth_range = start[2], start[3], start[4]
         rec.snap(robot, cam, state, "phase1_initial_measurement")
         if start[3] > ALIGN_MAX_RMSE_MM:

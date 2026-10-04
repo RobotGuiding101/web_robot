@@ -2745,6 +2745,10 @@ body {
   gap: 6px;
 }
 
+.dm-align-stats--rmse {
+  grid-template-columns: repeat(5, 1fr);
+}
+
 .dm-align-stat-box {
   display: flex;
   flex-direction: column;

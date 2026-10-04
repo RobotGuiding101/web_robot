@@ -1676,6 +1676,7 @@ def api_status():
         "align_running": state.align_running,
         "last_tilt": state.last_tilt,
         "final_tilt": getattr(state, 'final_tilt', None),
+        "initial_rmse": getattr(state, 'initial_rmse', None),
         "final_rmse": getattr(state, 'final_rmse', None),
         "last_rmse": state.last_rmse,
         "last_depth_range": state.last_depth_range,
