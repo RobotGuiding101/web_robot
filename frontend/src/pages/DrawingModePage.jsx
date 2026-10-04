@@ -7,6 +7,7 @@ import {
 } from 'fabric'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
+import { setStreamMode } from '../components/CameraStream'
 
 // ─── Tool constants ────────────────────────────────────────────────────────────
 const TOOLS = {
@@ -519,7 +520,10 @@ const DrawingModePage = () => {
       })
       if (res.ok) {
         const data = await res.json()
-        if (data.ok) setCameraMode(data.mode)
+        if (data.ok) {
+          setCameraMode(data.mode)
+          setStreamMode(data.mode)
+        }
       }
     } catch { /* ignore */ }
     finally { setModeLoading(false) }
