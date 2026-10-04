@@ -136,7 +136,6 @@ class AppState:
         self._prev_bbox = None
         self.align_running = False
         self.align_stop    = threading.Event()
-        self.initial_tilt     = None   # tilt ก่อน align เริ่ม (phase 1)
         self.final_tilt       = None   # tilt ตอน align done — ไม่ถูก overwrite
         self.final_rmse       = None   # rmse ตอน align done — ไม่ถูก overwrite
         self.last_tilt        = None
@@ -554,7 +553,6 @@ def do_align(robot: Robot, cam: Camera, state: AppState):
             rec.log(f"  [Align] {state.status}")
             return
         state.last_tilt, state.last_rmse, state.last_depth_range = start[2], start[3], start[4]
-        state.initial_tilt = start[2]   # freeze ค่า tilt ก่อน align เคลื่อนที่
         rec.snap(robot, cam, state, "phase1_initial_measurement")
         if start[3] > ALIGN_MAX_RMSE_MM:
             state.status = (f"align: initial plane fit is poor (rmse={start[3]:.2f}mm > "
