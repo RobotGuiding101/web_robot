@@ -2557,6 +2557,12 @@
             _ghostTargets.length = 0;
         }
 
+        function deleteGhostTarget(index) {
+            if (index < 0 || index >= _ghostTargets.length) return;
+            const ghost = _ghostTargets.splice(index, 1)[0];
+            if (ghost) scene.remove(ghost);
+        }
+
         // Target link rotations (radians) the render loop eases toward. Real
         // robot status only arrives a few times/sec, so applying setJoints
         // directly made the arm teleport between updates instead of moving.
@@ -2595,6 +2601,8 @@
 
             } else if (e.data.type === 'clearGhost' || e.data.type === 'clearAllGhosts') {
                 clearGhostTargets();
+            } else if (e.data.type === 'deleteGhostTarget') {
+                deleteGhostTarget(e.data.index);
 
             } else if (e.data.type === 'getPosState') {
                 camLockByGetPos = !e.data.enabled;
