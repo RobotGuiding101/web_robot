@@ -1378,13 +1378,13 @@ const DrawingModePage = () => {
                                 </span>
                               </div>
                               <div className="dm-align-stat-box">
-                                <span className="dm-align-stat-lbl">Final Tilt−90°</span>
+                                <span className="dm-align-stat-lbl">Final Tilt 90°</span>
                                 <span className="dm-align-stat-val">
                                   {teachStatus && teachStatus.final_tilt != null ? `${fmtMark(90 - teachStatus.final_tilt)}°` : '—'}
                                 </span>
                               </div>
                               <div className="dm-align-stat-box">
-                                <span className="dm-align-stat-lbl">Live Tilt−90°</span>
+                                <span className="dm-align-stat-lbl">Live Tilt 90°</span>
                                 <span className="dm-align-stat-val">
                                   {teachStatus && teachStatus.last_tilt != null ? `${fmtMark(90 - teachStatus.last_tilt)}°` : '—'}
                                 </span>
