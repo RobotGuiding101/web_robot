@@ -1365,7 +1365,7 @@ const DrawingModePage = () => {
                               </div>
                               <div className="dm-align-stat-box">
                                 <span className="dm-align-stat-lbl">Plane Tilt</span>
-                                <span className="dm-align-stat-val">{fmtMark(teachStatus && (teachStatus.initial_tilt ?? teachStatus.last_tilt))}°</span>
+                                <span className="dm-align-stat-val">{fmtMark(teachStatus && teachStatus.last_tilt)}°</span>
                               </div>
                               <div className="dm-align-stat-box">
                                 <span className="dm-align-stat-lbl">Fit RMSE</span>
