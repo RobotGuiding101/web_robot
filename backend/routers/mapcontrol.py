@@ -1605,7 +1605,7 @@ def _log_grid_mapping(strokes):
 
 
 @router.post("/draw")
-def api_draw(body: DrawBody):
+def api_draw(request: Request, body: DrawBody):
     if not isinstance(body.strokes, list) or not body.strokes:
         return {"ok": False, "error": "invalid strokes"}
     strokes = []
