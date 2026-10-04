@@ -1368,11 +1368,11 @@ const DrawingModePage = () => {
                                 <span className="dm-align-stat-val">{fmtMark(teachStatus && teachStatus.last_tilt)}°</span>
                               </div>
                               <div className="dm-align-stat-box">
-                                <span className="dm-align-stat-lbl">RMSE Before</span>
+                                <span className="dm-align-stat-lbl">Fit RMSE</span>
                                 <span className="dm-align-stat-val">
-                                  {teachStatus && teachStatus.initial_rmse != null
-                                    ? `${fmtMark(teachStatus.initial_rmse)} mm`
-                                    : '—'}
+                                  {teachStatus && teachStatus.final_rmse != null
+                                    ? `${fmtMark(teachStatus.final_rmse)} mm`
+                                    : `${fmtMark(teachStatus && teachStatus.last_rmse)} mm`}
                                 </span>
                               </div>
                               <div className="dm-align-stat-box">
