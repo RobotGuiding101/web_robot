@@ -779,25 +779,31 @@
             // of the "Cylinder_nip" mesh farthest from the flange (link6
             // origin). A bounding-box corner overshoots by the tool radius, so
             // walk the actual vertices instead.
-            link6.updateWorldMatrix(true, true);
-            const invLink6 = new THREE.Matrix4().copy(link6.matrixWorld).invert();
-            const v = new THREE.Vector3();
-            let best = null;
-            let bestD = -1;
-            const matched = [];
-            c.scene.traverse((o) => {
-                if (o.isMesh && /Cylinder_nip/i.test(o.name || '')) {
-                    matched.push(o.name);
-                    const pos = o.geometry.attributes.position;
-                    if (!pos) return;
-                    const m = new THREE.Matrix4().multiplyMatrices(invLink6, o.matrixWorld);
-                    for (let i = 0; i < pos.count; i++) {
-                        v.fromBufferAttribute(pos, i).applyMatrix4(m);
-                        const d = v.lengthSq();
-                        if (d > bestD) { bestD = d; best = v.clone(); }
+            try {
+                link6.updateWorldMatrix(true, true);
+                const invLink6 = new THREE.Matrix4().copy(link6.matrixWorld).invert();
+                const v = new THREE.Vector3();
+                let best = null;
+                let bestD = -1;
+                const matched = [];
+                c.scene.traverse((o) => {
+                    if (o.isMesh && /Cylinder_nip/i.test(o.name || '')) {
+                        matched.push(o.name);
+                        const pos = o.geometry.attributes.position;
+                        if (!pos) return;
+                        const m = new THREE.Matrix4().multiplyMatrices(invLink6, o.matrixWorld);
+                        for (let i = 0; i < pos.count; i++) {
+                            v.fromBufferAttribute(pos, i).applyMatrix4(m);
+                            const d = v.lengthSq();
+                            if (d > bestD) { bestD = d; best = v.clone(); }
+                        }
                     }
+                });
+                if (best) {
+                    gizmoTip.position.copy(best);
                 }
-            });
+            } catch (e) { /* ignore */ }
+            onModelLoaded();
         }, undefined, onModelLoaded);
 
         // ===== 4. End-Effector marker + IK Target sphere =====
