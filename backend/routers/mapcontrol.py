@@ -1203,6 +1203,15 @@ def api_floorcalib_goto(body: FloorGotoBody):
 def api_reset_points():
     state.points = []
     state.points_gen += 1
+    # ล้างค่า align ที่ค้างไว้ด้วย
+    state.initial_tilt = None
+    state.final_tilt   = None
+    state.final_rmse   = None
+    state.last_tilt    = None
+    state.last_rmse    = None
+    state.last_depth_range = None
+    state.last_roll_deg    = None
+    state.status = "idle"
     return {"ok": True}
 
 
