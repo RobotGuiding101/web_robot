@@ -138,6 +138,7 @@ class AppState:
         self.align_stop    = threading.Event()
         self.initial_tilt     = None   # tilt ก่อน align เริ่ม (phase 1)
         self.final_tilt       = None   # tilt ตอน align done — ไม่ถูก overwrite
+        self.final_rmse       = None   # rmse ตอน align done — ไม่ถูก overwrite
         self.last_tilt        = None
         self.last_rmse        = None
         self.last_depth_range = None
@@ -346,8 +347,9 @@ def _finish_centered(robot: Robot, cam: Camera, state: "AppState", rec: AlignRec
     _recenter_xy(robot, cam, state, rec, "final_recentered")
     result = _region_grow_measure(cam, state)
     if result is not None:
-        _, _, tilt, _, _, roll = result
+        _, _, tilt, rmse, _, roll = result
         state.last_tilt, state.last_roll_deg = tilt, roll
+        state.final_rmse = rmse   # freeze ค่า rmse ตอน align done
     state.status = f"align done  tilt={tilt:.1f}°  roll={roll:.1f}°"
     state.final_tilt = tilt   # freeze ค่า tilt ตอน align done ไม่ถูก overwrite
     rec.log(f"  [Align] {state.status}")
