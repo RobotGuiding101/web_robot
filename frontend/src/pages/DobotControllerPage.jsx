@@ -919,14 +919,14 @@ const DobotControllerPage = () => {
                   >
                     {getCoordinatesEnabled ? 'Get Pos: ON' : 'Get Pos: OFF'}
                   </button>
-                  <button
-                    id="btn-clear-error"
+                  <buttonclear
+                    id="btn--error"
                     className={`init-btn init-btn--secondary${errorStatus === 'ok' ? ' init-btn--ok' : ''}${errorStatus === 'error' ? ' init-btn--error' : ''}`}
                     onClick={handleClearError}
                     title="Clear robot errors and reset alarms (/error)"
                   >
                     {errorStatus === 'ok' ? 'Cleared' : errorStatus === 'error' ? 'Error' : 'Clear Error'}
-                  </button>
+                  </buttonclear>
                   <button
                     id="btn-init-robot"
                     className={`init-btn${initLoading ? ' init-btn--loading' : ''}${initStatus === 'ok' ? ' init-btn--ok' : ''}${initStatus === 'error' ? ' init-btn--error' : ''}`}
