@@ -1365,7 +1365,11 @@ const DrawingModePage = () => {
                               </div>
                               <div className="dm-align-stat-box">
                                 <span className="dm-align-stat-lbl">Fit RMSE</span>
-                                <span className="dm-align-stat-val">{fmtMark(teachStatus && teachStatus.last_rmse)} mm</span>
+                                <span className="dm-align-stat-val">
+                                  {teachStatus && teachStatus.final_rmse != null
+                                    ? `${fmtMark(teachStatus.final_rmse)} mm`
+                                    : `${fmtMark(teachStatus && teachStatus.last_rmse)} mm`}
+                                </span>
                               </div>
                             </div>
 
@@ -1387,6 +1391,12 @@ const DrawingModePage = () => {
                                 <span className="dm-align-stat-lbl">Live Tilt 90°</span>
                                 <span className="dm-align-stat-val">
                                   {teachStatus && teachStatus.last_tilt != null ? `${fmtMark(90 - teachStatus.last_tilt)}°` : '—'}
+                                </span>
+                              </div>
+                              <div className="dm-align-stat-box">
+                                <span className="dm-align-stat-lbl">Depth</span>
+                                <span className="dm-align-stat-val">
+                                  {teachStatus && teachStatus.last_center_depth != null ? `${fmtMark(teachStatus.last_center_depth, 0)} mm` : '—'}
                                 </span>
                               </div>
                             </div>
