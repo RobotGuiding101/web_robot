@@ -287,14 +287,6 @@
     </div>
     <!-- Gizmo Toolbar -->
     <div id="gizmo-toolbar">
-        <button id="btn-snap" class="gizmo-btn gizmo-btn-snap"
-            title="Snap Gizmo back to arm tip &amp; capture Ghost Shadow (R)">
-            ⊙ Snap เงา <span class="kbd">R</span>
-        </button>
-        <button id="btn-clear-ghost" class="gizmo-btn gizmo-btn-clear" style="display:none;"
-            title="Clear ghost shadow (C)">
-            ✖ ลบเงา <span class="kbd">C</span>
-        </button>
     </div>
 
     <!-- Floating tooltip for joint angle during hover / drag -->
@@ -304,7 +296,7 @@
 
     <div id="canvas-container"></div>
 
-    <div id="mount-tune" style="display:flex">
+    <div id="mount-tune">
         <div style="font-weight:600;margin-bottom:4px;font-size:11px;color:#9fd3ff;">Cam1 mount (flange → projector)
         </div>
         <label>X <input type="range" id="mt-px" min="-2" max="2" step="0.001" value="0.06"><input type="number"
@@ -321,7 +313,7 @@
                 class="tune-num" id="mt-rz-n" step="0.1" value="180"></label>
     </div>
 
-    <div id="cam2-tune" style="display:flex">
+    <div id="cam2-tune">
         <div style="font-weight:600;margin-bottom:4px;font-size:11px;color:#9fd3ff;">Cam2 extrinsic (base)</div>
         <label>X <input type="range" id="c2-px" min="-2" max="2" step="0.001" value="0.032"><input type="number"
                 class="tune-num" id="c2-px-n" step="0.001" value="0.032"></label>
@@ -768,15 +760,18 @@
             link5.add(c.scene); onModelLoaded();
         }, undefined, onModelLoaded);
 
-        loader.load('models/Link6.dae', (c) => {
+        loader.load('models/Link6s.dae', (c) => {
             c.scene.rotation.set(deg(180), deg(0), deg(180));
             c.scene.traverse((child) => {
                 if (child.isMesh) {
-                    child.material = new THREE.MeshStandardMaterial({
-                        color: 0xff2222,
-                        metalness: 0.3,
-                        roughness: 0.5,
+                    child.material = new THREE.MeshBasicMaterial({
+                        color: 0xff0000,
+                        side: THREE.DoubleSide,
                     });
+                } else if (child.isLight || child.isCamera) {
+                    // The Blender export embeds 14 blue point lights + cameras —
+                    // disable them so they don't wash out the model's color.
+                    child.visible = false;
                 }
             });
             link6.add(c.scene); onModelLoaded();
@@ -790,7 +785,7 @@
         // shifting endEffector also moves the reported Dobot X/Y/Z, the
         // MODEL_TO_ROBOT calibration and cam1's mount (projectorMount child).
         const gizmoTip = new THREE.Group();
-        gizmoTip.position.set(0.089, 0, 0.06);
+        gizmoTip.position.set(0.0899, 0.0077, 0.0686);
         endEffector.add(gizmoTip);
 
         const CAM_MOUNT_POS = new THREE.Vector3(0.06, 0.048, -0.017);
@@ -1802,21 +1797,19 @@
             cam2Points.visible = false;
         }
 
+        // ⚙ Tune toggles BOTH the Cam1 mount and Cam2 extrinsic panels together.
+        function toggleTunePanels() {
+            const c1 = document.getElementById('mount-tune');
+            const c2 = document.getElementById('cam2-tune');
+            const show = !(c2 && c2.style.display === 'flex');
+            [c1, c2].forEach((el) => { if (el) el.style.display = show ? 'flex' : ''; });
+        }
+
         const panelsBtn = document.getElementById('btn-panels');
-        if (panelsBtn) panelsBtn.addEventListener('click', () => {
-            // ⚙ Tune opens only the cam2 panel; cam1's panel stays closed
-            // unless its own button is pressed.
-            const el = document.getElementById('cam2-tune');
-            if (!el) return;
-            el.style.display = el.style.display === 'flex' ? '' : 'flex';
-        });
+        if (panelsBtn) panelsBtn.addEventListener('click', toggleTunePanels);
 
         const cam1TuneBtn = document.getElementById('btn-tune-cam1');
-        if (cam1TuneBtn) cam1TuneBtn.addEventListener('click', () => {
-            const el = document.getElementById('mount-tune');
-            if (!el) return;
-            el.style.display = el.style.display === 'flex' ? '' : 'flex';
-        });
+        if (cam1TuneBtn) cam1TuneBtn.addEventListener('click', toggleTunePanels);
 
         function applyCloudColor() {
             const v1 = colorSrc === 'video' && effMode(1) === 'rgb';
@@ -2308,17 +2301,7 @@
             window.addEventListener('pointerup', onCurvedPointerUp, { passive: false });
             window.addEventListener('pointercancel', onCurvedPointerUp, { passive: false });
 
-            // Toolbar buttons
-            const bs = document.getElementById('btn-snap');
-            if (bs) bs.addEventListener('click', handleSnap);
-            const btnClearGhost = document.getElementById('btn-clear-ghost');
-            if (btnClearGhost) btnClearGhost.addEventListener('click', clearAllGhosts);
 
-            window.addEventListener('keydown', (e) => {
-                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-                if (e.key === 'r' || e.key === 'R') handleSnap();
-                if (e.key === 'c' || e.key === 'C') clearAllGhosts();
-            });
         }
 
         // ===== 5. CCD Inverse Kinematics =====
@@ -2419,7 +2402,7 @@
         // landed in Y and depth in Z. Measured against the live robot:
         //   robotX = modelX, robotY = -modelZ, robotZ = modelY
         // (small residual offsets come from .dae link lengths ≠ real arm).
-        const MODEL_TO_ROBOT_OFFSET = { x: -40.6, y: -23.2, z: -7.4 };
+        const MODEL_TO_ROBOT_OFFSET = { x: -40.65, y: -23.19, z: -7.43 };
         function _modelToRobot(mx, my, mz) {
             return {
                 x: mx + MODEL_TO_ROBOT_OFFSET.x,
@@ -2435,6 +2418,11 @@
         const _TOOL_FIX = new THREE.Matrix4().makeRotationZ(Math.PI);
         const _orientMtx = new THREE.Matrix4();
         const _orientEuler = new THREE.Euler();
+        // Residual between the model's FK orientation and the robot's real
+        // GetPose() (measured 2026-10-04: model RY=-0.10 vs robot +0.21,
+        // model RZ=176.90 vs robot 177.04) — added so the "Get Pos: OFF"
+        // readout (model FK) matches the "ON" readout (robot).
+        const _ORIENT_FIX = { rx: 0.01, ry: 0.27, rz: 0.11 };
         function _modelOrientToRobot(quat) {
             _orientMtx.makeRotationFromQuaternion(quat);
             _orientMtx.premultiply(_BASIS_M);
@@ -2444,9 +2432,9 @@
             // the physical orientation is identical.
             _orientEuler.setFromRotationMatrix(_orientMtx, 'ZYX');
             return {
-                rx: _rad2degFn(_orientEuler.x),
-                ry: _rad2degFn(_orientEuler.y),
-                rz: _rad2degFn(_orientEuler.z),
+                rx: _rad2degFn(_orientEuler.x) + _ORIENT_FIX.rx,
+                ry: _rad2degFn(_orientEuler.y) + _ORIENT_FIX.ry,
+                rz: _rad2degFn(_orientEuler.z) + _ORIENT_FIX.rz,
             };
         }
 
@@ -2456,8 +2444,12 @@
         const _tpQuat = new THREE.Quaternion();
 
         function _postTargetPose() {
-            targetMesh.getWorldPosition(_tcpPos);
-            targetMesh.getWorldQuaternion(_tpQuat);
+            // Send the FLANGE (endEffector) pose, NOT the tip. The model's IK
+            // already solved so the tip reaches the dragged point, leaving the
+            // flange one tool-offset back — so commanding the robot's flange to
+            // this pose puts the physical TIP exactly on the dragged point.
+            endEffector.getWorldPosition(_tcpPos);
+            endEffector.getWorldQuaternion(_tpQuat);
             _tpEuler.setFromQuaternion(_tpQuat);
 
             const safeCoord = (val, fb = 0) => {
@@ -2491,292 +2483,9 @@
             }, '*');
         }
 
-        // ===== Multiple Transparent Grey Ghosts (เงาสีเทาแบบโปร่ง ทำได้หลายรอบ) =====
-        let ghostList = []; // Array of { id, index, group, tipMesh, joints, pose }
-        let selectedGhostIndex = -1;
-        const MAX_GHOSTS = 25;
-
-        // Clean transparent slate-grey material (สีเทาแบบโปร่ง สบายตา มองเห็นโครงแขนกลชัดเจน)
-        const ghostMat = new THREE.MeshStandardMaterial({
-            color: 0x475569,          // Slate grey (#475569)
-            roughness: 0.55,
-            metalness: 0.1,
-            transparent: true,
-            opacity: 0.38,
-            depthWrite: false,
-            side: THREE.DoubleSide,
-        });
-
-        // Vibrant glowing cyan highlight material for selected ghost
-        const ghostMatHighlight = new THREE.MeshStandardMaterial({
-            color: 0x06b6d4,          // Cyan (#06b6d4)
-            roughness: 0.3,
-            metalness: 0.2,
-            transparent: true,
-            opacity: 0.72,
-            depthWrite: false,
-            side: THREE.DoubleSide,
-        });
-
-        function highlightGhost(targetIndex) {
-            selectedGhostIndex = (typeof targetIndex === 'number' && targetIndex >= 0 && targetIndex < ghostList.length) ? targetIndex : -1;
-            for (let i = 0; i < ghostList.length; i++) {
-                const g = ghostList[i];
-                if (!g || !g.group) continue;
-                const isSelected = (i === selectedGhostIndex);
-                const matToUse = isSelected ? ghostMatHighlight : ghostMat;
-                g.group.traverse((child) => {
-                    if (child.isMesh && child !== g.tipMesh) {
-                        child.material = matToUse;
-                    }
-                });
-                if (g.tipMesh && g.tipMesh.material) {
-                    g.tipMesh.material.color.setHex(isSelected ? 0x06b6d4 : 0x334155);
-                    g.tipMesh.material.opacity = isSelected ? 0.95 : 0.65;
-                }
-            }
-        }
-
-        function clearAllGhosts() {
-            for (const g of ghostList) {
-                if (g.group) scene.remove(g.group);
-            }
-            ghostList = [];
-            selectedGhostIndex = -1;
-            _updateGhostUI();
-            _postGhostList();
-            window.parent.postMessage({ type: 'ghostCleared' }, '*');
-        }
-
-        function removeLastGhost() {
-            if (ghostList.length === 0) return;
-            const last = ghostList.pop();
-            if (last && last.group) scene.remove(last.group);
-            if (selectedGhostIndex >= ghostList.length) {
-                selectedGhostIndex = ghostList.length - 1;
-            }
-            highlightGhost(selectedGhostIndex);
-            _updateGhostUI();
-            _postGhostList();
-        }
-
-        function deleteGhost(targetIndex) {
-            if (typeof targetIndex !== 'number' || targetIndex < 0 || targetIndex >= ghostList.length) return;
-            const item = ghostList.splice(targetIndex, 1)[0];
-            if (item && item.group) scene.remove(item.group);
-            ghostList.forEach((g, idx) => { g.index = idx + 1; });
-            if (selectedGhostIndex === targetIndex) {
-                selectedGhostIndex = ghostList.length > 0 ? Math.min(targetIndex, ghostList.length - 1) : -1;
-            } else if (selectedGhostIndex > targetIndex) {
-                selectedGhostIndex--;
-            }
-            highlightGhost(selectedGhostIndex);
-            _updateGhostUI();
-            _postGhostList();
-        }
-
-        function _updateGhostUI() {
-            const btnClear = document.getElementById('btn-clear-ghost');
-            if (btnClear) {
-                if (ghostList.length > 0) {
-                    btnClear.style.display = 'flex';
-                    btnClear.innerHTML = `ลบเงา (${ghostList.length}) <span class="kbd">C</span>`;
-                } else {
-                    btnClear.style.display = 'none';
-                }
-            }
-        }
-
-        function _postGhostList() {
-            const cleanGhosts = ghostList.map(g => ({
-                id: g.id,
-                index: g.index,
-                pose: g.pose,
-                joints: g.joints,
-            }));
-            const cleanLatest = cleanGhosts.length > 0 ? cleanGhosts[cleanGhosts.length - 1] : null;
-            try {
-                window.parent.postMessage({
-                    type: 'ghostListUpdate',
-                    count: cleanGhosts.length,
-                    selectedIndex: selectedGhostIndex,
-                    ghosts: cleanGhosts,
-                    latest: cleanLatest,
-                }, '*');
-            } catch (err) {
-                console.error('Failed to post ghostListUpdate:', err);
-            }
-        }
-
         // Cache latest real robot pose & joints passed from parent
         let latestRealPose = null;
         let latestRealJoints = null;
-
-        function captureGhostArm(customPose, customJoints) {
-            if (loadedCount < totalModels) return;
-
-            // Ensure transforms are up to date
-            robotBase.updateMatrixWorld(true);
-
-            // Clone full robot hierarchy
-            const newGhost = robotBase.clone(true);
-
-            // Apply transparent grey material and disable raycasting
-            newGhost.traverse((child) => {
-                if (child.isMesh) {
-                    child.material = ghostMat;
-                    child.castShadow = false;
-                    child.receiveShadow = false;
-                    child.raycast = () => { };
-                }
-            });
-
-            // Save ghost joints (degrees): prioritize real robot joints
-            let joints = customJoints || latestRealJoints;
-            if (!joints || !Array.isArray(joints) || joints.length < 6) {
-                joints = [
-                    +_rad2degFn(link1.rotation.y).toFixed(2),
-                    +_rad2degFn(link2.rotation.z).toFixed(2),
-                    +_rad2degFn(link3.rotation.z).toFixed(2),
-                    +_rad2degFn(link4.rotation.z).toFixed(2),
-                    +_rad2degFn(link5.rotation.y).toFixed(2),
-                    +_rad2degFn(link6.rotation.z).toFixed(2),
-                ];
-            } else {
-                joints = joints.map(v => +Number(v).toFixed(2));
-            }
-
-            // Save ghost TCP pose: prioritize REAL robot coordinates!
-            let pose = customPose || latestRealPose;
-            const parseCoord = (obj, keyL, keyU, fallback = 0) => {
-                if (!obj) return fallback;
-                const v = obj[keyL] !== undefined ? obj[keyL] : obj[keyU];
-                const n = Number(v);
-                return (!isNaN(n) && isFinite(n)) ? +n.toFixed(1) : fallback;
-            };
-
-            const rawX = pose ? parseCoord(pose, 'x', 'X', null) : null;
-            if (rawX === null) {
-                endEffector.getWorldPosition(_tcpPos);
-                endEffector.getWorldQuaternion(_tpQuat);
-                _tpEuler.setFromQuaternion(_tpQuat);
-                const safeNum = (v, fb = 0) => {
-                    const n = Number(v);
-                    return (!isNaN(n) && isFinite(n)) ? +n.toFixed(1) : fb;
-                };
-                pose = {
-                    x: safeNum(_tcpPos.x * 1000),
-                    y: safeNum(_tcpPos.y * 1000),
-                    z: safeNum(_tcpPos.z * 1000),
-                    rx: safeNum(_rad2degFn(_tpEuler.x)),
-                    ry: safeNum(_rad2degFn(_tpEuler.y)),
-                    rz: safeNum(_rad2degFn(_tpEuler.z)),
-                };
-            } else {
-                endEffector.getWorldPosition(_tcpPos);
-                const fallbackZ = (!isNaN(Number(_tcpPos.z)) && isFinite(Number(_tcpPos.z))) ? +(_tcpPos.z * 1000).toFixed(1) : 0;
-                pose = {
-                    x: rawX,
-                    y: parseCoord(pose, 'y', 'Y', 0),
-                    z: parseCoord(pose, 'z', 'Z', fallbackZ),
-                    rx: parseCoord(pose, 'rx', 'RX', 0),
-                    ry: parseCoord(pose, 'ry', 'RY', 0),
-                    rz: parseCoord(pose, 'rz', 'RZ', 0),
-                };
-            }
-
-            // Subtle dark-grey tip sphere marker
-            const ghostTip = new THREE.Mesh(
-                new THREE.SphereGeometry(0.015, 16, 16),
-                new THREE.MeshBasicMaterial({ color: 0x334155, transparent: true, opacity: 0.65 })
-            );
-            ghostTip.position.copy(_tcpPos);
-            newGhost.add(ghostTip);
-
-            scene.add(newGhost);
-
-            // Append to list (supports multiple rounds!)
-            const item = {
-                id: Date.now() + '_' + (ghostList.length + 1),
-                index: ghostList.length + 1,
-                group: newGhost,
-                tipMesh: ghostTip,
-                joints,
-                pose,
-            };
-            ghostList.push(item);
-
-            // Cap maximum ghosts to prevent performance issues
-            if (ghostList.length > MAX_GHOSTS) {
-                const oldest = ghostList.shift();
-                if (oldest && oldest.group) scene.remove(oldest.group);
-            }
-
-            selectedGhostIndex = ghostList.length - 1;
-            highlightGhost(selectedGhostIndex);
-            _updateGhostUI();
-            _postGhostList();
-        }
-
-        function restoreGhostPose(targetIndex) {
-            let target = null;
-            let idx = -1;
-            if (typeof targetIndex === 'number' && ghostList[targetIndex]) {
-                target = ghostList[targetIndex];
-                idx = targetIndex;
-            } else if (ghostList.length > 0) {
-                target = ghostList[ghostList.length - 1];
-                idx = ghostList.length - 1;
-            }
-            if (!target || !target.joints) return;
-            const j = target.joints;
-            link1.rotation.y = deg(j[0]);
-            link2.rotation.z = deg(j[1]);
-            link3.rotation.z = deg(j[2]);
-            link4.rotation.z = deg(j[3]);
-            link5.rotation.y = deg(j[4]);
-            link5.rotation.x = 0;
-            link5.rotation.z = 0;
-            link6.rotation.z = deg(j[5]);
-            link6.rotation.x = 0;
-            link6.rotation.y = 0;
-            link1.updateMatrixWorld(true);
-            jointTarget = null;
-            syncTargetToTip();
-            if (target.pose) {
-                window.parent.postMessage({
-                    type: 'targetPoseUpdate',
-                    x: target.pose.x,
-                    y: target.pose.y,
-                    z: target.pose.z,
-                    rx: target.pose.rx,
-                    ry: target.pose.ry,
-                    rz: target.pose.rz,
-                    joints: target.joints,
-                }, '*');
-            } else {
-                _postTargetPose();
-            }
-            highlightGhost(idx);
-        }
-
-        function selectGhost(targetIndex) {
-            if (typeof targetIndex !== 'number' || targetIndex < 0 || targetIndex >= ghostList.length) {
-                highlightGhost(-1);
-                return;
-            }
-            restoreGhostPose(targetIndex);
-        }
-
-        function handleSnap(overridePose, overrideJoints) {
-            // 1. Capture current arm as a new transparent grey ghost using real coordinates
-            captureGhostArm(overridePose, overrideJoints);
-            // 2. Snap Gizmo back to arm tip
-            syncTargetToTip();
-            // 3. Send target pose via _postTargetPose() — same path as drag release
-            //    so XYZ goes through _modelToRobot() conversion identically
-            _postTargetPose();
-        }
 
         // ===== 6. Expose joint control & ghost control to parent React app via postMessage =====
         function _setLinkRotations(r) {
@@ -2786,6 +2495,66 @@
             link4.rotation.z = r[3];
             link5.rotation.y = r[4]; link5.rotation.x = 0; link5.rotation.z = 0;
             link6.rotation.z = r[5]; link6.rotation.x = 0; link6.rotation.y = 0;
+        }
+
+        // ── Ghost Targets ───────────────────────────────────────────────
+        // Keep the real robot model normal. Each Snap creates a separate
+        // translucent snapshot at the exact current WORLD transform of every
+        // robot mesh, so the ghost stays behind while the real arm moves.
+        const _ghostTargetMat = new THREE.MeshStandardMaterial({
+            color: 0x808080,
+            roughness: 0.55,
+            metalness: 0.1,
+            transparent: true,
+            opacity: 0.7,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+        });
+
+        const _ghostTargets = [];
+
+        function createGhostTarget() {
+            // Make sure every link/mesh has its current world matrix.
+            robotBase.updateMatrixWorld(true);
+
+            const ghostGroup = new THREE.Group();
+            ghostGroup.name = 'GhostTarget';
+            ghostGroup.renderOrder = 10;
+
+            robotBase.traverse((child) => {
+                if (!child.isMesh) return;
+
+                // Clone only the visible robot meshes. Do NOT clone the
+                // robot hierarchy, gizmos, cameras, projector or hit helpers.
+                const ghostMesh = child.clone(false);
+                ghostMesh.name = 'Ghost_' + (child.name || 'Mesh');
+
+                // Use one translucent material for the whole ghost.
+                ghostMesh.material = _ghostTargetMat;
+
+                // child.matrixWorld is the exact pose at the moment of Snap.
+                ghostMesh.matrixAutoUpdate = false;
+                ghostMesh.matrix.copy(child.matrixWorld);
+                ghostMesh.matrixWorld.copy(child.matrixWorld);
+                ghostMesh.matrixWorldNeedsUpdate = false;
+
+                ghostGroup.add(ghostMesh);
+            });
+
+            scene.add(ghostGroup);
+            _ghostTargets.push(ghostGroup);
+        }
+
+        function clearGhostTargets() {
+            for (const ghost of _ghostTargets) {
+                ghost.traverse((child) => {
+                    if (child.isMesh) {
+                        child.geometry = child.geometry; // keep shared geometry
+                    }
+                });
+                scene.remove(ghost);
+            }
+            _ghostTargets.length = 0;
         }
 
         // Target link rotations (radians) the render loop eases toward. Real
@@ -2799,7 +2568,7 @@
             if (e.data.type === 'setJoints') {
                 const j = e.data.joints; // array [j1..j6] in degrees
                 if (!Array.isArray(j) || j.length < 6) return;
-                if (e.data.realPose) latestRealPose = e.data.realPose;
+                if (Array.isArray(e.data.realPose) && e.data.realPose.length >= 6) latestRealPose = e.data.realPose.slice(0, 6);
                 latestRealJoints = j.slice(0, 6);
                 const tgt = [deg(j[0]), deg(j[1]), deg(j[2]), deg(j[3]), deg(j[4]), deg(j[5])];
                 if (!jointSynced) {
@@ -2812,20 +2581,21 @@
                     jointTarget = tgt;
                 }
                 ikMode = false;
+            } else if (e.data.type === 'snapPos') {
+                // Snap + leave a translucent target behind.
+                syncTargetToTip();
+                createGhostTarget();
+                _postTargetPose();
+
             } else if (e.data.type === 'snapGhost') {
-                handleSnap(e.data.realPose, e.data.realJoints);
+                // Same behavior for the explicit ghost command.
+                syncTargetToTip();
+                createGhostTarget();
+                _postTargetPose();
+
             } else if (e.data.type === 'clearGhost' || e.data.type === 'clearAllGhosts') {
-                clearAllGhosts();
-            } else if (e.data.type === 'removeLastGhost') {
-                removeLastGhost();
-            } else if (e.data.type === 'restoreGhost') {
-                restoreGhostPose(e.data.index);
-            } else if (e.data.type === 'selectGhost') {
-                selectGhost(e.data.index);
-            } else if (e.data.type === 'highlightGhost') {
-                highlightGhost(e.data.index);
-            } else if (e.data.type === 'deleteGhost') {
-                deleteGhost(e.data.index);
+                clearGhostTargets();
+
             } else if (e.data.type === 'getPosState') {
                 camLockByGetPos = !e.data.enabled;
             }
@@ -2847,9 +2617,10 @@
                 return;
             }
             jointsWs.onmessage = (ev) => {
-                if (camLockByGetPos) return;
                 let d;
                 try { d = JSON.parse(ev.data); } catch (err) { return; }
+                if (Array.isArray(d.pose) && d.pose.length >= 6) latestRealPose = d.pose.slice(0, 6);
+                if (camLockByGetPos) return;
                 const j = d && d.angles;
                 if (!Array.isArray(j) || j.length < 6) return;
                 latestRealJoints = j.slice(0, 6);
@@ -2883,6 +2654,14 @@
         const _tcpEuler = new THREE.Euler();
         const _rad2deg = THREE.MathUtils.radToDeg;
         let _lastPostMs = 0;
+        // Tip display from the REAL robot pose (when Get Pos is ON): the model's
+        // FK drifts from the arm (link lengths differ), so tip = flange +
+        // R(robot euler) * (TOOLFIX^-1 * gizmoTip_local) instead.
+        const _tipEuler = new THREE.Euler();
+        const _tipMat = new THREE.Matrix4();
+        const _tipOff = new THREE.Vector3();
+        const _tipOffLocal = gizmoTip.position.clone()
+            .applyMatrix4(new THREE.Matrix4().makeRotationZ(Math.PI).invert());
 
         function animate() {
             requestAnimationFrame(animate);
@@ -2946,9 +2725,9 @@
             // Read TCP position (metres → mm) and send to parent React app ~10x/sec
             endEffector.getWorldPosition(_tcpPos);
             const _rp = _modelToRobot(_tcpPos.x * 1000, _tcpPos.y * 1000, _tcpPos.z * 1000);
-            const mmX = +_rp.x.toFixed(1);
-            const mmY = +_rp.y.toFixed(1);
-            const mmZ = +_rp.z.toFixed(1);
+            const mmX = +_rp.x.toFixed(2);
+            const mmY = +_rp.y.toFixed(2);
+            const mmZ = +_rp.z.toFixed(2);
 
             const now = performance.now();
             if (now - _lastPostMs > 100) {
@@ -2957,9 +2736,9 @@
                 // End-effector world orientation → robot-frame Euler (degrees)
                 endEffector.getWorldQuaternion(_tcpQuat);
                 const _ro = _modelOrientToRobot(_tcpQuat);
-                const rx = +_ro.rx.toFixed(1);
-                const ry = +_ro.ry.toFixed(1);
-                const rz = +_ro.rz.toFixed(1);
+                const rx = +_ro.rx.toFixed(2);
+                const ry = +_ro.ry.toFixed(2);
+                const rz = +_ro.rz.toFixed(2);
 
                 // Joint angles (degrees) from each link's rotation axis
                 const joints = [
@@ -2971,10 +2750,30 @@
                     +_rad2deg(link6.rotation.z).toFixed(2),
                 ];
 
+                // Physical tool tip. When following the real robot (Get Pos ON)
+                // compute it from the robot's own pose so it doesn't inherit the
+                // model's FK drift; while free-dragging (OFF) use the model tip.
+                let tipX, tipY, tipZ;
+                if (!camLockByGetPos && latestRealPose) {
+                    _tipEuler.set(deg(latestRealPose[3]), deg(latestRealPose[4]), deg(latestRealPose[5]), 'ZYX');
+                    _tipMat.makeRotationFromEuler(_tipEuler);
+                    _tipOff.copy(_tipOffLocal).applyMatrix4(_tipMat).multiplyScalar(1000);
+                    tipX = +(latestRealPose[0] + _tipOff.x).toFixed(2);
+                    tipY = +(latestRealPose[1] + _tipOff.y).toFixed(2);
+                    tipZ = +(latestRealPose[2] + _tipOff.z).toFixed(2);
+                } else {
+                    gizmoTip.getWorldPosition(_tcpPos);
+                    const _tpr = _modelToRobot(_tcpPos.x * 1000, _tcpPos.y * 1000, _tcpPos.z * 1000);
+                    tipX = +_tpr.x.toFixed(2);
+                    tipY = +_tpr.y.toFixed(2);
+                    tipZ = +_tpr.z.toFixed(2);
+                }
+
                 window.parent.postMessage({
                     type: 'tcpUpdate',
                     x: mmX, y: mmY, z: mmZ,
                     rx, ry, rz,
+                    tipX, tipY, tipZ,
                     joints,
                 }, '*');
             }
