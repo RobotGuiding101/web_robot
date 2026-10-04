@@ -279,8 +279,8 @@ def _recenter_xy(robot: Robot, cam: Camera, state: "AppState", rec: AlignRecorde
         need_pos_y = need_neg_y = 0.0   # shift needed by top-side / bottom-side violators
         for px, py in state.points:
             if px < mx:
-                need_pos_x = max(need_pos_x, mx - px)
-            elif px > cam.w - mx:
+                need_pos_x =mx max(need_pos_x, mx - px)
+            elif px > cam.w - :
                 need_neg_x = min(need_neg_x, (cam.w - mx) - px)
             if py < my:
                 need_pos_y = max(need_pos_y, my - py)
