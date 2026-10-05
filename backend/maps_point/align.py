@@ -157,6 +157,20 @@ class AppState:
         self.draw_running = False
         self.draw_stop = threading.Event()
 
+        # ── experiment-record capture (sheets 05 + 09 of the thesis form) ────
+        # Filled by mapcontrol's /api/map/grid/test-point (one entry per test
+        # point: the pose the taught grid predicts for a canvas (u,v) vs the
+        # pose the robot was ACTUALLY at) and /api/map/draw (stroke counts +
+        # waypoint/path stats for the 3D-path column).
+        # Deliberately NOT part of state_store's snapshot: every test_points
+        # entry pairs a prediction with a live GetPose() read, so restoring
+        # old pairs after a restart would put rows in the record that no
+        # longer describe the live setup. A test session is meant to be one
+        # continuous run, and state_store already covers the durable half
+        # (points + grid_points).
+        self.test_points: list = []
+        self.last_draw_stats: dict = {}
+
 
 def _probe_align_sign(robot: Robot, cam: Camera, state: "AppState", axis: str,
                        rec: AlignRecorder):

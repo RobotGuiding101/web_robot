@@ -190,6 +190,41 @@ def simplify_stroke(points_uv, eps: float = DRAW_SIMPLIFY_EPS) -> list:
     return _cap_points(simplified, DRAW_MAX_POINTS)
 
 
+def draw_stats(strokes: list, grid_points, rows: int, cols: int,
+               lift_mm: float) -> dict:
+    """Non-moving summary of one draw request: raw canvas samples in,
+    waypoints out, and the assembled 3D path length.
+
+    Runs the SAME simplify_stroke()/_cap_points()/_assemble_strokes() chain
+    do_draw() replays, so the numbers recorded in the experiment form come
+    from the real code path rather than a re-implementation that could drift
+    from it. `api_draw` calls this before handing the work to the thread."""
+    per_stroke, before, after = [], 0, 0
+    for s in strokes:
+        pts = s.get("points") or []
+        path = (simplify_stroke(pts) if s.get("tool") == "pen"
+                else _cap_points(pts, DRAW_MAX_POINTS))
+        before += len(pts)
+        after += len(path)
+        entry = {"tool": s.get("tool", "pen"), "points_before": len(pts),
+                 "points_after": len(path)}
+        if path:
+            ends = [grid_pose(u, v, grid_points, rows, cols)
+                    for u, v in (path[0], path[-1])]
+            entry["uv_start"] = [round(path[0][0], 4), round(path[0][1], 4)]
+            entry["uv_end"] = [round(path[-1][0], 4), round(path[-1][1], 4)]
+            entry["xyz_start"] = [round(c, 2) for c in ends[0][:3]]
+            entry["xyz_end"] = [round(c, 2) for c in ends[1][:3]]
+        per_stroke.append(entry)
+    poses = _assemble_strokes(strokes, grid_points, rows, cols, lift_mm)
+    return {"strokes": len(strokes), "points_before": before, "points_after": after,
+            "per_stroke": per_stroke, "waypoints": len(poses),
+            "path_length_mm": round(sum(math.dist(a[:3], b[:3])
+                                        for a, b in zip(poses, poses[1:])), 2),
+            "lift_transitions": max(0, len(strokes) - 1), "lift_mm": lift_mm,
+            "motion_mode": DRAW_MOTION_MODE, "cp_ratio": DRAW_CP_RATIO}
+
+
 def densify_path(poses: list, step_mm: float, max_points: int) -> list:
     """Linearly interpolate a sparse sequence of Cartesian
     [X,Y,Z,Rx,Ry,Rz] waypoints so consecutive points are at most

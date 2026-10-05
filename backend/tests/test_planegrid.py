@@ -158,3 +158,49 @@ class TestSimplifyStroke:
         pts = [(i / 500.0, 0.0) for i in range(501)]
         out = pg.simplify_stroke(pts)
         assert len(out) >= 2 and len(out) <= DRAW_MAX_POINTS
+
+
+class TestDrawStats:
+    """draw_stats feeds the experiment record's stroke/point-count columns, so
+    its totals must agree with the functions do_draw() actually replays."""
+
+    def test_counts_match_simplify_for_pen_stroke(self):
+        pts = [(i / 200.0, 0.0) for i in range(201)]
+        out = pg.draw_stats([{"tool": "pen", "points": pts}], GRID2, 2, 2, 5.0)
+        assert out["strokes"] == 1
+        assert out["points_before"] == 201
+        assert out["points_after"] == len(pg.simplify_stroke(pts))
+
+    def test_shape_stroke_is_not_simplified(self):
+        square = [(0.1, 0.1), (0.4, 0.1), (0.4, 0.4), (0.1, 0.4)]
+        out = pg.draw_stats([{"tool": "rect", "points": square}], GRID2, 2, 2, 5.0)
+        assert out["points_after"] == 4
+
+    def test_totals_sum_across_strokes(self):
+        a = [(i / 60.0, 0.0) for i in range(61)]
+        b = [(0.0, i / 60.0) for i in range(61)]
+        one_a = pg.draw_stats([{"tool": "pen", "points": a}], GRID2, 2, 2, 5.0)
+        one_b = pg.draw_stats([{"tool": "pen", "points": b}], GRID2, 2, 2, 5.0)
+        out = pg.draw_stats([{"tool": "pen", "points": a},
+                             {"tool": "pen", "points": b}], GRID2, 2, 2, 5.0)
+        assert out["strokes"] == 2
+        assert out["points_before"] == 122
+        assert out["points_after"] == one_a["points_after"] + one_b["points_after"]
+
+    def test_path_length_is_positive_for_a_real_stroke(self):
+        out = pg.draw_stats([{"tool": "line", "points": [(0.0, 0.0), (1.0, 1.0)]}],
+                            GRID2, 2, 2, 5.0)
+        assert out["path_length_mm"] > 0
+        assert out["waypoints"] >= 2
+
+    def test_single_stroke_has_no_lift_transition(self):
+        out = pg.draw_stats([{"tool": "line", "points": [(0.0, 0.0), (1.0, 0.0)]}],
+                            GRID2, 2, 2, 5.0)
+        assert out["lift_transitions"] == 0
+
+    def test_reports_execution_settings_from_config(self):
+        out = pg.draw_stats([{"tool": "line", "points": [(0.0, 0.0), (1.0, 0.0)]}],
+                            GRID2, 2, 2, 7.0)
+        assert out["motion_mode"] == pg.DRAW_MOTION_MODE
+        assert out["cp_ratio"] == pg.DRAW_CP_RATIO
+        assert out["lift_mm"] == 7.0

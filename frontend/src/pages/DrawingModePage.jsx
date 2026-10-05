@@ -35,6 +35,19 @@ const PRESET_COLORS = [
 
 const STROKE_WIDTHS = [1, 2, 4, 8, 16]
 
+// Grid Mapping test points, as fractions of the taught area. The four corners
+// are deliberately absent: those are the taught poses themselves, so their
+// error is zero by construction and testing them proves nothing. What is left
+// is the plus-shaped interior, which is exactly where bilinear interpolation
+// has to be right.
+const TEST_POINT_POSITIONS = [
+  { u: 0.25, v: 0.5, label: 'ซ้ายกลาง' },
+  { u: 0.5, v: 0.25, label: 'บนกลาง' },
+  { u: 0.5, v: 0.5, label: 'กลาง' },
+  { u: 0.5, v: 0.75, label: 'ล่างกลาง' },
+  { u: 0.75, v: 0.5, label: 'ขวากลาง' },
+]
+
 // ─── Teach / Grid panel constants ─────────────────────────────────────────────
 const POSE_LABELS = ['X', 'Y', 'Z', 'Rx', 'Ry', 'Rz']
 const JOG_POS_AXES = ['x', 'y', 'z']
@@ -259,8 +272,10 @@ const DrawingModePage = () => {
   const [gridCols, setGridCols] = useState(2)
   const [teachMsg, setTeachMsg] = useState(null)
   const teachMsgTimerRef = useRef(null)
-  const [markMode, setMarkMode] = useState(false)
-  const [markClickMode, setMarkClickMode] = useState('mark')
+const [markMode, setMarkMode] = useState(false)
+const [markClickMode, setMarkClickMode] = useState('mark')
+const [testPoints, setTestPoints] = useState([])
+const [testReportBusy, setTestReportBusy] = useState(false)
   const [alignBusy, setAlignBusy] = useState(false)
   const [markGeom, setMarkGeom] = useState(null)
   const [jointStep, setJointStep] = useState(2)
@@ -757,6 +772,59 @@ const DrawingModePage = () => {
     }
     fetchTeachStatus()
   }, [teachStatus, showTeachMsg, fetchTeachStatus])
+
+  // ── Grid Mapping test points + experiment-record download ────────────────
+  const handleRecordTestPoint = useCallback(async (u, v) => {
+    if (!teachStatus || !teachStatus.connected) return
+    try {
+      const res = await apiFetch('/api/map/grid/test-point', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ u, v }),
+      })
+      const data = await res.json().catch(() => null)
+      if (res.ok && data && data.ok) {
+        setTestPoints((prev) => [...prev, data.test_point])
+      } else {
+        showTeachMsg((data && data.error) || 'Record test point failed', 'error')
+      }
+    } catch {
+      showTeachMsg('Record test point request failed', 'error')
+    }
+  }, [teachStatus, showTeachMsg])
+
+  const handleResetTestPoints = useCallback(async () => {
+    try {
+      await apiFetch('/api/map/grid/test-reset', { method: 'POST' })
+      setTestPoints([])
+      showTeachMsg('Test points cleared')
+    } catch {
+      showTeachMsg('Reset test points failed', 'error')
+    }
+  }, [showTeachMsg])
+
+  const handleDownloadReport = useCallback(async () => {
+    setTestReportBusy(true)
+    try {
+      const res = await apiFetch('/api/map/test-report')
+      const data = await res.json()
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const stamp = String(data.generated_at || '').replace(/\D/g, '') || 'report'
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `grid_test_report_${stamp}.json`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      setStatus('✓ บันทึกไฟล์ผลการทดสอบแล้ว')
+    } catch {
+      setStatus('✗ บันทึกไฟล์ไม่สำเร็จ')
+    } finally {
+      setTestReportBusy(false)
+    }
+  }, [])
 
   const markCamW = (teachStatus && teachStatus.cam_w) || 848
   const markCamH = (teachStatus && teachStatus.cam_h) || 480
@@ -1684,6 +1752,64 @@ const DrawingModePage = () => {
                                 </text>
                               )}
                             </svg>
+                          </div>
+
+                          <div className="dm-panel-card">
+                            <div className="dm-panel-card-head">
+                              <span className="dm-panel-card-title">Test Points &amp; Report</span>
+                              <span style={{ fontSize: '10px', fontWeight: 700, color: '#059669' }}>
+                                {testPoints.length} recorded
+                              </span>
+                            </div>
+
+                            <div className="dm-teach-hint">
+                              jog ไปตำแหน่งบนพื้นผิว แล้วกดปุ่มตำแหน่งนั้น — ระบบเทียบตำแหน่งที่ grid คำนวณได้ กับตำแหน่งจริงของแขน
+                            </div>
+
+                            <div className="dm-teach-grid-actions">
+                              {TEST_POINT_POSITIONS.map((p) => (
+                                <button
+                                  key={`${p.u}-${p.v}`}
+                                  type="button"
+                                  className="dm-teach-action-btn"
+                                  disabled={!teachConnected || markedCount === 0}
+                                  title={`บันทึกจุดทดสอบที่ u=${p.u}, v=${p.v}`}
+                                  onClick={() => handleRecordTestPoint(p.u, p.v)}
+                                >
+                                  {p.label}
+                                </button>
+                              ))}
+                            </div>
+
+                            {testPoints.length > 0 && (
+                              <div className="dm-teach-grid-status">
+                                {testPoints.map((t) => (
+                                  <div key={t.index}>
+                                    {`#${t.index} u=${t.u.toFixed(2)} v=${t.v.toFixed(2)} — `}
+                                    {`ΔX=${t.error[0].toFixed(2)} ΔY=${t.error[1].toFixed(2)} ΔZ=${t.error[2].toFixed(2)} mm`}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            <div className="dm-teach-grid-actions">
+                              <button
+                                type="button"
+                                className="dm-teach-action-btn dm-teach-action-btn--danger"
+                                disabled={testPoints.length === 0}
+                                onClick={handleResetTestPoints}
+                              >
+                                Reset test points
+                              </button>
+                              <button
+                                type="button"
+                                className="dm-teach-autofill-btn"
+                                disabled={testReportBusy}
+                                onClick={handleDownloadReport}
+                              >
+                                {testReportBusy ? 'กำลังบันทึก…' : 'บันทึกผลการทดสอบ (ชีต 05 + 09)'}
+                              </button>
+                            </div>
                           </div>
                         </>
                       )}

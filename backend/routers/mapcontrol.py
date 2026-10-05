@@ -32,14 +32,15 @@ from maps_point.config import (ROBOT_IP, ROBOT_MODE_LABELS,
                                DRAW_GRID_MAX_ROWS, DRAW_GRID_MAX_COLS,
                                DRAW_MIN_GRID_SPAN_MM, Z_SURFACE,
                                CAM_TIP_OFFSET_MM, DRAW_SURFACE_GAP_MM,
-                               MIN_DEPTH_MM)
+                               DRAW_LIFT_MM, MIN_DEPTH_MM)
 from maps_point.logs import log, server_ring, robot_ring
 from maps_point.robot import Robot, RobotMoveError
 from maps_point.camera import Camera
 from maps_point.align import AppState, do_align, start_tracking_thread
 from maps_point.motion import do_goto, pixel_to_world_xy
 from maps_point import floorcalib
-from maps_point.planegrid import do_draw, validate_grid, project_grid_2d, bilinear_cell, grid_pose
+from maps_point.planegrid import (do_draw, validate_grid, project_grid_2d,
+                                  bilinear_cell, grid_pose, draw_stats)
 from maps_point.render import draw_overlay
 
 router = APIRouter(prefix="/api/map", tags=["MapControl"])
@@ -72,14 +73,29 @@ def _log_user_event(request: Request, device: str, state_name: str, detail: str 
 
 def _bind_draw_done_hook(request: Request) -> None:
     """Give the (thread-run) do_draw a way to log its outcome to device_logs
-    with the requesting user's id, since a background thread has no request."""
+    with the requesting user's id, since a background thread has no request.
+
+    Also folds the outcome back into state.last_draw_stats so the
+    /api/map/test-report download can state whether the replay actually
+    completed — the "ผลการวาดจริง" column is the one number a static request
+    payload cannot know, because it only exists once the motion thread ends."""
     try:
         header = request.headers.get("authorization", "")
         if not header.startswith("Bearer "):
             state.on_draw_done = None
             return
         sub = jwt.decode(header[7:], SECRET_KEY, algorithms=[ALGORITHM]).get("sub", "")
-        state.on_draw_done = lambda action, detail="": log_event(sub, "draw", action, detail)
+
+        def _hook(action, detail=""):
+            stats = dict(getattr(state, "last_draw_stats", None) or {})
+            stats["result"] = {"action": action, "detail": detail, "at": time.time()}
+            state.last_draw_stats = stats
+            try:
+                log_event(sub, "draw", action, detail)
+            except Exception:
+                pass
+
+        state.on_draw_done = _hook
     except Exception:
         state.on_draw_done = None
 
@@ -1564,6 +1580,125 @@ def api_grid_reset(request: Request):
     return {"ok": True}
 
 
+class GridTestPointBody(BaseModel):
+    u: float
+    v: float
+
+
+def _test_aggregates(points: list) -> dict:
+    """Rows 40-44 of the Grid Mapping sheet (Maximum Error X/Y/Z, Mean Error,
+    RMSE) computed from the recorded test points.
+
+    Error is one-sided on purpose — computed minus actual — so a positive
+    number always means "the grid predicts the tool further out than where it
+    really was", which is the direction that matters when deciding whether the
+    taught plane or the jogging was off."""
+    rows = [p for p in points if p.get("error")]
+    if not rows:
+        return {"count": 0, "max_error_x": None, "max_error_y": None,
+                "max_error_z": None, "mean_error_x": None, "mean_error_y": None,
+                "mean_error_z": None, "mean_error": None, "rmse": None}
+    errs = [p["error"] for p in rows]
+    dist = [math.sqrt(sum(c * c for c in e)) for e in errs]
+    n = len(rows)
+    return {
+        "count": n,
+        "max_error_x": max(abs(e[0]) for e in errs),
+        "max_error_y": max(abs(e[1]) for e in errs),
+        "max_error_z": max(abs(e[2]) for e in errs),
+        "mean_error_x": sum(e[0] for e in errs) / n,
+        "mean_error_y": sum(e[1] for e in errs) / n,
+        "mean_error_z": sum(e[2] for e in errs) / n,
+        "mean_error": sum(dist) / n,
+        "rmse": math.sqrt(sum(d * d for d in dist) / (3 * n)),
+        "definitions": {
+            "error": "computed (bilinear over the taught grid) minus actual robot pose",
+            "mean_error": "mean of sqrt(Ex^2+Ey^2+Ez^2) across test points",
+            "rmse": "sqrt(sum(Ex^2+Ey^2+Ez^2) / (3n))",
+        },
+    }
+
+
+@router.post("/grid/test-point")
+def api_grid_test_point(request: Request, body: GridTestPointBody):
+    """Record one Grid Mapping test point: the pose the taught grid predicts
+    for canvas position (u,v), against the pose the robot is actually at now.
+
+    Read-only — the operator jogs to the spot by hand first; nothing here
+    moves the arm."""
+    if not _grid_fully_marked():
+        return {"ok": False, "error": "grid not fully marked"}
+    if not robot.connected:
+        return {"ok": False, "error": "robot not connected"}
+    u, v = float(body.u), float(body.v)
+    if not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0):
+        return {"ok": False, "error": "u and v must be within [0,1]"}
+    computed = grid_pose(u, v, state.grid_points, state.grid_rows, state.grid_cols)
+    actual = robot.get_pose()
+    err = [computed[i] - actual[i] for i in range(3)]
+    rec = {"index": len(state.test_points) + 1, "u": u, "v": v,
+           "computed": [round(c, 2) for c in computed],
+           "actual": [round(a, 2) for a in actual],
+           "error": [round(e, 3) for e in err],
+           "deviation_mm": round(math.sqrt(sum(e * e for e in err)), 3),
+           "recorded_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    state.test_points.append(rec)
+    _log_user_event(request, "draw", "test_point",
+                    f"u={u:.3f} v={v:.3f} dev={rec['deviation_mm']:.2f}mm")
+    return {"ok": True, "test_point": rec, "count": len(state.test_points),
+            "aggregates": _test_aggregates(state.test_points)}
+
+
+@router.post("/grid/test-reset")
+def api_grid_test_reset(request: Request):
+    state.test_points = []
+    _log_user_event(request, "draw", "test_reset", "")
+    return {"ok": True, "count": 0}
+
+
+@router.get("/test-report")
+def api_test_report(user: User = Depends(get_current_user)):
+    """Everything the Grid Mapping (05) and Drawing (09) sheets of the
+    experiment record need, as one downloadable payload.
+
+    Read-only snapshot — the operator already produced every number by
+    teaching the grid, jogging to each test point and pressing Send."""
+    rows, cols = state.grid_rows, state.grid_cols
+    marked = _grid_fully_marked()
+    validate = validate_grid(state.grid_points, rows, cols) if marked else None
+    stats = dict(getattr(state, "last_draw_stats", None) or {})
+    return {
+        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "tester": getattr(user, "username", None),
+        "sheet_05_grid_mapping": {
+            "grid_size": f"{rows}x{cols}",
+            "grid_rows": rows,
+            "grid_cols": cols,
+            "reference_point_count": rows * cols if marked else
+                                     sum(1 for i in range(rows) for j in range(cols)
+                                         if state.grid_points[i][j] is not None),
+            "grid_points": state.grid_points if marked else None,
+            "plane_rmse_mm": validate["rmse_mm"] if validate else None,
+            "area_span_mm": validate["span_mm"] if validate else None,
+            "grid_warnings": validate["warnings"] if validate else None,
+            "test_points": state.test_points,
+            "aggregates": _test_aggregates(state.test_points),
+        },
+        "sheet_09_drawing": {
+            "grid_size": f"{rows}x{cols}",
+            "stroke_count": stats.get("strokes"),
+            "points_before_reduction": stats.get("points_before"),
+            "points_after_reduction": stats.get("points_after"),
+            "waypoints_3d_path": stats.get("waypoints"),
+            "path_length_mm": stats.get("path_length_mm"),
+            "per_stroke": stats.get("per_stroke"),
+            "execution": {k: stats.get(k) for k in
+                          ("motion_mode", "cp_ratio", "lift_mm", "lift_transitions")},
+            "result": stats.get("result"),
+        },
+    }
+
+
 class GridRestoreBody(BaseModel):
     rows: int
     cols: int
@@ -1667,6 +1802,9 @@ def api_draw(request: Request, body: DrawBody):
         return {"ok": False, "error": "already running"}
 
     _log_grid_mapping(strokes)
+    state.last_draw_stats = draw_stats(strokes, state.grid_points,
+                                       state.grid_rows, state.grid_cols,
+                                       DRAW_LIFT_MM)
     _log_user_event(request, "draw", "start",
                     f"strokes={len(strokes)} grid={state.grid_rows}x{state.grid_cols}")
     _bind_draw_done_hook(request)
