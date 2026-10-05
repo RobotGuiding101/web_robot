@@ -2397,11 +2397,11 @@
             return true;
         }
 
-        function solveIK(targetPos) {
+        function solveIK(targetPos, iterations = 35) {
             // Solve using J1..J4. J5 and J6 remain fixed during IK Move XYZ.
             // J4 and J5 are rotated separately in 'Wrist J4/J5' mode (shortcut E).
             const IK_ARM_JOINTS = 4; // J1 (0) through J4 (3)
-            const ITERATIONS = 35;
+            const ITERATIONS = iterations;
             const TOLERANCE = 0.0015;
             const DAMPING = 0.70;
             for (let iter = 0; iter < ITERATIONS; iter++) {
@@ -2737,6 +2737,11 @@
                 link1.updateMatrixWorld(true);
                 syncTargetToTip();
                 if (settled) jointTarget = null;
+            }
+
+            if (isDragging) {
+                _ikTarget.lerp(ikGoal, 0.45);
+                solveIK(_ikTarget, 8);
             }
 
             // While dragging (get-pos OFF) the real robot has not moved, so pin
