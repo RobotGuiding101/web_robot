@@ -203,6 +203,11 @@ _UV_CLOSED_EPS = 1e-4
 # catch garbage and wrong-frame reads, never a real large error.
 _POSE_SANITY_SLACK_MM = 1000.0
 
+# Grid Mapping test points the experiment form's rows 40-44 expect. Mirrors
+# TEST_POINT_POSITIONS in the Draw page; only the UI knows that canonical
+# list, so it is what gates the download on actually covering all of them.
+TEST_POINTS_EXPECTED = 5
+
 
 def _stroke_path(stroke: dict) -> list:
     """The (u,v) points actually replayed for one canvas stroke.
@@ -238,6 +243,105 @@ def grid_fingerprint(grid_points) -> str:
                 for point in row] for row in grid_points]
     payload = json.dumps(rounded, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode()).hexdigest()[:8]
+
+
+def test_aggregates(points: list) -> dict:
+    """Rows 40-44 of the Grid Mapping sheet (Maximum Error X/Y/Z, Mean Error,
+    RMSE) computed from the recorded test points.
+
+    Error is one-sided on purpose — computed minus actual — so a positive
+    number always means "the grid predicts the tool further out than where it
+    really was", which is the direction that matters when deciding whether the
+    taught plane or the jogging was off. Rows carrying no `error` key are
+    skipped rather than counted as zero, so a partial run can never present
+    itself as a perfect one."""
+    rows = [p for p in points if p.get("error")]
+    if not rows:
+        return {"count": 0, "max_error_x": None, "max_error_y": None,
+                "max_error_z": None, "mean_error_x": None, "mean_error_y": None,
+                "mean_error_z": None, "mean_error": None, "rmse": None}
+    errs = [p["error"] for p in rows]
+    dist = [math.sqrt(sum(c * c for c in e)) for e in errs]
+    n = len(rows)
+    return {
+        "count": n,
+        "max_error_x": max(abs(e[0]) for e in errs),
+        "max_error_y": max(abs(e[1]) for e in errs),
+        "max_error_z": max(abs(e[2]) for e in errs),
+        "mean_error_x": sum(e[0] for e in errs) / n,
+        "mean_error_y": sum(e[1] for e in errs) / n,
+        "mean_error_z": sum(e[2] for e in errs) / n,
+        "mean_error": sum(dist) / n,
+        "rmse": math.sqrt(sum(d * d for d in dist) / (3 * n)),
+        "definitions": {
+            "error": "computed (bilinear over the taught grid) minus actual robot pose",
+            "mean_error": "mean of sqrt(Ex^2+Ey^2+Ez^2) across test points",
+            "rmse": "sqrt(sum(Ex^2+Ey^2+Ez^2) / (3n))",
+        },
+    }
+
+
+def build_test_report_payload(grid_points, rows: int, cols: int, grid_marked: bool,
+                              test_points: list, draw_stats: dict,
+                              tester, generated_at: str) -> dict:
+    """Assemble the whole experiment-record download payload.
+
+    Pure so the contract can be tested without importing the HTTP layer —
+    mapcontrol pulls in sqlalchemy at module scope, which makes anything
+    reached through it untestable on a machine that only has the geometry
+    dependencies installed. `api_test_report` is a thin wrapper that supplies
+    live state and this returns the bytes.
+    """
+    stats = draw_stats or {}
+    validate = validate_grid(grid_points, rows, cols) if grid_marked else None
+    missing = report_missing_codes(grid_marked, grid_points, test_points, stats)
+    fingerprint = grid_fingerprint(grid_points)
+    recorded = len(test_points)
+    marked_count = (rows * cols if grid_marked else
+                    sum(1 for i in range(rows) for j in range(cols)
+                        if grid_points[i][j] is not None))
+    return {
+        "generated_at": generated_at,
+        "tester": tester,
+        "complete": not missing,
+        "missing": missing,
+        "sheet_05_grid_mapping": {
+            "grid_size": f"{rows}x{cols}",
+            "grid_rows": rows,
+            "grid_cols": cols,
+            "reference_point_count": marked_count,
+            "grid_points": grid_points if grid_marked else None,
+            "plane_rmse_mm": validate["rmse_mm"] if validate else None,
+            "area_span_mm": validate["span_mm"] if validate else None,
+            "grid_warnings": validate["warnings"] if validate else None,
+            "test_points": test_points,
+            "aggregates": test_aggregates(test_points),
+            "grid_fingerprint": fingerprint,
+            "test_points_expected": TEST_POINTS_EXPECTED,
+            "test_points_recorded": recorded,
+            "test_points_status": ("not_recorded" if not recorded else
+                                   "complete" if recorded >= TEST_POINTS_EXPECTED
+                                   else "partial"),
+        },
+        "sheet_09_drawing": {
+            "grid_size": f"{rows}x{cols}",
+            "stroke_count": stats.get("strokes"),
+            "points_before_reduction": stats.get("points_before"),
+            "points_after_reduction": stats.get("points_after"),
+            "waypoints_3d_path": stats.get("waypoints"),
+            "path_length_mm": stats.get("path_length_mm"),
+            "total_travel_mm": stats.get("total_travel_mm"),
+            "drawn_path_length_mm": stats.get("drawn_path_length_mm"),
+            "per_stroke": stats.get("per_stroke"),
+            # Orientation is excluded from every error figure here: all four
+            # taught corners carry identical Rx/Ry/Rz, so it holds no
+            # grid-mapping information to measure.
+            "draw_end_check": stats.get("draw_end_check"),
+            "execution": {k: stats.get(k) for k in
+                          ("motion_mode", "cp_ratio", "lift_mm", "lift_transitions")},
+            "result": stats.get("result"),
+        },
+    }
 
 
 def report_missing_codes(grid_marked: bool, grid_points, test_points,
