@@ -130,6 +130,13 @@ class Robot:
         self._apply_frame()
         log("  [Robot] ready")
 
+    def enable_robot(self):
+        if not self.connected or not self.dashboard:
+            raise RuntimeError("robot not connected")
+        reply = self.dashboard.EnableRobot()
+        self._check_reply(reply, "EnableRobot()")
+        return reply
+
     def set_frame(self, tool_index: int = None, user_index: int = None):
         """Change which Tool/User frame absolute moves use — pass None for
         either to leave it as-is. user_index=-1 means "stop selecting a
@@ -495,12 +502,11 @@ class Robot:
         self.movl(HOME_X, HOME_Y, HOME_Z, HOME_RX, HOME_RY, HOME_RZ)
 
     def disable_robot(self):
-        if not self.dashboard: return
-        self.dashboard.ClearError()
-        self.dashboard.ResetRobot()
-        sleep(0.5)
-        self.dashboard.DisableRobot()
-        self.connected = False
+        if not self.connected or not self.dashboard:
+            raise RuntimeError("robot not connected")
+        reply = self.dashboard.DisableRobot()
+        self._check_reply(reply, "DisableRobot()")
+        return reply
 
     def clear_error(self):
         if not self.dashboard: return

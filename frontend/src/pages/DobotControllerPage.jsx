@@ -151,6 +151,9 @@ const DobotControllerPage = () => {
   // ── Action statuses ───────────────────────────────────────────────────────
   const [initLoading, setInitLoading] = useState(false)
   const [initStatus, setInitStatus] = useState(null) // 'ok' | 'error' | null
+  const [enableLoading, setEnableLoading] = useState(false)
+  const [enableStatus, setEnableStatus] = useState(null)
+  const [robotEnabled, setRobotEnabled] = useState(false)
   const [homeLoading, setHomeLoading] = useState(false)
   const [homeStatus, setHomeStatus] = useState(null)
   const [errorStatus, setErrorStatus] = useState(null)
@@ -234,6 +237,7 @@ const DobotControllerPage = () => {
       const data = await res.json()
 
       setConnected(!!data.connected)
+      if (typeof data.robot_enabled === 'boolean') setRobotEnabled(data.robot_enabled)
 
       if (!frameDirtyRef.current) {
         if (data.tool_index !== undefined && data.tool_index !== null) setToolIndex(data.tool_index)
@@ -573,6 +577,25 @@ const DobotControllerPage = () => {
     finally {
       setInitLoading(false)
       setTimeout(() => setInitStatus(null), 3000)
+    }
+  }
+
+  const handleEnableToggle = async () => {
+    if (enableLoading || !connected) return
+    setEnableLoading(true); setEnableStatus(null)
+    try {
+      const endpoint = robotEnabled ? '/api/map/disable' : '/api/map/enable'
+      const res = await apiFetch(endpoint, { method: 'POST' })
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error || `${robotEnabled ? 'Disable' : 'Enable'} failed`)
+      setRobotEnabled(!robotEnabled)
+      setEnableStatus('ok')
+      setLastMoved(robotEnabled ? 'Disable Robot' : 'Enable Robot')
+    } catch {
+      setEnableStatus('error')
+    } finally {
+      setEnableLoading(false)
+      setTimeout(() => setEnableStatus(null), 3000)
     }
   }
 
@@ -933,14 +956,6 @@ const DobotControllerPage = () => {
                   >
                     {getCoordinatesEnabled ? 'Get Pos: ON' : 'Get Pos: OFF'}
                   </button>
-                  <buttonclear
-                    id="btn--error"
-                    className={`init-btn init-btn--secondary${errorStatus === 'ok' ? ' init-btn--ok' : ''}${errorStatus === 'error' ? ' init-btn--error' : ''}`}
-                    onClick={handleClearError}
-                    title="Clear robot errors and reset alarms (/error)"
-                  >
-                    {errorStatus === 'ok' ? 'Cleared' : errorStatus === 'error' ? 'Error' : 'Clear Error'}
-                  </buttonclear>
                   <button
                     id="btn-init-robot"
                     className={`init-btn${initLoading ? ' init-btn--loading' : ''}${initStatus === 'ok' ? ' init-btn--ok' : ''}${initStatus === 'error' ? ' init-btn--error' : ''}`}
@@ -952,6 +967,27 @@ const DobotControllerPage = () => {
                       : initStatus === 'ok' ? <>Ready</>
                         : initStatus === 'error' ? <>Error</>
                           : <>Init</>}
+                  </button>
+                  <buttonclear
+                    id="btn--error"
+                    className={`init-btn init-btn--secondary${errorStatus === 'ok' ? ' init-btn--ok' : ''}${errorStatus === 'error' ? ' init-btn--error' : ''}`}
+                    onClick={handleClearError}
+                    title="Clear robot errors and reset alarms (/error)"
+                  >
+                    {errorStatus === 'ok' ? 'Cleared' : errorStatus === 'error' ? 'Error' : 'Clear Error'}
+                  </buttonclear>
+                  <button
+                    id="btn-enable-robot"
+                    className={`robot-enable-switch${robotEnabled ? ' robot-enable-switch--on' : ''}${enableLoading ? ' robot-enable-switch--loading' : ''}${enableStatus === 'error' ? ' robot-enable-switch--error' : ''}`}
+                    onClick={handleEnableToggle}
+                    disabled={!connected || enableLoading}
+                    role="switch"
+                    aria-checked={robotEnabled}
+                    aria-label={robotEnabled ? 'Disable robot servos' : 'Enable robot servos'}
+                    title={robotEnabled ? 'Disable robot servos' : 'Enable robot servos without running the full Init sequence'}
+                  >
+                    <span className="robot-enable-switch-label">{robotEnabled ? 'ON' : 'OFF'}</span>
+                    <span className="robot-enable-switch-thumb" aria-hidden="true" />
                   </button>
                   <button
                     id="btn-go-home"
