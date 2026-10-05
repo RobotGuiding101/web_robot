@@ -2040,6 +2040,7 @@
         targetMesh.add(ring);
 
         let transformControls = null;
+        const robotGizmoQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
 
         // ── 5. Unified End-Effector Gizmo: XYZ Move + Curved Arrows for J4/J5 ──
         // Container group for curved rotation arrows (J4 Red, J5 Green)
@@ -2296,10 +2297,12 @@
             // Position sphere at end-effector
             scene.add(targetMesh);
 
-            // ── Main TransformControls (translate IK for J1-J3) ──
+            // ── Main TransformControls (Robot-frame XYZ translate IK) ──
             transformControls = new THREE.TransformControls(camera, renderer.domElement);
             transformControls.setMode('translate');
+            transformControls.setSpace('local');
             transformControls.setSize(0.75);
+            targetMesh.quaternion.copy(robotGizmoQuaternion);
             transformControls.attach(targetMesh);
             scene.add(transformControls);
 
@@ -2308,11 +2311,14 @@
                 isDragging = e.value;
                 if (e.value) {
                     ikMode = true;
+                    jointTarget = null;
                     ikGoal.copy(targetMesh.position);
                     _ikTarget.copy(targetMesh.position);
                     window.parent.postMessage({ type: 'gizmoDragStart' }, '*');
                 } else {
                     ikMode = false;
+                    solveIK(ikGoal);
+                    syncTargetToTip();
                     _postTargetPose();
                     _updateCurvedArrows();
                 }
@@ -2339,7 +2345,7 @@
             { seg: link1, axis: 'y', min: deg(-180), max: deg(180), weight: 1.0 },
             { seg: link2, axis: 'z', min: deg(-90), max: deg(90), weight: 1.0 },
             { seg: link3, axis: 'z', min: deg(-150), max: deg(150), weight: 1.0 },
-            { seg: link4, axis: 'z', min: deg(-180), max: deg(180), weight: 0.9 },
+            { seg: link4, axis: 'z', min: deg(-180), max: deg(180), weight: 0.2 },
             { seg: link5, axis: 'y', min: deg(-180), max: deg(180), weight: 0.8 },
             { seg: link6, axis: 'z', min: deg(-180), max: deg(180), weight: 0.7 },
         ];
@@ -2392,10 +2398,9 @@
         }
 
         function solveIK(targetPos) {
-            // Solve using ONLY J1..J3 (base + arm). J4, J5, J6 remain fixed during IK Move XYZ
-            // to prevent the 3D wrist model from breaking or twisting unnaturally.
+            // Solve using J1..J4. J5 and J6 remain fixed during IK Move XYZ.
             // J4 and J5 are rotated separately in 'Wrist J4/J5' mode (shortcut E).
-            const IK_ARM_JOINTS = 3; // J1 (0), J2 (1), J3 (2)
+            const IK_ARM_JOINTS = 4; // J1 (0) through J4 (3)
             const ITERATIONS = 35;
             const TOLERANCE = 0.0015;
             const DAMPING = 0.70;
@@ -2417,7 +2422,7 @@
             const p = new THREE.Vector3();
             gizmoTip.getWorldPosition(p);
             targetMesh.position.copy(p);
-            endEffector.getWorldQuaternion(targetMesh.quaternion);
+            targetMesh.quaternion.copy(robotGizmoQuaternion);
             targetMesh.updateMatrixWorld(true);
             if (transformControls) transformControls.updateMatrixWorld();
             ikMode = false;
@@ -2732,14 +2737,6 @@
                 link1.updateMatrixWorld(true);
                 syncTargetToTip();
                 if (settled) jointTarget = null;
-            }
-
-            // Smoothed IK during a gizmo drag — ease the arm toward the pointer
-            // target instead of re-solving to every pointermove (which read as
-            // jitter).
-            if (isDragging) {
-                _ikTarget.lerp(ikGoal, 0.45);
-                solveIK(_ikTarget);
             }
 
             // While dragging (get-pos OFF) the real robot has not moved, so pin
