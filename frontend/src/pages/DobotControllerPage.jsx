@@ -6,8 +6,47 @@ import TopBar from '../components/TopBar'
 const STEP_VALUES = [0.1, 1, 5, 10, 20, 50]
 const CARTESIAN_AXES = ['X', 'Y', 'Z', 'RX', 'RY', 'RZ']
 const JOINT_AXES = ['J1', 'J2', 'J3', 'J4', 'J5', 'J6']
+const TIP_AXES = ['TIP_X', 'TIP_Y', 'TIP_Z']
+const TIP_OFFSET_LOCAL_MM = [-89.9, -7.7, 68.6]
 const LOG_MAX = 200
 const STATUS_POLL_MS = 1500
+
+function rotateZYX(vector, rx, ry, rz) {
+  const x = Number(rx) * Math.PI / 180
+  const y = Number(ry) * Math.PI / 180
+  const z = Number(rz) * Math.PI / 180
+  const sx = Math.sin(x); const cx = Math.cos(x)
+  const sy = Math.sin(y); const cy = Math.cos(y)
+  const sz = Math.sin(z); const cz = Math.cos(z)
+  return [
+    cz * cy * vector[0] + (cz * sy * sx - sz * cx) * vector[1] + (cz * sy * cx + sz * sx) * vector[2],
+    sz * cy * vector[0] + (sz * sy * sx + cz * cx) * vector[1] + (sz * sy * cx - cz * sx) * vector[2],
+    -sy * vector[0] + cy * sx * vector[1] + cy * cx * vector[2],
+  ]
+}
+
+function inverseRotateZYX(vector, rx, ry, rz) {
+  const x = Number(rx) * Math.PI / 180
+  const y = Number(ry) * Math.PI / 180
+  const z = Number(rz) * Math.PI / 180
+  const sx = Math.sin(x); const cx = Math.cos(x)
+  const sy = Math.sin(y); const cy = Math.cos(y)
+  const sz = Math.sin(z); const cz = Math.cos(z)
+  const m00 = cz * cy
+  const m01 = cz * sy * sx - sz * cx
+  const m02 = cz * sy * cx + sz * sx
+  const m10 = sz * cy
+  const m11 = sz * sy * sx + cz * cx
+  const m12 = sz * sy * cx - cz * sx
+  const m20 = -sy
+  const m21 = cy * sx
+  const m22 = cy * cx
+  return [
+    m00 * vector[0] + m10 * vector[1] + m20 * vector[2],
+    m01 * vector[0] + m11 * vector[1] + m21 * vector[2],
+    m02 * vector[0] + m12 * vector[1] + m22 * vector[2],
+  ]
+}
 
 // ── Jog Button Group ──────────────────────────────────────────────────────────
 const JogGroup = ({ axes, onMove, disabled }) => (
@@ -148,6 +187,7 @@ const DobotControllerPage = () => {
   const [joints, setJoints] = useState({ J1: 0, J2: 0, J3: 0, J4: 0, J5: 0, J6: 0 })
   const [isCoordEditing, setIsCoordEditing] = useState(false)
   const [manualTargetDraft, setManualTargetDraft] = useState(null)
+  const [manualTargetOriginal, setManualTargetOriginal] = useState(null)
   const [lastMoved, setLastMoved] = useState(null)
 
   // ── Action statuses ───────────────────────────────────────────────────────
@@ -627,10 +667,10 @@ const DobotControllerPage = () => {
     setMoveToError(null)
     try {
       const body = {
-        mode: moveMode,
+        mode: poseOverride?.mode || moveMode,
         speed: Math.max(1, Math.min(100, speed || 20)),
       }
-      if (moveMode === 'joint' && poseToMove.joints) {
+      if (body.mode === 'joint' && poseToMove.joints) {
         body.joints = poseToMove.joints
       } else {
         body.x  = poseToMove.x;  body.y  = poseToMove.y;  body.z  = poseToMove.z
@@ -648,6 +688,7 @@ const DobotControllerPage = () => {
         if (poseOverride) {
           setIsCoordEditing(false)
           setManualTargetDraft(null)
+          setManualTargetOriginal(null)
         }
         // Resume auto-sync after brief delay so position readout updates
         setTimeout(() => { setGetCoordinatesEnabled(true); setTimeout(fetchStatus, 800) }, 800)
@@ -664,10 +705,20 @@ const DobotControllerPage = () => {
     }
   }, [targetPose, connected, moveMode, speed, fetchStatus])
 
+  const loadCurrentCoordDraft = () => {
+    const current = {
+      ...pos,
+      ...joints,
+      TIP_X: tipPos.X,
+      TIP_Y: tipPos.Y,
+      TIP_Z: tipPos.Z,
+    }
+    setManualTargetOriginal(current)
+    setManualTargetDraft(Object.fromEntries(Object.entries(current).map(([key, value]) => [key, String(value)])))
+  }
+
   const startCoordEditing = () => {
-    setManualTargetDraft(Object.fromEntries(
-      [...Object.entries(pos), ...Object.entries(joints)].map(([key, value]) => [key, String(value)]),
-    ))
+    loadCurrentCoordDraft()
     setMoveToStatus(null)
     setMoveToError(null)
     setIsCoordEditing(true)
@@ -678,9 +729,10 @@ const DobotControllerPage = () => {
   }
 
   const handleSaveManualTarget = () => {
-    const keys = moveMode === 'joint'
+    const tipEdited = TIP_AXES.some((key) => Number(manualTargetDraft?.[key]) !== Number(manualTargetOriginal?.[key]))
+    const keys = moveMode === 'joint' && !tipEdited
       ? JOINT_AXES
-      : ['X', 'Y', 'Z', 'RX', 'RY', 'RZ']
+      : ['X', 'Y', 'Z', 'RX', 'RY', 'RZ', ...TIP_AXES]
     const values = keys.map((key) => {
       const value = manualTargetDraft?.[key]
       return value === '' || value === undefined ? NaN : Number(value)
@@ -691,11 +743,33 @@ const DobotControllerPage = () => {
       return
     }
 
-    const pose = moveMode === 'joint'
-      ? { joints: values }
-      : { x: values[0], y: values[1], z: values[2], rx: values[3], ry: values[4], rz: values[5] }
+    let pose
+    if (moveMode === 'joint' && !tipEdited) {
+      pose = { joints: values }
+    } else {
+      const cartValues = moveMode === 'joint' ? ['X', 'Y', 'Z', 'RX', 'RY', 'RZ'].map((key) => Number(manualTargetDraft[key])) : values.slice(0, 6)
+      let [x, y, z] = cartValues
+      const [rx, ry, rz] = cartValues.slice(3, 6)
+      if (tipEdited) {
+        const original = manualTargetOriginal
+        const worldOffset = [
+          Number(original.TIP_X) - Number(original.X),
+          Number(original.TIP_Y) - Number(original.Y),
+          Number(original.TIP_Z) - Number(original.Z),
+        ]
+        const localOffset = inverseRotateZYX(worldOffset, original.RX, original.RY, original.RZ)
+        const targetOffset = rotateZYX(localOffset, rx, ry, rz)
+        const tip = TIP_AXES.map((key) => Number(manualTargetDraft[key]))
+        ;[x, y, z] = tip.map((value, index) => value - targetOffset[index])
+      }
+      pose = { x, y, z, rx, ry, rz, ...(tipEdited ? { mode: 'movl' } : {}) }
+    }
     handleMoveTo(pose)
   }
+
+  const tipTargetIsEdited = isCoordEditing && TIP_AXES.some(
+    (key) => Number(manualTargetDraft?.[key]) !== Number(manualTargetOriginal?.[key]),
+  )
 
   // ── Snap current 3D model position (sets targetPose + appends to snapList) ──
   const handleSnapPos = useCallback(() => {
@@ -1054,7 +1128,7 @@ const DobotControllerPage = () => {
                       type="button"
                       className="coord-edit-toggle"
                       onClick={isCoordEditing
-                        ? () => { setIsCoordEditing(false); setManualTargetDraft(null); setMoveToError(null) }
+                        ? () => { setIsCoordEditing(false); setManualTargetDraft(null); setManualTargetOriginal(null); setMoveToError(null) }
                         : startCoordEditing}
                       disabled={!connected || moveToLoading}
                       title={isCoordEditing ? 'Cancel coordinate editing' : 'Edit Cartesian and joint coordinates'}
@@ -1089,7 +1163,16 @@ const DobotControllerPage = () => {
                     {Object.entries(tipPos).map(([k, v]) => (
                       <div key={k} className="coord-item">
                         <span className="coord-axis">{k}</span>
-                        <span className="coord-val">{v.toFixed(2)}</span>
+                        {isCoordEditing ? (
+                          <input
+                            className="coord-edit-input"
+                            type="number"
+                            step="any"
+                            value={manualTargetDraft?.[`TIP_${k}`] ?? ''}
+                            onChange={(event) => handleManualTargetChange(`TIP_${k}`, event.target.value)}
+                            aria-label={`Target tool tip ${k}`}
+                          />
+                        ) : <span className="coord-val">{v.toFixed(2)}</span>}
                       </div>
                     ))}
                   </div>
@@ -1119,13 +1202,11 @@ const DobotControllerPage = () => {
                 </div>
                 {isCoordEditing && (
                   <div className="coord-edit-actions">
-                    <span>Save mode: <strong>{moveMode.toUpperCase()}</strong></span>
+                    <span>Save mode: <strong>{tipTargetIsEdited ? 'MOVL · TIP target' : moveMode.toUpperCase()}</strong></span>
                     <button
                       type="button"
                       className="reset-target-btn"
-                      onClick={() => setManualTargetDraft(Object.fromEntries(
-                        [...Object.entries(pos), ...Object.entries(joints)].map(([key, value]) => [key, String(value)]),
-                      ))}
+                      onClick={loadCurrentCoordDraft}
                       title="Discard typed values and reload current robot coordinates"
                     >Current</button>
                     <button
