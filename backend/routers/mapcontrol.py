@@ -40,10 +40,17 @@ from maps_point.align import AppState, do_align, start_tracking_thread
 from maps_point.motion import do_goto, pixel_to_world_xy
 from maps_point import floorcalib
 from maps_point.planegrid import (do_draw, validate_grid, project_grid_2d,
-                                  bilinear_cell, grid_pose, draw_stats)
+                                  bilinear_cell, grid_pose, draw_stats,
+                                  grid_fingerprint, pose_read_is_plausible,
+                                  report_missing_codes)
 from maps_point.render import draw_overlay
 
 router = APIRouter(prefix="/api/map", tags=["MapControl"])
+
+# Grid Mapping test points the experiment form's rows 40-44 expect. Mirrors
+# TEST_POINT_POSITIONS in the Draw page; the UI is what actually gates the
+# download on covering all of them, since only it knows the canonical list.
+TEST_POINTS_EXPECTED = 5
 
 # Module-level singletons — same as maps_point/main.py globals.
 robot = Robot(ROBOT_IP)
@@ -1635,17 +1642,25 @@ def api_grid_test_point(request: Request, body: GridTestPointBody):
         return {"ok": False, "error": "u and v must be within [0,1]"}
     computed = grid_pose(u, v, state.grid_points, state.grid_rows, state.grid_cols)
     actual = robot.get_pose()
+    # get_pose() never raises — it returns [0.0]*6 on ANY dashboard failure
+    # (robot.py:160-168), which this endpoint used to record as a real
+    # ~400mm deviation and feed straight into sheet 05's Max/RMSE.
+    if not pose_read_is_plausible(actual, state.grid_points):
+        return {"ok": False, "error": "pose read unavailable — nothing recorded"}
     err = [computed[i] - actual[i] for i in range(3)]
     rec = {"index": len(state.test_points) + 1, "u": u, "v": v,
            "computed": [round(c, 2) for c in computed],
            "actual": [round(a, 2) for a in actual],
            "error": [round(e, 3) for e in err],
            "deviation_mm": round(math.sqrt(sum(e * e for e in err)), 3),
-           "recorded_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+           "recorded_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+           "source": "manual",
+           "grid_fingerprint": grid_fingerprint(state.grid_points)}
     state.test_points.append(rec)
     _log_user_event(request, "draw", "test_point",
                     f"u={u:.3f} v={v:.3f} dev={rec['deviation_mm']:.2f}mm")
     return {"ok": True, "test_point": rec, "count": len(state.test_points),
+            "expected": TEST_POINTS_EXPECTED,
             "aggregates": _test_aggregates(state.test_points)}
 
 
@@ -1667,9 +1682,27 @@ def api_test_report(user: User = Depends(get_current_user)):
     marked = _grid_fully_marked()
     validate = validate_grid(state.grid_points, rows, cols) if marked else None
     stats = dict(getattr(state, "last_draw_stats", None) or {})
+
+    # The 2026-10-05 capture came back with test_points: [] and every
+    # aggregate null and said nothing about which it meant, so an unfinished
+    # run was indistinguishable from a broken one. These codes make the gap
+    # explicit so the UI can refuse the download instead of shipping a
+    # half-empty experiment form.
+    # The 2026-10-05 capture came back with test_points: [] and every
+    # aggregate null and said nothing about which it meant, so an unfinished
+    # run was indistinguishable from a broken one. These codes make the gap
+    # explicit so the UI can refuse the download instead of shipping a
+    # half-empty experiment form.
+    missing = report_missing_codes(marked, state.grid_points,
+                                   state.test_points, stats)
+    fingerprint = grid_fingerprint(state.grid_points)
+    recorded = len(state.test_points)
+
     return {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "tester": getattr(user, "username", None),
+        "complete": not missing,
+        "missing": missing,
         "sheet_05_grid_mapping": {
             "grid_size": f"{rows}x{cols}",
             "grid_rows": rows,
@@ -1683,6 +1716,12 @@ def api_test_report(user: User = Depends(get_current_user)):
             "grid_warnings": validate["warnings"] if validate else None,
             "test_points": state.test_points,
             "aggregates": _test_aggregates(state.test_points),
+            "grid_fingerprint": fingerprint,
+            "test_points_expected": TEST_POINTS_EXPECTED,
+            "test_points_recorded": recorded,
+            "test_points_status": ("not_recorded" if not recorded else
+                                   "complete" if recorded >= TEST_POINTS_EXPECTED
+                                   else "partial"),
         },
         "sheet_09_drawing": {
             "grid_size": f"{rows}x{cols}",
@@ -1691,7 +1730,13 @@ def api_test_report(user: User = Depends(get_current_user)):
             "points_after_reduction": stats.get("points_after"),
             "waypoints_3d_path": stats.get("waypoints"),
             "path_length_mm": stats.get("path_length_mm"),
+            "total_travel_mm": stats.get("total_travel_mm"),
+            "drawn_path_length_mm": stats.get("drawn_path_length_mm"),
             "per_stroke": stats.get("per_stroke"),
+            # Orientation is excluded from every error figure here: all four
+            # taught corners carry identical Rx/Ry/Rz, so it holds no
+            # grid-mapping information to measure.
+            "draw_end_check": stats.get("draw_end_check"),
             "execution": {k: stats.get(k) for k in
                           ("motion_mode", "cp_ratio", "lift_mm", "lift_transitions")},
             "result": stats.get("result"),

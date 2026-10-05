@@ -10,6 +10,7 @@ import {
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
 import { setStreamMode } from '../components/CameraStream'
+import { backendToolFor, evaluateReportGate } from './reportGate'
 
 // ─── Tool constants ────────────────────────────────────────────────────────────
 const TOOLS = {
@@ -72,6 +73,12 @@ const JogPillRow = ({ label, onMinus, onPlus, disabled, titleMinus, titlePlus })
 )
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+// A measurement that does not exist renders as an em dash, never as 0 — the
+// experiment form must not look like it holds a real zero where nothing was
+// measured.
+const fmtMm = (v, digits = 2) =>
+  (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(digits) : '—')
+
 function getCanvasPathData(fc) {
   return fc.getObjects().map((obj) => {
     const type = obj.type
@@ -82,6 +89,7 @@ function getCanvasPathData(fc) {
       const matrix = obj.calcTransformMatrix()
       return {
         ...base,
+        intendedTool: obj.intendedTool,
         points: obj.points.map((point) => {
           const x = point.x - obj.pathOffset.x
           const y = point.y - obj.pathOffset.y
@@ -275,6 +283,8 @@ const DrawingModePage = () => {
 const [markMode, setMarkMode] = useState(false)
 const [markClickMode, setMarkClickMode] = useState('mark')
 const [testPoints, setTestPoints] = useState([])
+  const [testAggregates, setTestAggregates] = useState(null)
+  const [reportGate, setReportGate] = useState(null)
 const [testReportBusy, setTestReportBusy] = useState(false)
   const [alignBusy, setAlignBusy] = useState(false)
   const [markGeom, setMarkGeom] = useState(null)
@@ -442,6 +452,11 @@ const [testReportBusy, setTestReportBusy] = useState(false)
           evented: false,
           objectCaching: false,
         })
+        // Fabric's own type cannot tell a rectangle from a circle — both are
+        // Polyline — so the tool that produced it is stashed here for
+        // backendToolFor() to send. Without it every shape is reported as
+        // freehand and reaches the backend's Douglas-Peucker simplifier.
+        polyline.intendedTool = activeTool
         fc.add(polyline)
         tempObjRef.current = polyline
       }
@@ -561,7 +576,7 @@ const [testReportBusy, setTestReportBusy] = useState(false)
         } else if (obj.type === 'polyline' && obj.points) {
           obj.points.forEach((point) => points.push([point.x / cw, point.y / ch]))
         }
-        return { tool: 'pen', points }
+        return { tool: backendToolFor(obj), points }
       }).filter(s => s.points.length > 0)
 
       if (strokes.length === 0) {
@@ -771,7 +786,22 @@ const [testReportBusy, setTestReportBusy] = useState(false)
       showTeachMsg('Mark request failed', 'error')
     }
     fetchTeachStatus()
-  }, [teachStatus, showTeachMsg, fetchTeachStatus])
+    refreshReportGate()
+  }, [teachStatus, showTeachMsg, fetchTeachStatus, refreshReportGate])
+
+  const refreshReportGate = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/map/test-report')
+      const data = await res.json()
+      setReportGate(evaluateReportGate({ report: data, positions: TEST_POINT_POSITIONS }))
+    } catch {
+      setReportGate(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (panelTab === 'grid' && teachConnected) refreshReportGate()
+  }, [panelTab, teachConnected, testPoints.length, refreshReportGate])
 
   // ── Grid Mapping test points + experiment-record download ────────────────
   const handleRecordTestPoint = useCallback(async (u, v) => {
@@ -785,13 +815,15 @@ const [testReportBusy, setTestReportBusy] = useState(false)
       const data = await res.json().catch(() => null)
       if (res.ok && data && data.ok) {
         setTestPoints((prev) => [...prev, data.test_point])
+        setTestAggregates(data.aggregates || null)
+        refreshReportGate()
       } else {
         showTeachMsg((data && data.error) || 'Record test point failed', 'error')
       }
     } catch {
       showTeachMsg('Record test point request failed', 'error')
     }
-  }, [teachStatus, showTeachMsg])
+  }, [teachStatus, showTeachMsg, refreshReportGate])
 
   const handleResetTestPoints = useCallback(async () => {
     try {
@@ -801,13 +833,20 @@ const [testReportBusy, setTestReportBusy] = useState(false)
     } catch {
       showTeachMsg('Reset test points failed', 'error')
     }
-  }, [showTeachMsg])
+    refreshReportGate()
+  }, [showTeachMsg, refreshReportGate])
 
   const handleDownloadReport = useCallback(async () => {
     setTestReportBusy(true)
     try {
       const res = await apiFetch('/api/map/test-report')
       const data = await res.json()
+      const gate = evaluateReportGate({ report: data, positions: TEST_POINT_POSITIONS })
+      setReportGate(gate)
+      if (!gate.canDownload) {
+        showTeachMsg(`ยังบันทึกไม่ได้ — ${gate.reasons.join(' / ')}`, 'error')
+        return
+      }
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
       const stamp = String(data.generated_at || '').replace(/\D/g, '') || 'report'
@@ -824,7 +863,7 @@ const [testReportBusy, setTestReportBusy] = useState(false)
     } finally {
       setTestReportBusy(false)
     }
-  }, [])
+  }, [showTeachMsg])
 
   const markCamW = (teachStatus && teachStatus.cam_w) || 848
   const markCamH = (teachStatus && teachStatus.cam_h) || 480
@@ -1758,7 +1797,7 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                             <div className="dm-panel-card-head">
                               <span className="dm-panel-card-title">Test Points &amp; Report</span>
                               <span style={{ fontSize: '10px', fontWeight: 700, color: '#059669' }}>
-                                {testPoints.length} recorded
+                                {reportGate ? `${reportGate.coverage.matchedCount}/${TEST_POINT_POSITIONS.length}` : `${testPoints.length}`} recorded
                               </span>
                             </div>
 
@@ -1767,7 +1806,7 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                             </div>
 
                             <div className="dm-teach-grid-actions">
-                              {TEST_POINT_POSITIONS.map((p) => (
+                              {TEST_POINT_POSITIONS.map((p, i) => (
                                 <button
                                   key={`${p.u}-${p.v}`}
                                   type="button"
@@ -1776,10 +1815,20 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                                   title={`บันทึกจุดทดสอบที่ u=${p.u}, v=${p.v}`}
                                   onClick={() => handleRecordTestPoint(p.u, p.v)}
                                 >
-                                  {p.label}
+                                  {reportGate?.coverage?.matched?.[i] ? '✓ ' : ''}{p.label}
                                 </button>
                               ))}
                             </div>
+
+                            {reportGate && (
+                              <div className="dm-teach-grid-status">
+                                {reportGate.canDownload
+                                  ? `✓ ครบ ${reportGate.coverage.matchedCount}/${TEST_POINT_POSITIONS.length} จุด — บันทึกไฟล์ได้`
+                                  : reportGate.reasons.map((reason) => (
+                                    <div key={reason}>{`✗ ${reason}`}</div>
+                                  ))}
+                              </div>
+                            )}
 
                             {testPoints.length > 0 && (
                               <div className="dm-teach-grid-status">
@@ -1789,6 +1838,16 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                                     {`ΔX=${t.error[0].toFixed(2)} ΔY=${t.error[1].toFixed(2)} ΔZ=${t.error[2].toFixed(2)} mm`}
                                   </div>
                                 ))}
+                              </div>
+                            )}
+
+                            {testAggregates && testAggregates.count > 0 && (
+                              <div className="dm-teach-grid-status">
+                                <div>
+                                  {`n=${testAggregates.count} · Max Δ ${fmtMm(testAggregates.max_error)}mm`
+                                    + ` · Mean ${fmtMm(testAggregates.mean_error)}mm`
+                                    + ` · RMSE ${fmtMm(testAggregates.rmse)}mm`}
+                                </div>
                               </div>
                             )}
 
