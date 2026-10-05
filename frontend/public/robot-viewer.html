@@ -299,10 +299,10 @@
     <div id="mount-tune">
         <div style="font-weight:600;margin-bottom:4px;font-size:11px;color:#9fd3ff;">Cam1 mount (flange → projector)
         </div>
-        <label>X <input type="range" id="mt-px" min="-2" max="2" step="0.001" value="0.1"><input type="number"
-                class="tune-num" id="mt-px-n" step="0.001" value="0.1"></label>
-        <label>Y <input type="range" id="mt-py" min="-2" max="2" step="0.001" value="0.134"><input type="number"
-                class="tune-num" id="mt-py-n" step="0.001" value="0.134"></label>
+        <label>X <input type="range" id="mt-px" min="-2" max="2" step="0.001" value="0.061"><input type="number"
+                class="tune-num" id="mt-px-n" step="0.001" value="0.061"></label>
+        <label>Y <input type="range" id="mt-py" min="-2" max="2" step="0.001" value="0.05"><input type="number"
+                class="tune-num" id="mt-py-n" step="0.001" value="0.05"></label>
         <label>Z <input type="range" id="mt-pz" min="-2" max="2" step="0.001" value="-0.017"><input type="number"
                 class="tune-num" id="mt-pz-n" step="0.001" value="-0.017"></label>
         <label>RotX <input type="range" id="mt-rx" min="-180" max="180" step="0.1" value="-178"><input type="number"
@@ -315,12 +315,12 @@
 
     <div id="cam2-tune">
         <div style="font-weight:600;margin-bottom:4px;font-size:11px;color:#9fd3ff;">Cam2 extrinsic (base)</div>
-        <label>X <input type="range" id="c2-px" min="-2" max="2" step="0.001" value="0.027"><input type="number"
-                class="tune-num" id="c2-px-n" step="0.001" value="0.027"></label>
-        <label>Y <input type="range" id="c2-py" min="-2" max="2" step="0.001" value="0.729"><input type="number"
-                class="tune-num" id="c2-py-n" step="0.001" value="0.729"></label>
-        <label>Z <input type="range" id="c2-pz" min="-2" max="2" step="0.001" value="0.88"><input type="number"
-                class="tune-num" id="c2-pz-n" step="0.001" value="0.88"></label>
+        <label>X <input type="range" id="c2-px" min="-2" max="2" step="0.001" value="-0.005"><input type="number"
+                class="tune-num" id="c2-px-n" step="0.001" value="-0.005"></label>
+        <label>Y <input type="range" id="c2-py" min="-2" max="2" step="0.001" value="0.740"><input type="number"
+                class="tune-num" id="c2-py-n" step="0.001" value="0.740"></label>
+        <label>Z <input type="range" id="c2-pz" min="-2" max="2" step="0.001" value="0.797"><input type="number"
+                class="tune-num" id="c2-pz-n" step="0.001" value="0.797"></label>
         <label>RotX <input type="range" id="c2-rx" min="-180" max="180" step="0.1" value="-74.3"><input type="number"
                 class="tune-num" id="c2-rx-n" step="0.1" value="-74.3"></label>
         <label>RotY <input type="range" id="c2-ry" min="-180" max="180" step="0.1" value="0"><input type="number"
@@ -817,7 +817,7 @@
         gizmoTip.position.set(0.0899, 0.0077, 0.0686);
         endEffector.add(gizmoTip);
 
-        const CAM_MOUNT_POS = new THREE.Vector3(0.1, 0.134, -0.017);
+        const CAM_MOUNT_POS = new THREE.Vector3(0.061, 0.05, -0.017);
         const CAM_MOUNT_ROT = new THREE.Euler(-178 * Math.PI / 180, 0, 180 * Math.PI / 180);
         const PROJ_ROLL = Math.PI / 2;
         const projRollMat = new THREE.Matrix4().makeRotationZ(PROJ_ROLL);

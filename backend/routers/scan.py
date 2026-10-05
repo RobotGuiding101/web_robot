@@ -106,11 +106,11 @@ def _mount_for(cam_index: int) -> np.ndarray:
         entry = ex.get("cam2_to_base")
         if entry:
             return _xyzrpy_to_T(entry)
-        return _xyzrpy_to_T({"xyz": [0.027, 0.729, 0.88], "rpy": [-74.3, 0, 0]})
+        return _xyzrpy_to_T({"xyz": [-0.005, 0.740, 0.797], "rpy": [-74.3, 0, 0]})
     entry = ex.get("cam1_to_flange")
     if entry:
         return _xyzrpy_to_T(entry)
-    return _xyzrpy_to_T({"xyz": [0.1, 0.134, -0.017], "rpy": [-178, 0, 180]})
+    return _xyzrpy_to_T({"xyz": [0.061, 0.05, -0.017], "rpy": [-178, 0, 180]})
 
 
 def _view_transform(cam_index: int, pose_mm_deg) -> np.ndarray:
