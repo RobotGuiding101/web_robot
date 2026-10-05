@@ -385,6 +385,105 @@ class TestReportMissingCodes:
         assert pg.report_missing_codes(True, GRID2, [stale], {}) == ["no_draw_stats"]
 
 
+class TestBuildTestReportPayload:
+    """The download contract, asserted on the assembled payload.
+
+    This is the only place the whole 13-field contract can be checked at
+    once — the endpoint itself is unreachable from tests because mapcontrol
+    imports sqlalchemy at module scope.
+    """
+
+    @staticmethod
+    def _stats(**extra):
+        base = pg.draw_stats([{"tool": "rect", "points": CLOSED_RECT}],
+                             GRID2, 2, 2, 15.0)
+        base.update(extra)
+        return base
+
+    @staticmethod
+    def _complete_session(**extra):
+        fp = pg.grid_fingerprint(GRID2)
+        points = [{"index": i + 1, "u": 0.5, "v": 0.5,
+                   "error": [0.1 * (i + 1), 0.05, -0.02],
+                   "grid_fingerprint": fp} for i in range(pg.TEST_POINTS_EXPECTED)]
+        return pg.build_test_report_payload(
+            GRID2, 2, 2, True, points, TestBuildTestReportPayload._stats(**extra),
+            "admin", "2026-10-05 23:21:42")
+
+    def test_all_thirteen_completeness_fields_are_present(self):
+        payload = self._complete_session(draw_end_check={"deviation_mm": 0.4})
+        sheet05, sheet09 = payload["sheet_05_grid_mapping"], payload["sheet_09_drawing"]
+        stroke = sheet09["per_stroke"][0]
+        for key in ("complete", "missing"):
+            assert key in payload, key
+        for key in ("grid_fingerprint", "test_points_expected",
+                    "test_points_recorded", "test_points_status"):
+            assert key in sheet05, key
+        for key in ("total_travel_mm", "drawn_path_length_mm", "draw_end_check"):
+            assert key in sheet09, key
+        for key in ("closed", "points_uv", "length_mm", "span_mm"):
+            assert key in stroke, key
+
+    def test_a_finished_session_is_complete(self):
+        payload = self._complete_session(draw_end_check={"deviation_mm": 0.4})
+        assert payload["complete"] is True
+        assert payload["missing"] == []
+        assert payload["sheet_05_grid_mapping"]["test_points_status"] == "complete"
+        assert payload["sheet_05_grid_mapping"]["test_points_recorded"] == 5
+        assert payload["sheet_05_grid_mapping"]["aggregates"]["count"] == 5
+
+    def test_an_untouched_session_names_what_is_missing(self):
+        payload = pg.build_test_report_payload(GRID2, 2, 2, True, [], {}, "admin", "now")
+        assert payload["complete"] is False
+        assert payload["missing"] == ["no_test_points", "no_draw_stats"]
+        assert payload["sheet_05_grid_mapping"]["test_points_status"] == "not_recorded"
+
+    def test_partial_coverage_is_reported_as_partial(self):
+        fp = pg.grid_fingerprint(GRID2)
+        two = [{"index": i, "u": 0.5, "v": 0.5, "error": [0.1, 0.1, 0.1],
+                "grid_fingerprint": fp} for i in (1, 2)]
+        payload = pg.build_test_report_payload(GRID2, 2, 2, True, two,
+                                              self._stats(), "admin", "now")
+        # Two measured points satisfy "some exist", so the server reports no
+        # gap — the UI is what blocks on the 5-position coverage.
+        assert payload["complete"] is True
+        assert payload["sheet_05_grid_mapping"]["test_points_status"] == "partial"
+
+    def test_unmarked_grid_hides_the_corners(self):
+        partial = [[P00, None], [None, P11]]
+        payload = pg.build_test_report_payload(partial, 2, 2, False, [], {},
+                                              "admin", "now")
+        assert "grid_not_marked" in payload["missing"]
+        assert payload["sheet_05_grid_mapping"]["grid_points"] is None
+        assert payload["sheet_05_grid_mapping"]["reference_point_count"] == 2
+
+    def test_aggregates_stay_empty_rather_than_zero(self):
+        payload = pg.build_test_report_payload(GRID2, 2, 2, True, [], {}, "admin", "now")
+        agg = payload["sheet_05_grid_mapping"]["aggregates"]
+        assert agg["count"] == 0 and agg["rmse"] is None and agg["max_error_x"] is None
+
+    def test_drawn_and_travel_are_reported_separately(self):
+        two = [{"tool": "rect", "points": CLOSED_RECT},
+               {"tool": "rect", "points": [(0.6, 0.6), (0.9, 0.6),
+                                           (0.9, 0.9), (0.6, 0.9), (0.6, 0.6)]}]
+        stats = pg.draw_stats(two, GRID2, 2, 2, 15.0)
+        payload = pg.build_test_report_payload(GRID2, 2, 2, True, [], stats,
+                                              "admin", "now")
+        s09 = payload["sheet_09_drawing"]
+        assert s09["drawn_path_length_mm"] < s09["total_travel_mm"]
+        assert s09["path_length_mm"] == s09["total_travel_mm"]
+
+    def test_draw_end_check_is_not_folded_into_the_sheet_05_aggregates(self):
+        # ServoP lags its target, so that deviation is tracking error and must
+        # never reach the grid-accuracy rows.
+        stats = self._stats(draw_end_check={"deviation_mm": 99.0})
+        payload = pg.build_test_report_payload(GRID2, 2, 2, True, [], stats,
+                                              "admin", "now")
+        assert payload["sheet_09_drawing"]["draw_end_check"]["deviation_mm"] == 99.0
+        assert payload["sheet_05_grid_mapping"]["test_points"] == []
+        assert payload["sheet_05_grid_mapping"]["aggregates"]["count"] == 0
+
+
 class _FakeRobot:
     """Enough Robot surface for do_draw(); no sockets, no hardware."""
 

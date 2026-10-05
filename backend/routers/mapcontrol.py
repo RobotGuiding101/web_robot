@@ -42,15 +42,11 @@ from maps_point import floorcalib
 from maps_point.planegrid import (do_draw, validate_grid, project_grid_2d,
                                   bilinear_cell, grid_pose, draw_stats,
                                   grid_fingerprint, pose_read_is_plausible,
-                                  report_missing_codes)
+                                  test_aggregates, build_test_report_payload,
+                                  TEST_POINTS_EXPECTED)
 from maps_point.render import draw_overlay
 
 router = APIRouter(prefix="/api/map", tags=["MapControl"])
-
-# Grid Mapping test points the experiment form's rows 40-44 expect. Mirrors
-# TEST_POINT_POSITIONS in the Draw page; the UI is what actually gates the
-# download on covering all of them, since only it knows the canonical list.
-TEST_POINTS_EXPECTED = 5
 
 # Module-level singletons — same as maps_point/main.py globals.
 robot = Robot(ROBOT_IP)
@@ -1592,40 +1588,6 @@ class GridTestPointBody(BaseModel):
     v: float
 
 
-def _test_aggregates(points: list) -> dict:
-    """Rows 40-44 of the Grid Mapping sheet (Maximum Error X/Y/Z, Mean Error,
-    RMSE) computed from the recorded test points.
-
-    Error is one-sided on purpose — computed minus actual — so a positive
-    number always means "the grid predicts the tool further out than where it
-    really was", which is the direction that matters when deciding whether the
-    taught plane or the jogging was off."""
-    rows = [p for p in points if p.get("error")]
-    if not rows:
-        return {"count": 0, "max_error_x": None, "max_error_y": None,
-                "max_error_z": None, "mean_error_x": None, "mean_error_y": None,
-                "mean_error_z": None, "mean_error": None, "rmse": None}
-    errs = [p["error"] for p in rows]
-    dist = [math.sqrt(sum(c * c for c in e)) for e in errs]
-    n = len(rows)
-    return {
-        "count": n,
-        "max_error_x": max(abs(e[0]) for e in errs),
-        "max_error_y": max(abs(e[1]) for e in errs),
-        "max_error_z": max(abs(e[2]) for e in errs),
-        "mean_error_x": sum(e[0] for e in errs) / n,
-        "mean_error_y": sum(e[1] for e in errs) / n,
-        "mean_error_z": sum(e[2] for e in errs) / n,
-        "mean_error": sum(dist) / n,
-        "rmse": math.sqrt(sum(d * d for d in dist) / (3 * n)),
-        "definitions": {
-            "error": "computed (bilinear over the taught grid) minus actual robot pose",
-            "mean_error": "mean of sqrt(Ex^2+Ey^2+Ez^2) across test points",
-            "rmse": "sqrt(sum(Ex^2+Ey^2+Ez^2) / (3n))",
-        },
-    }
-
-
 @router.post("/grid/test-point")
 def api_grid_test_point(request: Request, body: GridTestPointBody):
     """Record one Grid Mapping test point: the pose the taught grid predicts
@@ -1661,7 +1623,7 @@ def api_grid_test_point(request: Request, body: GridTestPointBody):
                     f"u={u:.3f} v={v:.3f} dev={rec['deviation_mm']:.2f}mm")
     return {"ok": True, "test_point": rec, "count": len(state.test_points),
             "expected": TEST_POINTS_EXPECTED,
-            "aggregates": _test_aggregates(state.test_points)}
+            "aggregates": test_aggregates(state.test_points)}
 
 
 @router.post("/grid/test-reset")
@@ -1677,71 +1639,15 @@ def api_test_report(user: User = Depends(get_current_user)):
     experiment record need, as one downloadable payload.
 
     Read-only snapshot — the operator already produced every number by
-    teaching the grid, jogging to each test point and pressing Send."""
-    rows, cols = state.grid_rows, state.grid_cols
-    marked = _grid_fully_marked()
-    validate = validate_grid(state.grid_points, rows, cols) if marked else None
-    stats = dict(getattr(state, "last_draw_stats", None) or {})
-
-    # The 2026-10-05 capture came back with test_points: [] and every
-    # aggregate null and said nothing about which it meant, so an unfinished
-    # run was indistinguishable from a broken one. These codes make the gap
-    # explicit so the UI can refuse the download instead of shipping a
-    # half-empty experiment form.
-    # The 2026-10-05 capture came back with test_points: [] and every
-    # aggregate null and said nothing about which it meant, so an unfinished
-    # run was indistinguishable from a broken one. These codes make the gap
-    # explicit so the UI can refuse the download instead of shipping a
-    # half-empty experiment form.
-    missing = report_missing_codes(marked, state.grid_points,
-                                   state.test_points, stats)
-    fingerprint = grid_fingerprint(state.grid_points)
-    recorded = len(state.test_points)
-
-    return {
-        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "tester": getattr(user, "username", None),
-        "complete": not missing,
-        "missing": missing,
-        "sheet_05_grid_mapping": {
-            "grid_size": f"{rows}x{cols}",
-            "grid_rows": rows,
-            "grid_cols": cols,
-            "reference_point_count": rows * cols if marked else
-                                     sum(1 for i in range(rows) for j in range(cols)
-                                         if state.grid_points[i][j] is not None),
-            "grid_points": state.grid_points if marked else None,
-            "plane_rmse_mm": validate["rmse_mm"] if validate else None,
-            "area_span_mm": validate["span_mm"] if validate else None,
-            "grid_warnings": validate["warnings"] if validate else None,
-            "test_points": state.test_points,
-            "aggregates": _test_aggregates(state.test_points),
-            "grid_fingerprint": fingerprint,
-            "test_points_expected": TEST_POINTS_EXPECTED,
-            "test_points_recorded": recorded,
-            "test_points_status": ("not_recorded" if not recorded else
-                                   "complete" if recorded >= TEST_POINTS_EXPECTED
-                                   else "partial"),
-        },
-        "sheet_09_drawing": {
-            "grid_size": f"{rows}x{cols}",
-            "stroke_count": stats.get("strokes"),
-            "points_before_reduction": stats.get("points_before"),
-            "points_after_reduction": stats.get("points_after"),
-            "waypoints_3d_path": stats.get("waypoints"),
-            "path_length_mm": stats.get("path_length_mm"),
-            "total_travel_mm": stats.get("total_travel_mm"),
-            "drawn_path_length_mm": stats.get("drawn_path_length_mm"),
-            "per_stroke": stats.get("per_stroke"),
-            # Orientation is excluded from every error figure here: all four
-            # taught corners carry identical Rx/Ry/Rz, so it holds no
-            # grid-mapping information to measure.
-            "draw_end_check": stats.get("draw_end_check"),
-            "execution": {k: stats.get(k) for k in
-                          ("motion_mode", "cp_ratio", "lift_mm", "lift_transitions")},
-            "result": stats.get("result"),
-        },
-    }
+    teaching the grid, jogging to each test point and pressing Send. The
+    payload itself is assembled by build_test_report_payload() so the
+    contract is testable without the HTTP layer."""
+    return build_test_report_payload(
+        state.grid_points, state.grid_rows, state.grid_cols,
+        _grid_fully_marked(), state.test_points,
+        dict(getattr(state, "last_draw_stats", None) or {}),
+        getattr(user, "username", None),
+        time.strftime("%Y-%m-%d %H:%M:%S"))
 
 
 class GridRestoreBody(BaseModel):
