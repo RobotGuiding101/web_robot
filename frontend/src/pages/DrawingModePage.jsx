@@ -767,6 +767,18 @@ const [testReportBusy, setTestReportBusy] = useState(false)
     fetchTeachStatus()
   }, [showTeachMsg, fetchTeachStatus])
 
+  const teachConnected = !!(teachStatus && teachStatus.connected)
+
+  const refreshReportGate = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/map/test-report')
+      const data = await res.json()
+      setReportGate(evaluateReportGate({ report: data, positions: TEST_POINT_POSITIONS }))
+    } catch {
+      setReportGate(null)
+    }
+  }, [])
+
   // ── Teach / Grid: record current pose into a cell (1-based row/col) ──────
   const handleMarkCell = useCallback(async (row, col) => {
     if (!teachStatus || !teachStatus.connected) return
@@ -788,16 +800,6 @@ const [testReportBusy, setTestReportBusy] = useState(false)
     fetchTeachStatus()
     refreshReportGate()
   }, [teachStatus, showTeachMsg, fetchTeachStatus, refreshReportGate])
-
-  const refreshReportGate = useCallback(async () => {
-    try {
-      const res = await apiFetch('/api/map/test-report')
-      const data = await res.json()
-      setReportGate(evaluateReportGate({ report: data, positions: TEST_POINT_POSITIONS }))
-    } catch {
-      setReportGate(null)
-    }
-  }, [])
 
   useEffect(() => {
     if (panelTab === 'grid' && teachConnected) refreshReportGate()
@@ -868,8 +870,15 @@ const [testReportBusy, setTestReportBusy] = useState(false)
   const markCamW = (teachStatus && teachStatus.cam_w) || 848
   const markCamH = (teachStatus && teachStatus.cam_h) || 480
   const markPoints = (teachStatus && Array.isArray(teachStatus.points)) ? teachStatus.points : []
-  const markReady = !!(teachStatus && teachStatus.connected && teachStatus.camera_running)
-  const canMark = !!(markReady && markGeom && markMode)
+  const teachRobotEnabled = !!(teachStatus && teachStatus.robot_enabled)
+  const teachRobotCanMove = teachConnected && teachRobotEnabled
+  const cameraReady = !!(teachStatus && teachStatus.camera_running)
+  const robotBusy = !!(teachStatus && (
+    teachStatus.align_running || teachStatus.draw_running || teachStatus.sequence_running
+  ))
+  const markReady = teachConnected && cameraReady
+  const canMark = !!(markReady && markGeom && markMode && !robotBusy
+    && (markClickMode !== 'goto' || teachRobotEnabled))
   const fmtMark = (v, d = 2) => (v === null || v === undefined ? '—' : Number(v).toFixed(d))
 
   const measureMark = useCallback(() => {
@@ -1127,7 +1136,6 @@ const [testReportBusy, setTestReportBusy] = useState(false)
   }, [showTeachMsg, fetchTeachStatus])
 
   // ── Teach / Grid: derived view data ──────────────────────────────────────
-  const teachConnected = !!(teachStatus && teachStatus.connected)
   const teachPose = (teachStatus && Array.isArray(teachStatus.pose)) ? teachStatus.pose : null
   const gRows = (teachStatus && teachStatus.grid_rows) || gridRows
   const gCols = (teachStatus && teachStatus.grid_cols) || gridCols
@@ -1141,6 +1149,49 @@ const [testReportBusy, setTestReportBusy] = useState(false)
       if (Array.isArray(row)) row.forEach((p) => { if (p) markedCount += 1 })
     })
   }
+  const gridComplete = Array.isArray(gridPoints)
+    && gridPoints.length === gRows
+    && gridPoints.every((row) => Array.isArray(row) && row.length === gCols && row.every(Boolean))
+  const gridTooSmall = !!(gridComplete && gridValidate && Array.isArray(gridValidate.warnings)
+    && gridValidate.warnings.some((warning) => /no size/i.test(warning)))
+  const drawPrerequisite = !teachConnected
+    ? 'Connect and initialize the robot first.'
+    : !teachRobotEnabled
+      ? 'Robot is connected but disabled; press Init/Enable before drawing.'
+    : !gridComplete
+      ? `Mark all ${gRows * gCols} grid cells first (${markedCount}/${gRows * gCols}).`
+      : gridTooSmall
+        ? 'Grid span is too small; teach points farther apart.'
+        : objectCount === 0
+          ? 'Draw at least one path on the canvas first.'
+          : robotBusy
+            ? 'Wait until the current robot motion finishes.'
+            : 'Ready to send.'
+  const alignPrerequisite = !teachConnected || !cameraReady
+    ? 'Connect the robot and start the camera before marking or aligning.'
+    : !teachRobotEnabled
+      ? 'Enable the robot before alignment can move it.'
+    : markPoints.length < 4
+      ? `Mark 4 image corners before Align (${markPoints.length}/4).`
+      : robotBusy
+        ? 'Wait until the current robot motion finishes.'
+        : 'Ready to align.'
+  const autoFillPrerequisite = !teachConnected || !cameraReady
+    ? 'Robot and camera must be connected.'
+    : markPoints.length < 4
+      ? `Mark 4 image corners first (${markPoints.length}/4).`
+      : robotBusy
+        ? 'Wait until robot motion finishes.'
+      : 'Requires valid depth and camera intrinsics at all 4 corners.'
+  const surfaceZPrerequisite = !teachConnected || !cameraReady
+    ? 'Robot and camera must be connected.'
+    : !gridComplete
+      ? `Mark all ${gRows * gCols} grid cells first (${markedCount}/${gRows * gCols}).`
+      : !(teachStatus && Number(teachStatus.last_center_depth) > 0)
+        ? 'Mark the object in the live image to obtain a valid depth reading.'
+        : robotBusy
+          ? 'Wait until robot motion finishes.'
+          : 'For accurate surface Z, align the camera square to the work surface first.'
 
   // Grid shape preview geometry — port of the legacy 200x200 / 20px-padding scaling
   let gridShapeEls = null
@@ -1220,11 +1271,13 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                 <div
                   className="dm-mark-hit"
                   style={{
-                    pointerEvents: markMode ? 'auto' : 'none',
-                    cursor: canMark ? 'crosshair' : 'default',
+                    pointerEvents: canMark && !robotBusy ? 'auto' : 'none',
+                    cursor: canMark && !robotBusy ? 'crosshair' : 'default',
                   }}
                   onClick={handleMarkClick}
-                  title={markMode ? (markClickMode === 'mark' ? 'คลิกเพื่อเพิ่มจุดมุมวัตถุ' : 'คลิกเพื่อสั่งหุ่นไปจุดนั้น') : undefined}
+                  title={markMode
+                    ? (robotBusy ? 'Wait for current robot motion to finish' : !markReady ? 'Robot and camera must be ready' : (markClickMode === 'mark' ? 'Click to add an image corner point' : 'Click to move robot to that pixel'))
+                    : undefined}
                 />
                 {markMode && markGeom && markPoints.map(([px, py], i) => (
                   <div
@@ -1435,7 +1488,8 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                             type="button"
                             className={`dm-quick-btn dm-quick-btn--secondary${errorStatus === 'ok' ? ' dm-quick-btn--ok' : ''}${errorStatus === 'error' ? ' dm-quick-btn--error' : ''}`}
                             onClick={handleClearError}
-                            title="Clear robot errors and reset alarms"
+                            disabled={!teachConnected}
+                            title={!teachConnected ? 'Connect to the robot controller first' : 'Clear controller errors and reset alarms'}
                           >
                             {errorStatus === 'ok' ? 'Cleared' : errorStatus === 'error' ? 'Error' : 'Clear Error'}
                           </button>
@@ -1443,8 +1497,8 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                             type="button"
                             className={`dm-quick-btn${initLoading ? ' dm-quick-btn--loading' : ''}${initStatus === 'ok' ? ' dm-quick-btn--ok' : ''}${initStatus === 'error' ? ' dm-quick-btn--error' : ''}`}
                             onClick={handleInit}
-                            disabled={initLoading}
-                            title="Connect and initialize / enable robot motors"
+                            disabled={initLoading || robotBusy}
+                            title={robotBusy ? 'Wait until robot motion finishes before Init' : 'Connect, power on, and enable robot motors'}
                           >
                             {initLoading ? <><span className="init-btn-spinner" /> Initing…</> : initStatus === 'ok' ? 'Ready' : initStatus === 'error' ? 'Error' : 'Init'}
                           </button>
@@ -1452,11 +1506,20 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                             type="button"
                             className={`dm-quick-btn${homeLoading ? ' dm-quick-btn--loading' : ''}${homeStatus === 'ok' ? ' dm-quick-btn--ok' : ''}${homeStatus === 'error' ? ' dm-quick-btn--error' : ''}`}
                             onClick={handleGoHome}
-                            disabled={homeLoading || !teachConnected}
-                            title="Send robot to Home position"
+                            disabled={homeLoading || !teachRobotCanMove || robotBusy}
+                            title={!teachConnected ? 'Connect and initialize the robot first' : !teachRobotEnabled ? 'Enable robot servos first' : robotBusy ? 'Wait until robot motion finishes' : 'Requires a Home pose configured in settings'}
                           >
                             {homeLoading ? <><span className="init-btn-spinner" /> Homing…</> : homeStatus === 'ok' ? 'Homed' : homeStatus === 'error' ? 'Error' : 'Home'}
                           </button>
+                        </div>
+                        <div className="dm-action-prereq">
+                          {!teachConnected
+                            ? 'Before robot actions: press Init to connect, power on, and enable the robot.'
+                            : !teachRobotEnabled
+                              ? 'Robot is connected but disabled. Jog, Goto, Align, Home, and Draw require Init/Enable first.'
+                            : robotBusy
+                              ? 'Robot is busy; wait for the current motion to finish before Init, Home, Jog, Align, or Draw.'
+                              : 'Robot connected. Home additionally needs a Home pose configured in settings.'}
                         </div>
                       </div>
 
@@ -1470,7 +1533,8 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                                 type="button"
                                 className={`dm-mark-toggle${markMode ? ' active' : ''}`}
                                 onClick={() => setMarkMode((v) => !v)}
-                                disabled={!markReady}
+                                disabled={!markReady || robotBusy}
+                                title={!markReady ? 'Robot and camera must be ready' : robotBusy ? 'Wait for current robot motion to finish' : 'Enable/disable image point marking'}
                               >
                                 {markMode ? 'Mark ON' : 'Mark OFF'}
                               </button>
@@ -1481,7 +1545,8 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                                 type="button"
                                 className={`dm-mark-mode${markClickMode === 'mark' ? ' active' : ''}`}
                                 onClick={() => setMarkClickMode('mark')}
-                                disabled={!markReady}
+                                disabled={!markReady || robotBusy}
+                                title="Requires connected robot and running camera"
                               >
                                 Mark Corners
                               </button>
@@ -1489,7 +1554,8 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                                 type="button"
                                 className={`dm-mark-mode${markClickMode === 'goto' ? ' active' : ''}`}
                                 onClick={() => setMarkClickMode('goto')}
-                                disabled={!markReady}
+                                disabled={!markReady || !teachRobotEnabled || robotBusy}
+                                title={!markReady ? 'Connect robot and start camera first' : !teachRobotEnabled ? 'Enable robot servos before Goto' : robotBusy ? 'Wait for current motion to finish' : 'Moves arm to clicked pixel'}
                               >
                                 Goto Position
                               </button>
@@ -1497,7 +1563,11 @@ const [testReportBusy, setTestReportBusy] = useState(false)
 
                             <div className="dm-mark-hint">
                               {!markReady
-                                ? 'Robot / Camera ไม่พร้อมใช้งาน'
+                                ? 'Prerequisite: connect and initialize robot, then start camera.'
+                                : !teachRobotEnabled
+                                  ? 'Prerequisite: enable robot servos before Align or Goto.'
+                                : robotBusy
+                                  ? 'Prerequisite: wait for current robot motion to finish.'
                                 : markMode
                                   ? (markClickMode === 'mark'
                                     ? 'คลิกบนภาพ 4 จุด (มุมวัตถุ) แล้วกด Align · วาดภาพถูกปิดชั่วคราว'
@@ -1510,7 +1580,8 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                                 type="button"
                                 className="dm-mark-btn"
                                 onClick={() => alignAction('/api/map/reset_points', 'Points cleared')}
-                                disabled={!markReady || alignBusy}
+                                disabled={robotBusy || alignBusy || markPoints.length === 0}
+                                title={robotBusy ? 'Wait for current robot motion to finish' : markPoints.length === 0 ? 'No alignment points to clear' : 'Clear the alignment image points; no robot/camera connection required'}
                               >
                                 Reset
                               </button>
@@ -1518,7 +1589,8 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                                 type="button"
                                 className="dm-mark-btn dm-mark-btn--primary"
                                 onClick={() => alignAction('/api/map/align', 'Align started')}
-                                disabled={!markReady || alignBusy || !!(teachStatus && teachStatus.align_running) || markPoints.length < 4}
+                                disabled={!markReady || !teachRobotEnabled || alignBusy || robotBusy || markPoints.length < 4}
+                                title={alignPrerequisite}
                               >
                                 Align
                               </button>
@@ -1526,11 +1598,13 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                                 type="button"
                                 className="dm-mark-btn dm-mark-btn--danger"
                                 onClick={() => alignAction('/api/map/align/stop', 'Stop requested')}
-                                disabled={!markReady || alignBusy || !(teachStatus && teachStatus.align_running)}
+                                disabled={alignBusy || !(teachStatus && teachStatus.align_running)}
+                                title={teachStatus && teachStatus.align_running ? 'Stop the running alignment' : 'Available only while Align is running'}
                               >
                                 Stop
                               </button>
                             </div>
+                            <div className="dm-action-prereq">{alignPrerequisite}</div>
 
                             <div className="dm-align-stats dm-align-stats--rmse">
                               <div className="dm-align-stat-box">
@@ -1625,7 +1699,8 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                                 type="button"
                                 className="frame-apply"
                                 onClick={handleApplyFrame}
-                                disabled={!teachConnected}
+                                disabled={!teachConnected || robotBusy}
+                                title={!teachConnected ? 'Connect and initialize the robot first' : robotBusy ? 'Wait until robot motion finishes before changing frames' : 'Apply selected Tool/User frame'}
                               >
                                 Apply
                               </button>
@@ -1674,13 +1749,16 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                                 />
                               </label>
                             </div>
+                            <div className="dm-action-prereq">
+                              Set Grid only applies the selected dimensions; changing size clears existing marks and asks for confirmation. Reset Grid clears all marks. Neither action moves the robot or requires a connection.
+                            </div>
 
                             <div className="dm-teach-grid-actions">
                               <button
                                 type="button"
                                 className="dm-teach-action-btn"
-                                disabled={!teachConnected}
-                                title={teachConnected ? 'Apply grid size' : 'Robot not connected'}
+                                disabled={robotBusy}
+                                title={robotBusy ? 'Wait until robot motion finishes before changing the grid' : 'Apply selected rows/columns; changing size clears existing marks. No robot connection required'}
                                 onClick={handleSetGrid}
                               >
                                 Set Grid
@@ -1688,8 +1766,8 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                               <button
                                 type="button"
                                 className="dm-teach-action-btn dm-teach-action-btn--danger"
-                                disabled={!teachConnected}
-                                title={teachConnected ? 'Clear all taught points' : 'Robot not connected'}
+                                disabled={robotBusy}
+                                title={robotBusy ? 'Wait until robot motion finishes before resetting the grid' : 'Clear all taught grid points. No robot connection required'}
                                 onClick={handleResetGrid}
                               >
                                 Reset Grid
@@ -1699,10 +1777,8 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                             <button
                               type="button"
                               className="dm-teach-autofill-btn"
-                              disabled={!teachConnected || markPoints.length < 4}
-                              title={markPoints.length < 4
-                                ? 'Mark 4 corner points on the image (Align Points) first'
-                                : 'Jog Z down until the pen touches the surface FIRST, then click — the grid inherits the current Z'}
+                              disabled={!teachConnected || !cameraReady || markPoints.length < 4 || robotBusy}
+                              title={autoFillPrerequisite}
                               onClick={handleAutoFillGrid}
                             >
                               Auto-fill grid from 4 mark points
@@ -1711,8 +1787,8 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                             <button
                               type="button"
                               className="dm-teach-surfacez-btn"
-                              disabled={!teachConnected || markedCount === 0}
-                              title="Compute the surface Z from the LIVE camera depth (run Align first) and drop the grid onto it — no jogging. The next Send descends ~that far."
+                              disabled={!teachConnected || !cameraReady || !gridComplete || !(teachStatus && Number(teachStatus.last_center_depth) > 0) || robotBusy}
+                              title={surfaceZPrerequisite}
                               onClick={handleGridSurfaceZ}
                             >
                               {`↧ Grid Z = measured surface (auto)${teachStatus && teachStatus.last_center_depth ? ` · depth ${Number(teachStatus.last_center_depth).toFixed(0)}mm` : ''}`}
@@ -1721,8 +1797,8 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                             <button
                               type="button"
                               className="dm-teach-setz-btn"
-                              disabled={!teachConnected || markedCount === 0}
-                              title="Jog Z down until the pen touches the surface FIRST, then press — keeps the grid X/Y and takes this Z"
+                              disabled={!teachConnected || !gridComplete || robotBusy}
+                              title={!teachConnected ? 'Connect and initialize the robot first' : !gridComplete ? `Mark all ${gRows * gCols} grid cells first (${markedCount}/${gRows * gCols})` : robotBusy ? 'Wait until robot motion finishes' : 'Jog Z until the pen touches the surface, then apply current Z to all grid cells'}
                               onClick={handleSetGridZ}
                             >
                               ↧ Grid Z = current Z (jog to surface first)
@@ -1732,16 +1808,16 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                               <button
                                 type="button"
                                 className="dm-teach-surfacez-btn"
-                                disabled={!teachConnected || markedCount === 0}
-                                title="Apply the surface Z configured in backend/.maps_point.env (Z_SURFACE) to every grid cell — no jogging needed"
+                                disabled={!teachConnected || !gridComplete || robotBusy}
+                                title={!teachConnected ? 'Connect and initialize the robot first' : !gridComplete ? `Mark all ${gRows * gCols} grid cells first (${markedCount}/${gRows * gCols})` : robotBusy ? 'Wait until robot motion finishes' : 'Apply configured Z_SURFACE to all grid cells'}
                                 onClick={handleSetGridZSurface}
                               >
                                 {`↧ Grid Z = surface (${teachStatus.z_surface.toFixed(1)}mm, configured)`}
                               </button>
                             )}
 
-                            <div className="dm-teach-hint">
-                              jog Z ลงให้ปากกาแตะผิวงานก่อน แล้วกด Auto-fill · หรือ jog ไปมุมจริงแล้วกดปุ่มช่องนั้น
+                            <div className="dm-action-prereq">
+                              Auto-fill: {autoFillPrerequisite} Current/Configured Grid Z: connect robot and mark all {gRows * gCols} cells. Surface Z additionally needs camera + live depth, and camera alignment is recommended.
                             </div>
                           </div>
 
@@ -1762,8 +1838,8 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                                       key={`${i}-${j}`}
                                       type="button"
                                       className={`dm-teach-cell${marked ? ' dm-teach-cell--marked' : ''}`}
-                                      disabled={!teachConnected}
-                                      title={teachConnected ? `Record current pose into R${i + 1}C${j + 1}` : 'Robot not connected'}
+                                      disabled={!teachConnected || robotBusy}
+                                      title={!teachConnected ? 'Connect and initialize the robot first' : robotBusy ? 'Wait until robot motion finishes' : `Jog pen to R${i + 1}C${j + 1}, then record the current pose`}
                                       onClick={() => handleMarkCell(i + 1, j + 1)}
                                     >
                                       {`R${i + 1}C${j + 1}`}
@@ -1787,7 +1863,7 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                             <svg viewBox="0 0 200 200" className="dm-teach-shape-svg">
                               {gridShapeEls || (
                                 <text x="100" y="104" textAnchor="middle" className="dm-teach-shape-empty">
-                                  mark all 4 corners
+                                  mark grid cells ({gRows}×{gCols})
                                 </text>
                               )}
                             </svg>
@@ -1802,7 +1878,7 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                             </div>
 
                             <div className="dm-teach-hint">
-                              jog ไปตำแหน่งบนพื้นผิว แล้วกดปุ่มตำแหน่งนั้น — ระบบเทียบตำแหน่งที่ grid คำนวณได้ กับตำแหน่งจริงของแขน
+                              Prerequisite: mark all {gRows * gCols} grid cells and connect the robot. Jog to each test location before recording so predicted and actual poses can be compared.
                             </div>
 
                             <div className="dm-teach-grid-actions">
@@ -1811,8 +1887,8 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                                   key={`${p.u}-${p.v}`}
                                   type="button"
                                   className="dm-teach-action-btn"
-                                  disabled={!teachConnected || markedCount === 0}
-                                  title={`บันทึกจุดทดสอบที่ u=${p.u}, v=${p.v}`}
+                                  disabled={!teachConnected || !gridComplete || robotBusy}
+                                  title={!teachConnected ? 'Connect and initialize the robot first' : !gridComplete ? `Mark all ${gRows * gCols} grid cells first (${markedCount}/${gRows * gCols})` : robotBusy ? 'Wait until robot motion finishes' : `Jog robot to the test location, then record predicted vs actual pose at u=${p.u}, v=${p.v}`}
                                   onClick={() => handleRecordTestPoint(p.u, p.v)}
                                 >
                                   {reportGate?.coverage?.matched?.[i] ? '✓ ' : ''}{p.label}
@@ -1856,6 +1932,7 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                                 type="button"
                                 className="dm-teach-action-btn dm-teach-action-btn--danger"
                                 disabled={testPoints.length === 0}
+                                title={testPoints.length ? 'Clear recorded test points; no robot connection required' : 'No test points to clear'}
                                 onClick={handleResetTestPoints}
                               >
                                 Reset test points
@@ -1865,6 +1942,7 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                                 className="dm-teach-autofill-btn"
                                 disabled={testReportBusy}
                                 onClick={handleDownloadReport}
+                                title="Download the current grid/test-point report; test points are optional"
                               >
                                 {testReportBusy ? 'กำลังบันทึก…' : 'บันทึกผลการทดสอบ (ชีต 05 + 09)'}
                               </button>
@@ -1878,6 +1956,13 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                         <div className="dm-panel-card">
                           <div className="dm-panel-card-head">
                             <span className="dm-panel-card-title">Motion Jog Control</span>
+                          </div>
+                          <div className="dm-teach-hint">
+                            {!teachConnected
+                              ? 'Prerequisite: connect and initialize the robot.'
+                              : robotBusy
+                                ? 'Jog is unavailable while Align, Draw, or a motion sequence is running.'
+                                : 'Jog requires a connected, enabled robot; step values are in mm or degrees.'}
                           </div>
 
                           {/* Submode Switcher */}
@@ -1952,7 +2037,7 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                               <JogPillRow
                                 key={axis}
                                 label={axisLabel(axis)}
-                                disabled={!teachConnected || jogBusy}
+                                disabled={!teachRobotCanMove || jogBusy || robotBusy}
                                 titleMinus={`Jog ${axisLabel(axis)} −${posStep}mm`}
                                 titlePlus={`Jog ${axisLabel(axis)} +${posStep}mm`}
                                 onMinus={() => handleJog(axis, -1)}
@@ -1964,7 +2049,7 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                               <JogPillRow
                                 key={axis}
                                 label={axisLabel(axis)}
-                                disabled={!teachConnected || jogBusy}
+                                disabled={!teachRobotCanMove || jogBusy || robotBusy}
                                 titleMinus={`Jog ${axisLabel(axis)} −${rotStep}deg`}
                                 titlePlus={`Jog ${axisLabel(axis)} +${rotStep}deg`}
                                 onMinus={() => handleJog(axis, -1)}
@@ -1976,7 +2061,7 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                               <JogPillRow
                                 key={j}
                                 label={`J${j}`}
-                                disabled={!teachConnected || jogBusy}
+                                disabled={!teachRobotCanMove || jogBusy || robotBusy}
                                 titleMinus={`Jog J${j} −${jointStep}deg`}
                                 titlePlus={`Jog J${j} +${jointStep}deg`}
                                 onMinus={() => handleJogJoint(j, -1)}
@@ -2089,7 +2174,13 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                               title="Delete selected object(s) (Delete)"
                             >⌫</button>
                             <button id="btn-clear" className="dm-bar-btn dm-bar-btn--danger" onClick={clearCanvas} title="Clear all objects">✕</button>
-                            <button id="btn-export-png" className="dm-bar-btn" onClick={exportPNG} title="Export PNG">⬇</button>
+                            <button
+                              id="btn-export-png"
+                              className="dm-bar-btn"
+                              onClick={exportPNG}
+                              disabled={objectCount === 0}
+                              title={objectCount === 0 ? 'Draw something before exporting' : 'Export the current canvas as PNG'}
+                            >⬇</button>
                           </div>
 
                           {/* Status */}
@@ -2119,8 +2210,14 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                           {/* Object count */}
                           <div style={{ fontSize: '12px', color: '#64748b' }}>
                             {objectCount > 0
-                              ? `${objectCount} object${objectCount > 1 ? 's' : ''} on canvas — ready to send`
+                              ? `${objectCount} object${objectCount > 1 ? 's' : ''} on canvas`
                               : 'Canvas is empty — draw something first'}
+                            <span style={{ display: 'block', color: drawPrerequisite === 'Ready to send.' ? '#16a34a' : '#b45309' }}>
+                              Before Send: {drawPrerequisite} Grid {markedCount}/{gRows * gCols} marked.
+                            </span>
+                            {gridValidate && Array.isArray(gridValidate.warnings) && gridValidate.warnings.length > 0 && (
+                              <span className="dm-prereq-warning">Grid warning: {gridValidate.warnings.join('; ')}</span>
+                            )}
                           </div>
 
                           {/* Send + Stop */}
@@ -2130,8 +2227,8 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                               className={`dm-quick-btn dm-quick-btn--ok${isSending ? ' dm-quick-btn--loading' : ''}`}
                               style={{ flex: 1 }}
                               onClick={sendToRobot}
-                              disabled={isSending || !teachConnected || objectCount === 0}
-                              title="Send drawing paths to robot"
+                              disabled={isSending || !teachRobotCanMove || objectCount === 0 || !gridComplete || gridTooSmall || robotBusy}
+                              title={drawPrerequisite}
                             >
                               {isSending ? '…Sending' : '▶ Send to Robot'}
                             </button>
@@ -2140,7 +2237,7 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                               className="dm-quick-btn dm-quick-btn--error"
                               onClick={stopDraw}
                               disabled={!isSending && !(teachStatus && teachStatus.draw_running)}
-                              title="Stop the running draw"
+                              title={teachStatus && teachStatus.draw_running ? 'Stop the active drawing motion' : 'Available only while Draw is running'}
                             >
                               ■ Stop
                             </button>
