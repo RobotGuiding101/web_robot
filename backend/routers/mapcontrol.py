@@ -1018,6 +1018,42 @@ def api_init(request: Request):
     return {"ok": True, "connected": robot.connected}
 
 
+@router.post("/enable")
+def api_enable(request: Request):
+    if not robot.connected:
+        return {"ok": False, "error": "not connected"}
+    if state.align_running or state.draw_running or sequence_running:
+        return {"ok": False, "error": "robot busy (align/draw/sequence running)"}
+    try:
+        with robot_lock:
+            if state.align_running or state.draw_running or sequence_running:
+                return {"ok": False, "error": "robot busy (align/draw/sequence running)"}
+            reply = robot.enable_robot()
+        _log_user_event(request, "robot", "enable", str(reply))
+        return {"ok": True, "reply": str(reply)}
+    except Exception as e:
+        _log_user_event(request, "robot", "enable", f"failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+@router.post("/disable")
+def api_disable(request: Request):
+    if not robot.connected:
+        return {"ok": False, "error": "not connected"}
+    if state.align_running or state.draw_running or sequence_running:
+        return {"ok": False, "error": "robot busy (align/draw/sequence running)"}
+    try:
+        with robot_lock:
+            if state.align_running or state.draw_running or sequence_running:
+                return {"ok": False, "error": "robot busy (align/draw/sequence running)"}
+            reply = robot.disable_robot()
+        _log_user_event(request, "robot", "disable", str(reply))
+        return {"ok": True, "reply": str(reply)}
+    except Exception as e:
+        _log_user_event(request, "robot", "disable", f"failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+
 @router.post("/camstart")
 def api_camstart(request: Request):
     ok = cam.start()
@@ -1672,6 +1708,7 @@ def api_status():
         "user_index": robot.user_index,
         "robot_mode": mode,
         "robot_mode_label": ROBOT_MODE_LABELS.get(mode, "?"),
+        "robot_enabled": mode in {5, 6, 7, 8, 10, 11},
         "points": state.points,
         "align_running": state.align_running,
         "last_tilt": state.last_tilt,

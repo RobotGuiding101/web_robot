@@ -1159,6 +1159,82 @@ body {
   box-shadow: 0 5px 16px rgba(14, 165, 233, 0.38);
 }
 
+.robot-enable-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 88px;
+  height: 36px;
+  flex: 0 0 88px;
+  padding: 0 9px;
+  overflow: hidden;
+  border: 1px solid #d5d8dc;
+  border-radius: 999px;
+  background: #e7e8ea;
+  color: #a9adb1;
+  cursor: pointer;
+  transition: background-color 180ms ease, border-color 180ms ease, opacity 180ms ease;
+}
+
+.robot-enable-switch-label {
+  width: 100%;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  text-align: center;
+}
+
+.robot-enable-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 30px;
+  height: 30px;
+  border: 1px solid #d9dcdf;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+  transition: transform 180ms ease;
+}
+
+.robot-enable-switch--on {
+  border-color: #00b85a;
+  background: #00c967;
+  color: #078742;
+}
+
+.robot-enable-switch--on .robot-enable-switch-thumb {
+  transform: translateX(52px);
+}
+
+.robot-enable-switch:hover:not(:disabled) {
+  filter: brightness(0.97);
+}
+
+.robot-enable-switch:focus-visible {
+  outline: 2px solid #1478c8;
+  outline-offset: 2px;
+}
+
+.robot-enable-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.robot-enable-switch--error {
+  border-color: #dc2626;
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.robot-enable-switch--loading .robot-enable-switch-thumb {
+  animation: robot-enable-pulse 700ms ease-in-out infinite alternate;
+}
+
+@keyframes robot-enable-pulse {
+  to { box-shadow: 0 0 0 4px rgba(20, 120, 200, 0.18); }
+}
+
 .init-btn--toggle-paused {
   background: linear-gradient(135deg, #f59e0b, #d97706);
   border-color: #d97706;
