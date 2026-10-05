@@ -146,6 +146,8 @@ const DobotControllerPage = () => {
   const [pos, setPos] = useState({ X: 0, Y: 0, Z: 150, RX: 0, RY: 0, RZ: 0 })
   const [tipPos, setTipPos] = useState({ X: 0, Y: 0, Z: 0 })
   const [joints, setJoints] = useState({ J1: 0, J2: 0, J3: 0, J4: 0, J5: 0, J6: 0 })
+  const [isCoordEditing, setIsCoordEditing] = useState(false)
+  const [manualTargetDraft, setManualTargetDraft] = useState(null)
   const [lastMoved, setLastMoved] = useState(null)
 
   // ── Action statuses ───────────────────────────────────────────────────────
@@ -617,8 +619,9 @@ const DobotControllerPage = () => {
   }
 
   // ── Move to Gizmo target pose ──────────────────────────────────────────────
-  const handleMoveTo = useCallback(async () => {
-    if (!targetPose || !connected) return
+  const handleMoveTo = useCallback(async (poseOverride = null) => {
+    const poseToMove = poseOverride || targetPose
+    if (!poseToMove || !connected) return
     setMoveToLoading(true)
     setMoveToStatus(null)
     setMoveToError(null)
@@ -627,11 +630,11 @@ const DobotControllerPage = () => {
         mode: moveMode,
         speed: Math.max(1, Math.min(100, speed || 20)),
       }
-      if (moveMode === 'joint' && targetPose.joints) {
-        body.joints = targetPose.joints
+      if (moveMode === 'joint' && poseToMove.joints) {
+        body.joints = poseToMove.joints
       } else {
-        body.x  = targetPose.x;  body.y  = targetPose.y;  body.z  = targetPose.z
-        body.rx = targetPose.rx; body.ry = targetPose.ry; body.rz = targetPose.rz
+        body.x  = poseToMove.x;  body.y  = poseToMove.y;  body.z  = poseToMove.z
+        body.rx = poseToMove.rx; body.ry = poseToMove.ry; body.rz = poseToMove.rz
       }
       const res = await apiFetch('/api/map/move_to', {
         method: 'POST',
@@ -641,7 +644,11 @@ const DobotControllerPage = () => {
       const data = await res.json()
       if (data.ok) {
         setMoveToStatus('ok')
-        setLastMoved('Move to Target')
+        setLastMoved(poseOverride ? 'Save & Move' : 'Move to Target')
+        if (poseOverride) {
+          setIsCoordEditing(false)
+          setManualTargetDraft(null)
+        }
         // Resume auto-sync after brief delay so position readout updates
         setTimeout(() => { setGetCoordinatesEnabled(true); setTimeout(fetchStatus, 800) }, 800)
       } else {
@@ -656,6 +663,39 @@ const DobotControllerPage = () => {
       setTimeout(() => setMoveToStatus(null), 3000)
     }
   }, [targetPose, connected, moveMode, speed, fetchStatus])
+
+  const startCoordEditing = () => {
+    setManualTargetDraft(Object.fromEntries(
+      [...Object.entries(pos), ...Object.entries(joints)].map(([key, value]) => [key, String(value)]),
+    ))
+    setMoveToStatus(null)
+    setMoveToError(null)
+    setIsCoordEditing(true)
+  }
+
+  const handleManualTargetChange = (key, value) => {
+    setManualTargetDraft((previous) => ({ ...previous, [key]: value }))
+  }
+
+  const handleSaveManualTarget = () => {
+    const keys = moveMode === 'joint'
+      ? JOINT_AXES
+      : ['X', 'Y', 'Z', 'RX', 'RY', 'RZ']
+    const values = keys.map((key) => {
+      const value = manualTargetDraft?.[key]
+      return value === '' || value === undefined ? NaN : Number(value)
+    })
+    if (values.some((value) => !Number.isFinite(value))) {
+      setMoveToStatus('error')
+      setMoveToError('กรอกค่าเป้าหมายให้ครบและเป็นตัวเลข')
+      return
+    }
+
+    const pose = moveMode === 'joint'
+      ? { joints: values }
+      : { x: values[0], y: values[1], z: values[2], rx: values[3], ry: values[4], rz: values[5] }
+    handleMoveTo(pose)
+  }
 
   // ── Snap current 3D model position (sets targetPose + appends to snapList) ──
   const handleSnapPos = useCallback(() => {
@@ -1010,12 +1050,32 @@ const DobotControllerPage = () => {
                   <div className="coord-group-header">
                     <span className="coord-group-dot coord-group-dot--cartesian" />
                     <span className="coord-group-label">Cartesian (mm / deg)</span>
+                    <button
+                      type="button"
+                      className="coord-edit-toggle"
+                      onClick={isCoordEditing
+                        ? () => { setIsCoordEditing(false); setManualTargetDraft(null); setMoveToError(null) }
+                        : startCoordEditing}
+                      disabled={!connected || moveToLoading}
+                      title={isCoordEditing ? 'Cancel coordinate editing' : 'Edit Cartesian and joint coordinates'}
+                    >
+                      {isCoordEditing ? 'Cancel' : 'Edit'}
+                    </button>
                   </div>
                   <div className="coord-items">
                     {Object.entries(pos).map(([k, v]) => (
                       <div key={k} className="coord-item">
                         <span className="coord-axis">{k}</span>
-                        <span className="coord-val">{v.toFixed(2)}</span>
+                        {isCoordEditing ? (
+                          <input
+                            className="coord-edit-input"
+                            type="number"
+                            step="any"
+                            value={manualTargetDraft?.[k] ?? ''}
+                            onChange={(event) => handleManualTargetChange(k, event.target.value)}
+                            aria-label={`Target ${k}`}
+                          />
+                        ) : <span className="coord-val">{v.toFixed(2)}</span>}
                       </div>
                     ))}
                   </div>
@@ -1043,11 +1103,47 @@ const DobotControllerPage = () => {
                     {Object.entries(joints).map(([k, v]) => (
                       <div key={k} className="coord-item">
                         <span className="coord-axis">{k}</span>
-                        <span className="coord-val">{v.toFixed(2)}</span>
+                        {isCoordEditing ? (
+                          <input
+                            className="coord-edit-input"
+                            type="number"
+                            step="any"
+                            value={manualTargetDraft?.[k] ?? ''}
+                            onChange={(event) => handleManualTargetChange(k, event.target.value)}
+                            aria-label={`Target ${k}`}
+                          />
+                        ) : <span className="coord-val">{v.toFixed(2)}</span>}
                       </div>
                     ))}
                   </div>
                 </div>
+                {isCoordEditing && (
+                  <div className="coord-edit-actions">
+                    <span>Save mode: <strong>{moveMode.toUpperCase()}</strong></span>
+                    <button
+                      type="button"
+                      className="reset-target-btn"
+                      onClick={() => setManualTargetDraft(Object.fromEntries(
+                        [...Object.entries(pos), ...Object.entries(joints)].map(([key, value]) => [key, String(value)]),
+                      ))}
+                      title="Discard typed values and reload current robot coordinates"
+                    >Current</button>
+                    <button
+                      id="btn-save-manual-target"
+                      type="button"
+                      className={`move-to-btn${moveToLoading ? ' move-to-btn--loading' : ''}${moveToStatus === 'ok' ? ' move-to-btn--ok' : ''}${moveToStatus === 'error' ? ' move-to-btn--error' : ''}`}
+                      onClick={handleSaveManualTarget}
+                      disabled={!connected || moveToLoading}
+                      title="Save edited coordinates and move the robot"
+                    >
+                      {moveToLoading ? <><span className="init-btn-spinner" /> Executing…</>
+                        : moveToStatus === 'ok' ? 'Saved & Sent'
+                          : moveToStatus === 'error' ? 'Check target'
+                            : 'Save & Move'}
+                    </button>
+                    {moveToError && <div className="move-to-error">{moveToError}</div>}
+                  </div>
+                )}
               </div>
 
               {/* ── Step Value ── */}
