@@ -72,11 +72,78 @@ const JogPillRow = ({ label, onMinus, onPlus, disabled, titleMinus, titlePlus })
 )
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+function pathObjectPoints(obj) {
+  const matrix = obj.calcTransformMatrix()
+  const offset = obj.pathOffset || new Point(0, 0)
+  const points = []
+  let current = new Point(0, 0)
+  let subpathStart = current
+
+  const addPoint = (x, y) => {
+    const localX = x - offset.x
+    const localY = y - offset.y
+    points.push(new Point(
+      matrix[0] * localX + matrix[2] * localY + matrix[4],
+      matrix[1] * localX + matrix[3] * localY + matrix[5],
+    ))
+  }
+
+  for (const command of obj.path || []) {
+    const [rawType, ...values] = command
+    const type = rawType.toUpperCase()
+    const relative = rawType !== type
+    const value = (index, base) => (relative ? base : 0) + Number(values[index])
+
+    if (type === 'M' || type === 'L') {
+      current = new Point(value(0, current.x), value(1, current.y))
+      if (type === 'M') subpathStart = current
+      addPoint(current.x, current.y)
+    } else if (type === 'H') {
+      current = new Point(value(0, current.x), current.y)
+      addPoint(current.x, current.y)
+    } else if (type === 'V') {
+      current = new Point(current.x, value(0, current.y))
+      addPoint(current.x, current.y)
+    } else if (type === 'Q') {
+      const control = new Point(value(0, current.x), value(1, current.y))
+      const end = new Point(value(2, current.x), value(3, current.y))
+      const start = current
+      for (let step = 1; step <= 4; step += 1) {
+        const t = step / 4
+        const inverse = 1 - t
+        addPoint(
+          inverse * inverse * start.x + 2 * inverse * t * control.x + t * t * end.x,
+          inverse * inverse * start.y + 2 * inverse * t * control.y + t * t * end.y,
+        )
+      }
+      current = end
+    } else if (type === 'C') {
+      const control1 = new Point(value(0, current.x), value(1, current.y))
+      const control2 = new Point(value(2, current.x), value(3, current.y))
+      const end = new Point(value(4, current.x), value(5, current.y))
+      const start = current
+      for (let step = 1; step <= 8; step += 1) {
+        const t = step / 8
+        const inverse = 1 - t
+        addPoint(
+          inverse ** 3 * start.x + 3 * inverse ** 2 * t * control1.x + 3 * inverse * t ** 2 * control2.x + t ** 3 * end.x,
+          inverse ** 3 * start.y + 3 * inverse ** 2 * t * control1.y + 3 * inverse * t ** 2 * control2.y + t ** 3 * end.y,
+        )
+      }
+      current = end
+    } else if (type === 'Z') {
+      current = subpathStart
+      addPoint(current.x, current.y)
+    }
+  }
+  return points
+}
+
 function getCanvasPathData(fc) {
   return fc.getObjects().map((obj) => {
     const type = obj.type
     const base = { type, left: obj.left, top: obj.top }
-    if (type === 'path') return { ...base, path: obj.path, stroke: obj.stroke, strokeWidth: obj.strokeWidth }
+    if (type === 'path') return { ...base, points: pathObjectPoints(obj), stroke: obj.stroke, strokeWidth: obj.strokeWidth }
     if (type === 'line') return { ...base, x1: obj.x1, y1: obj.y1, x2: obj.x2, y2: obj.y2, stroke: obj.stroke, strokeWidth: obj.strokeWidth }
     if (type === 'polyline' && obj.pathOffset) {
       const matrix = obj.calcTransformMatrix()
@@ -550,12 +617,8 @@ const [testReportBusy, setTestReportBusy] = useState(false)
 
       const strokes = pathData.map((obj) => {
         const points = []
-        if (obj.type === 'path' && obj.path) {
-          obj.path.forEach((cmd) => {
-            if (cmd[0] === 'M' || cmd[0] === 'L') {
-              points.push([cmd[1] / cw, cmd[2] / ch])
-            }
-          })
+        if (obj.type === 'path' && obj.points) {
+          obj.points.forEach((point) => points.push([point.x / cw, point.y / ch]))
         } else if (obj.type === 'line') {
           points.push([obj.x1 / cw, obj.y1 / ch], [obj.x2 / cw, obj.y2 / ch])
         } else if (obj.type === 'polyline' && obj.points) {
