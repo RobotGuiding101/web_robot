@@ -23,7 +23,10 @@ No camera/vision involved at all here — corners are whatever pose the
 user jogged the robot to and pressed "mark" at (see main.py's
 /api/grid/mark), unlike align.py's depth-tracked points.
 """
+import hashlib
+import json
 import math
+import time
 
 import cv2
 import numpy as np
@@ -190,6 +193,134 @@ def simplify_stroke(points_uv, eps: float = DRAW_SIMPLIFY_EPS) -> list:
     return _cap_points(simplified, DRAW_MAX_POINTS)
 
 
+# uv tolerance for calling a stroke "closed". Matches the 4-decimal precision
+# every uv is reported at, so a stroke counts as closed exactly when its
+# printed endpoints are identical.
+_UV_CLOSED_EPS = 1e-4
+
+# A pose read is rejected once it sits further from the taught grid's centre
+# than the grid's own diameter plus this slack. Generous on purpose: it must
+# catch garbage and wrong-frame reads, never a real large error.
+_POSE_SANITY_SLACK_MM = 1000.0
+
+
+def _stroke_path(stroke: dict) -> list:
+    """The (u,v) points actually replayed for one canvas stroke.
+
+    Single source of truth for the simplify-vs-cap decision: "pen" (noisy
+    freehand mousemove samples) goes through simplify_stroke(), while every
+    programmatically-generated shape is only hard-capped, because
+    Douglas-Peucker would facet a smooth curve back into a polygon — see
+    simplify_stroke()'s docstring for the full reasoning.
+
+    draw_stats(), _stroke_to_poses() and the draw-end accuracy check all
+    route through here so a number in the experiment report can never
+    describe a different point list than the one the arm followed. When the
+    Draw page hardcoded tool:"pen" for every shape, this branch silently
+    became dead code and the report claimed five rectangles were freehand.
+    """
+    pts = stroke.get("points") or []
+    if stroke.get("tool") == "pen":
+        return simplify_stroke(pts)
+    return _cap_points(pts, DRAW_MAX_POINTS)
+
+
+def grid_fingerprint(grid_points) -> str:
+    """Short stable id for one taught grid, so a recorded measurement can be
+    traced back to the exact corners it was computed against.
+
+    Rounded before hashing because grid_points round-trip through a JSON
+    snapshot on save/load — hashing raw floats would make the same physical
+    grid fingerprint differently after a restart and every pre-restart test
+    point would then look stale.
+    """
+    rounded = [[[round(float(c), 4) for c in point] if point else None
+                for point in row] for row in grid_points]
+    payload = json.dumps(rounded, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()[:8]
+
+
+def report_missing_codes(grid_marked: bool, grid_points, test_points,
+                         draw_stats) -> list:
+    """Which inputs the experiment record is still missing, as stable codes.
+
+    A pure function so it is unit-testable without the HTTP layer. Kept out
+    of the endpoint because mapcontrol imports sqlalchemy at module scope,
+    which makes anything reached through it untestable on a machine that
+    only has the geometry dependencies installed.
+
+    The 2026-10-05 capture came back with test_points: [] and every aggregate
+    null while saying nothing about which it meant, so an unfinished run was
+    indistinguishable from a broken one.
+    """
+    codes = []
+    if not grid_marked:
+        codes.append("grid_not_marked")
+    if not test_points:
+        codes.append("no_test_points")
+    if not draw_stats:
+        codes.append("no_draw_stats")
+    elif any(p.get("grid_fingerprint") != grid_fingerprint(grid_points)
+             for p in test_points):
+        # Grid re-taught after measuring: those errors were computed against
+        # corners that no longer exist.
+        codes.append("grid_changed_since_test")
+    return codes
+
+
+def pose_read_is_plausible(actual, grid_points) -> bool:
+    """Whether a pose read back from the controller may be trusted AS A
+    MEASUREMENT.
+
+    robot.get_pose() never raises — it returns [0.0]*6 for any dashboard
+    failure at all (robot.py:160-168). A caller that doesn't check will
+    cheerfully record an error of several hundred millimetres from a dropped
+    socket, and a wrong number in a thesis experiment form is far worse than
+    a missing one: once aggregated into Max/RMSE it is indistinguishable
+    from a real calibration failure. This is why both /grid/test-point and
+    the draw-end check below go through here.
+
+    Rejects the exact all-zero sentinel, non-finite coordinates, and any pose
+    further from the taught grid than the grid's own diameter plus generous
+    slack — the latter also catches a read taken in the wrong Tool frame,
+    which robot.py:170-194 records as having produced a 107mm/156° jump.
+    Everything else is accepted: this guards against garbage, not against
+    large-but-real errors.
+    """
+    if not actual or len(actual) < 3:
+        return False
+    xyz = list(actual[:3])
+    if xyz == [0.0, 0.0, 0.0]:
+        return False
+    if any(not math.isfinite(c) for c in xyz):
+        return False
+    corners = [point[:3] for row in grid_points for point in row if point]
+    if not corners:
+        return False
+    centre = [sum(c[i] for c in corners) / len(corners) for i in range(3)]
+    span = max(math.dist(a, b) for a in corners for b in corners)
+    return math.dist(xyz, centre) <= span + _POSE_SANITY_SLACK_MM
+
+
+def _final_stroke_uv(strokes: list, grid_points, rows: int, cols: int):
+    """uv of the point that actually produced the last assembled pose, or
+    None when no stroke contributes anything.
+
+    Cannot simply read strokes[-1]: _assemble_strokes() skips strokes whose
+    simplified path is empty (`if not pts: continue`), so the last element of
+    `strokes` need not be the last contributor to `poses`. Walking backwards
+    with the same path helper _assemble_strokes() uses keeps the recorded
+    label and the compared pose describing the same physical location — a
+    mismatch would put a u/v on the record that never went where the error
+    was measured.
+    """
+    for stroke in reversed(strokes):
+        path = _stroke_path(stroke)
+        if path:
+            return path[-1]
+    return None
+
+
 def draw_stats(strokes: list, grid_points, rows: int, cols: int,
                lift_mm: float) -> dict:
     """Non-moving summary of one draw request: raw canvas samples in,
@@ -200,10 +331,10 @@ def draw_stats(strokes: list, grid_points, rows: int, cols: int,
     from the real code path rather than a re-implementation that could drift
     from it. `api_draw` calls this before handing the work to the thread."""
     per_stroke, before, after = [], 0, 0
+    drawn_mm = 0.0
     for s in strokes:
         pts = s.get("points") or []
-        path = (simplify_stroke(pts) if s.get("tool") == "pen"
-                else _cap_points(pts, DRAW_MAX_POINTS))
+        path = _stroke_path(s)
         before += len(pts)
         after += len(path)
         entry = {"tool": s.get("tool", "pen"), "points_before": len(pts),
@@ -215,12 +346,29 @@ def draw_stats(strokes: list, grid_points, rows: int, cols: int,
             entry["uv_end"] = [round(path[-1][0], 4), round(path[-1][1], 4)]
             entry["xyz_start"] = [round(c, 2) for c in ends[0][:3]]
             entry["xyz_end"] = [round(c, 2) for c in ends[1][:3]]
+            # `closed` separates a deliberately-closed shape from a corrupt
+            # record — the Draw page's rectangles repeat their 1st vertex as
+            # the 5th, so uv_start == uv_end is correct, but read alone on
+            # 2026-10-05 it looked like five broken strokes.
+            entry["closed"] = (abs(path[0][0] - path[-1][0]) <= _UV_CLOSED_EPS
+                               and abs(path[0][1] - path[-1][1]) <= _UV_CLOSED_EPS)
+            entry["points_uv"] = [[round(u, 4), round(v, 4)] for u, v in path]
+            xyz = [grid_pose(u, v, grid_points, rows, cols)[:3] for u, v in path]
+            entry["length_mm"] = round(sum(math.dist(a, b)
+                                           for a, b in zip(xyz, xyz[1:])), 2)
+            entry["span_mm"] = {
+                axis: round(max(p[i] for p in xyz) - min(p[i] for p in xyz), 2)
+                for i, axis in enumerate(("x", "y", "z"))}
+            drawn_mm += entry["length_mm"]
         per_stroke.append(entry)
     poses = _assemble_strokes(strokes, grid_points, rows, cols, lift_mm)
+    travel_mm = sum(math.dist(a[:3], b[:3]) for a, b in zip(poses, poses[1:]))
     return {"strokes": len(strokes), "points_before": before, "points_after": after,
             "per_stroke": per_stroke, "waypoints": len(poses),
-            "path_length_mm": round(sum(math.dist(a[:3], b[:3])
-                                        for a, b in zip(poses, poses[1:])), 2),
+            # Travel includes the pen-lift hops between strokes, drawn does not.
+            "path_length_mm": round(travel_mm, 2),
+            "total_travel_mm": round(travel_mm, 2),
+            "drawn_path_length_mm": round(drawn_mm, 2),
             "lift_transitions": max(0, len(strokes) - 1), "lift_mm": lift_mm,
             "motion_mode": DRAW_MOTION_MODE, "cp_ratio": DRAW_CP_RATIO}
 
@@ -260,13 +408,10 @@ def _stroke_to_poses(stroke: dict, grid_points, rows: int, cols: int) -> list:
     """One entry from the Draw canvas's `strokes` payload (static/draw.js)
     — {"tool": "pen"|"line"|"rect"|"circle", "points": [(u,v), ...]} —
     mapped through the taught grid to Cartesian [X,Y,Z,Rx,Ry,Rz]
-    waypoints. Only "pen" strokes go through simplify_stroke() (see its
-    own docstring for why line/rect/circle must NOT be simplified — they
-    were already generated as the exact vertices intended, not noisy
-    mousemove samples)."""
-    points_uv = stroke.get("points") or []
-    path = simplify_stroke(points_uv) if stroke.get("tool") == "pen" else _cap_points(points_uv, DRAW_MAX_POINTS)
-    return [grid_pose(u, v, grid_points, rows, cols) for u, v in path]
+    waypoints. Which point list gets replayed is _stroke_path()'s decision,
+    not this function's."""
+    return [grid_pose(u, v, grid_points, rows, cols)
+            for u, v in _stroke_path(stroke)]
 
 
 def _assemble_strokes(strokes: list, grid_points, rows: int, cols: int, lift_mm: float) -> list:
@@ -437,6 +582,18 @@ def do_draw(robot: Robot, state, strokes: list) -> None:
         else:
             state.status = f"draw done  ({len(poses)} waypoints)"
         log(f"  [Draw] {state.status}")
+
+        # The arm is parked on the last waypoint and not yet told to go home —
+        # the only moment achieved pose can be read without extra motion.
+        # Goes to last_draw_stats, not test_points: ServoP lags, so this is
+        # tracking error and would inflate sheet 05's Max/RMSE. Must precede
+        # _notify_draw_done, whose hook re-copies last_draw_stats.
+        if not state.draw_stop.is_set():
+            try:
+                _record_draw_end_check(robot, state, strokes, poses)
+            except Exception as e:
+                log(f"  [Draw] draw-end check skipped: {e}")
+
         _notify_draw_done(state, "abort" if state.draw_stop.is_set() else "done",
                           f"waypoints={len(poses)}")
         if not state.draw_stop.is_set():
@@ -447,6 +604,48 @@ def do_draw(robot: Robot, state, strokes: list) -> None:
         _notify_draw_done(state, "fail", str(e))
     finally:
         state.draw_running = False
+
+
+def _record_draw_end_check(robot, state, strokes, poses) -> None:
+    """Store the arm's achieved pose at the final drawn waypoint as
+    state.last_draw_stats["draw_end_check"].
+
+    Read-only — commands no motion. Every failure path ends in "no record",
+    never in a plausible-looking wrong number, because a missing measurement
+    is visible in the report while a wrong one silently corrupts the thesis
+    form. Caller must already have confirmed no Stop is pending, since a
+    halted arm never reached poses[-1].
+    """
+    if not poses:
+        return
+    uv = _final_stroke_uv(strokes, state.grid_points,
+                          state.grid_rows, state.grid_cols)
+    if uv is None:
+        return
+    # No ensure_frame() here on purpose: do_draw() and then
+    # servo_stream()/movl_path() already applied the Tool/User frame, and
+    # re-issuing Tool()/User() around live motion silently stalled the CR5
+    # move queue on 2026-07-28h (robot.py:184-194).
+    actual = robot.get_pose()
+    if not pose_read_is_plausible(actual, state.grid_points):
+        log(f"  [Draw] draw-end check skipped: implausible pose {actual}")
+        return
+    planned = list(poses[-1][:3])
+    actual = [float(c) for c in actual[:3]]
+    err = [planned[i] - actual[i] for i in range(3)]
+    if not isinstance(getattr(state, "last_draw_stats", None), dict):
+        state.last_draw_stats = {}
+    state.last_draw_stats["draw_end_check"] = {
+        "u": round(uv[0], 4), "v": round(uv[1], 4),
+        "planned_xyz": [round(c, 2) for c in planned],
+        "actual_xyz": [round(c, 2) for c in actual],
+        "error_mm": [round(e, 3) for e in err],
+        "deviation_mm": round(math.sqrt(sum(e * e for e in err)), 3),
+        "motion_mode": DRAW_MOTION_MODE,
+        "recorded_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    log(f"  [Draw] draw-end check: dev="
+        f"{state.last_draw_stats['draw_end_check']['deviation_mm']}mm")
 
 
 def _notify_draw_done(state, action: str, detail: str = "") -> None:
