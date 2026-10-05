@@ -136,13 +136,14 @@ class AppState:
         self._prev_bbox = None
         self.align_running = False
         self.align_stop    = threading.Event()
+        self.final_tilt       = None   # tilt ตอน align done — ไม่ถูก overwrite
+        self.final_rmse       = None   # rmse ตอน align done — ไม่ถูก overwrite
         self.last_tilt        = None
         self.last_rmse        = None
         self.last_depth_range = None
         self.last_center_depth = None
         self.last_roll_deg    = None   # phase-3 Rz correction target, see do_align
         self.heatmap_mode = False   # main.py's MJPEG generator reads this
-        self.camera_mode = "rgb"    # "rgb" or "gray"
         self.status = "idle"
 
         # ── draw: N×M grid plane calibration + freehand path replay ────────
@@ -345,9 +346,11 @@ def _finish_centered(robot: Robot, cam: Camera, state: "AppState", rec: AlignRec
     _recenter_xy(robot, cam, state, rec, "final_recentered")
     result = _region_grow_measure(cam, state)
     if result is not None:
-        _, _, tilt, _, _, roll = result
+        _, _, tilt, rmse, _, roll = result
         state.last_tilt, state.last_roll_deg = tilt, roll
+        state.final_rmse = rmse   # freeze ค่า rmse ตอน align done
     state.status = f"align done  tilt={tilt:.1f}°  roll={roll:.1f}°"
+    state.final_tilt = tilt   # freeze ค่า tilt ตอน align done ไม่ถูก overwrite
     rec.log(f"  [Align] {state.status}")
 
 
@@ -511,17 +514,12 @@ def do_align(robot: Robot, cam: Camera, state: AppState):
         state.status = "align: need 4 points"
         return
     if not state.tracking_ok:
-        # The continuous tracker re-derives the region every ~30ms and can miss
-        # a single noisy depth cycle (or several under load / with a second
-        # camera streaming) even while the object sits still. Give it a short
-        # window to lock on before bouncing the operator, instead of rejecting
-        # based on one unlucky instant.
-        if not _wait_tracking_ok(state, timeout=3.0):
-            state.status = "align: points not locked on yet — wait a moment or re-mark"
-            return
+        state.status = "align: points not locked on yet — wait a moment or re-mark"
+        return
 
     state.align_running = True
     state.align_stop.clear()
+    state.final_rmse = None
     rec = AlignRecorder()
     try:
         # ── phase 0: move to the marked area's center, at HOME_Z + offset ──
@@ -550,22 +548,7 @@ def do_align(robot: Robot, cam: Camera, state: AppState):
             state.status = "align: lost tracking of marked points — re-mark and retry"
             rec.log(f"  [Align] {state.status}")
             return
-        # A single glitched depth frame here used to abort the whole run. The
-        # region-grow re-derives fresh from depth on every call (no incremental
-        # drift to accumulate), and depth can miss for a cycle or two under load
-        # (extra viewers / two cameras streaming) or on a reflective/dark patch,
-        # so retry for a short window before declaring the plane unusable.
-        deadline = _time() + 2.5
-        start = None
-        while _time() < deadline:
-            if state.align_stop.is_set():
-                state.status = "align aborted"
-                rec.log(f"  [Align] {state.status}")
-                return
-            start = _region_grow_measure(cam, state)
-            if start is not None:
-                break
-            sleep(0.1)
+        start = _region_grow_measure(cam, state)
         if start is None:
             state.status = "align: no valid plane fit — no guessing"
             rec.log(f"  [Align] {state.status}")

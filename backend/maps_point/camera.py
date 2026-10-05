@@ -62,6 +62,20 @@ def _list_devices_rs():
     return out
 
 
+RECONNECT_AFTER = 3
+
+# Serializes pipeline bring-up across ALL Camera instances. Two D455s that
+# call pipe.start() at the same moment fight over the USB stack and one fails
+# with "Couldn't resolve requests" / "xioctl(VIDIOC_S_FMT) failed ... Device or
+# resource busy", after which the losing pipeline never recovers. Holding this
+# for the whole configure+start(+first frames) window makes bring-up atomic.
+_START_LOCK = threading.Lock()
+
+
+def _is_frame_timeout(exc: Exception) -> bool:
+    return "didn't arrive" in str(exc) or "Frame didn't arrive" in str(exc)
+
+
 class Camera:
     def __init__(self):
         self.pipe       = None
@@ -84,16 +98,51 @@ class Camera:
         self._capture_thread = None
         self._capture_stop_event = threading.Event()
         self._frame_count = 0
-        # Rolling-median cache, keyed by the frame counter it was built from.
-        self._stacked_frame = None
-        self._stacked_key = None
+        self._err_streak = 0
+
+        # ── SDK colored point cloud (RealSense post-processing + rs.pointcloud) ──
+        self._pc          = None
+        self._dec         = None
+        self._spat        = None
+        self._temp        = None
+        self._hole        = None
+        self._cloud_buf   = None       # (positions_m float32[N,3], colors_rgb uint8[N,3])
+        self._cloud_lock  = threading.Lock()
+        self._cloud_every = 12         # rebuild cloud every N captured frames
 
     def start(self, retries=3, retry_delay=1.0) -> bool:
         if not HAS_RS:
             log("  pyrealsense2 not installed"); return False
+        with _START_LOCK:
+            return self._start_locked(retries=retries, retry_delay=retry_delay)
+
+    def set_inter_cam_sync(self, mode: int) -> bool:
+        """Set D455 Inter Cam Sync Mode on the depth sensor: 0=off, 1=master,
+        2=slave. Two D455s only expose aligned timestamps when one is master
+        and the other is a slave wired to it — matching point clouds from
+        unsynced cameras drift and shake. Best-effort: true HW sync also needs
+        the physical sync cable; without it this is a no-op the device accepts
+        anyway. Must be called BEFORE pipe.start()."""
+        if not HAS_RS or not self.serial:
+            return False
+        try:
+            ctx = rs.context()
+            for d in ctx.query_devices():
+                if d.get_info(rs.camera_info.serial_number) != self.serial:
+                    continue
+                for s in d.sensors:
+                    if s.supports(rs.option.inter_cam_sync_mode):
+                        s.set_option(rs.option.inter_cam_sync_mode, float(mode))
+                        log(f"  [Cam] {self.serial} inter_cam_sync_mode={mode}")
+                        return True
+        except Exception as e:
+            log(f"  [Cam] inter_cam_sync set failed: {e}")
+        return False
+
+    def _start_locked(self, retries=3, retry_delay=1.0) -> bool:
         if self._running:
-            log("  [Cam] already running, stopping first")
-            self.stop()
+            log("  [Cam] already running; start() is a no-op")
+            return True
         if self._capture_thread and self._capture_thread.is_alive():
             log("  [Cam] capture thread still running, stopping it")
             self._capture_stop_event.set()
@@ -109,7 +158,10 @@ class Camera:
         imu_cfg.enable_stream(rs.stream.depth, self.w, self.h, rs.format.z16, 30)
         imu_cfg.enable_stream(rs.stream.color, self.w, self.h, rs.format.bgr8, 30)
         imu_cfg.enable_stream(rs.stream.accel)
-        
+        # Inter-cam sync is set by the caller (main.py) before start(), not
+        # here: a per-camera env value would otherwise overwrite the role the
+        # caller assigned once start() runs for the second camera.
+
         for attempt in range(retries):
             try:
                 self.pipe   = rs.pipeline()
@@ -138,6 +190,7 @@ class Camera:
             ci          = prof.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
             self.intrinsics = {"fx": ci.fx, "fy": ci.fy, "cx": ci.ppx, "cy": ci.ppy}
             self.w = ci.width; self.h = ci.height
+            self._init_cloud_pipeline()
             self._running = True
             for _ in range(30):
                 self.pipe.wait_for_frames()
@@ -159,7 +212,45 @@ class Camera:
                     pass
                 self.pipe = None
             log(f"  [Cam] FAILED  {e}")
+            if _is_frame_timeout(e) and not getattr(self, "_reset_done", False):
+                self._reset_done = True
+                log("  [Cam] depth stream hung — issuing hardware reset and retrying")
+                if self._hardware_reset():
+                    self._reset_done = False
+                    return self._start_locked(retries=retries, retry_delay=retry_delay)
             return False
+
+    def _hardware_reset(self) -> bool:
+        """Power-cycle the D455 over USB. The depth (Stereo Module) stream
+        occasionally wedges — pipe.start() succeeds but no depth frame ever
+        arrives ("Frame didn't arrive within 5000") until the device is
+        hardware-reset. The RGB stream is unaffected, so a reset is the only
+        software-side recovery short of unplugging the camera."""
+        if not HAS_RS or not self.serial:
+            return False
+        try:
+            ctx = rs.context()
+            dev = next((d for d in ctx.query_devices()
+                        if d.get_info(rs.camera_info.serial_number) == self.serial), None)
+            if dev is None:
+                log("  [Cam] hardware reset: device not found")
+                return False
+            dev.hardware_reset()
+        except Exception as e:
+            log(f"  [Cam] hardware reset failed: {e}")
+            return False
+        for _ in range(20):
+            sleep(0.5)
+            try:
+                ctx = rs.context()
+                if any(d.get_info(rs.camera_info.serial_number) == self.serial
+                       for d in ctx.query_devices()):
+                    sleep(1.0)
+                    return True
+            except Exception:
+                pass
+        log("  [Cam] hardware reset: device did not re-enumerate")
+        return False
 
     def stop(self):
         if self._capture_thread and self._capture_thread.is_alive():
@@ -177,6 +268,58 @@ class Camera:
         self._capture_stop_event.clear()
         self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
         self._capture_thread.start()
+
+    def _init_cloud_pipeline(self):
+        """Set up the SDK point-cloud path: decimate -> spatial -> temporal ->
+        hole-filling, then rs.pointcloud mapped to the (aligned) color frame.
+        Failure is non-fatal: the app keeps running with the cloud disabled."""
+        if not HAS_RS:
+            return
+        try:
+            dec = rs.decimation_filter()
+            dec.set_option(rs.option.filter_magnitude, 3)
+            self._dec = dec
+            self._spat = rs.spatial_filter()
+            self._temp = rs.temporal_filter()
+            self._hole = rs.hole_filling_filter()
+            self._pc = rs.pointcloud()
+            with self._cloud_lock:
+                self._cloud_buf = None
+            log("  [Cam] point cloud: SDK pipeline ready "
+                "(decimation x3 + spatial + temporal + hole-filling)")
+        except Exception as e:
+            self._pc = None
+            log(f"  [Cam] point cloud init failed: {e}")
+
+    def _build_cloud(self, df, cf):
+        """Run the filter chain + rs.pointcloud on one aligned frame pair and
+        stash the colored cloud for get_latest_pointcloud()."""
+        try:
+            d = self._dec.process(df)
+            d = self._spat.process(d)
+            d = self._temp.process(d)
+            d = self._hole.process(d)
+            self._pc.map_to(cf)
+            pts = self._pc.calculate(d)
+            verts = np.asanyarray(pts.get_vertices())
+            if verts.size == 0:
+                return
+            xyz = np.ascontiguousarray(verts.view(np.float32).reshape(-1, 3))
+            tex = np.asanyarray(pts.get_texture_coordinates()).view(np.float32).reshape(-1, 2)
+            valid = xyz[:, 2] > 0.05
+            if not valid.any():
+                return
+            xyz = xyz[valid]
+            tex = tex[valid]
+            cimg = np.asanyarray(cf.get_data())
+            h, w = cimg.shape[:2]
+            u = np.clip((tex[:, 0] * w).astype(np.int32), 0, w - 1)
+            v = np.clip((tex[:, 1] * h).astype(np.int32), 0, h - 1)
+            rgb = np.ascontiguousarray(cimg[v, u][:, ::-1])
+            with self._cloud_lock:
+                self._cloud_buf = (xyz, rgb)
+        except Exception as e:
+            log(f"  [Cam] cloud build failed: {e}")
 
     def _capture_loop(self):
         while not self._capture_stop_event.is_set():
@@ -203,15 +346,92 @@ class Camera:
                 if cf:
                     with self._color_lock:
                         self._color_buf = np.asanyarray(cf.get_data()).copy()
+                if (self._pc is not None and df and cf and
+                        (self._frame_count % self._cloud_every == 0)):
+                    self._build_cloud(df, cf)
                 self._frame_count += 1
+                self._err_streak = 0
             except Exception as e:
                 if self._capture_stop_event.is_set():
                     break
                 if "before start" in str(e):
                     log(f"  [Cam] capture thread: pipeline not started, stopping")
                     break
-                log(f"  [Cam] capture error: {e}")
+                self._err_streak += 1
+                log(f"  [Cam] capture error ({self._err_streak}): {e}")
+                if self._err_streak >= RECONNECT_AFTER:
+                    self._err_streak = 0
+                    if self._capture_stop_event.is_set():
+                        break
+                    if self._reopen_pipeline():
+                        log("  [Cam] pipeline reopened after USB drop")
+                    else:
+                        log("  [Cam] pipeline reopen failed; retrying")
+                        sleep(2.0)
                 sleep(0.01)
+
+    def _reopen_pipeline(self) -> bool:
+        """Rebuild the RealSense pipeline after repeated frame timeouts.
+
+        Runs inside the capture thread, so it must NOT call stop()/start()
+        (those join/restart this very thread); it only swaps rs.pipeline in
+        place and returns True once frames flow again.
+        """
+        with _START_LOCK:
+            return self._reopen_pipeline_locked()
+
+    def _reopen_pipeline_locked(self) -> bool:
+        try:
+            if self.pipe is not None:
+                self.pipe.stop()
+        except Exception:
+            pass
+        self.pipe = None
+
+        def _make_cfg(with_imu: bool):
+            c = rs.config()
+            if self.serial:
+                c.enable_device(self.serial)
+            c.enable_stream(rs.stream.depth, self.w, self.h, rs.format.z16, 30)
+            c.enable_stream(rs.stream.color, self.w, self.h, rs.format.bgr8, 30)
+            if with_imu:
+                c.enable_stream(rs.stream.accel)
+            return c
+
+        new_pipe, prof = None, None
+        for with_imu in (True, False):
+            pipe = rs.pipeline()
+            try:
+                prof = pipe.start(_make_cfg(with_imu))
+                new_pipe = pipe
+                self._has_imu = with_imu
+                break
+            except Exception:
+                try:
+                    pipe.stop()
+                except Exception:
+                    pass
+        if new_pipe is None:
+            return False
+
+        self.pipe = new_pipe
+        try:
+            self._align = rs.align(rs.stream.color)
+            ci = prof.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
+            self.intrinsics = {"fx": ci.fx, "fy": ci.fy, "cx": ci.ppx, "cy": ci.ppy}
+            self.w = ci.width
+            self.h = ci.height
+            self._init_cloud_pipeline()
+            for _ in range(15):
+                self.pipe.wait_for_frames()
+        except Exception:
+            try:
+                self.pipe.stop()
+            except Exception:
+                pass
+            self.pipe = None
+            return False
+        return True
 
     def get_latest_accel(self):
         """Most recent accelerometer sample (ax,ay,az in m/s^2, D455 IMU
@@ -245,6 +465,17 @@ class Camera:
         with self._depth_lock:
             depth = self._depth_buf[-1] if self._depth_buf else None
         return color, depth
+
+    def get_latest_pointcloud(self):
+        """Most recent SDK colored cloud as (positions_m[N,3] float32,
+        colors_rgb[N,3] uint8), or (None, None) before the first build.
+
+        The capture thread only ever replaces the tuple, so the returned
+        arrays are stable read-only snapshots."""
+        with self._cloud_lock:
+            if self._cloud_buf is None:
+                return None, None
+            return self._cloud_buf
 
     def get_latest_color(self, max_wait: float = 2.0):
         """Most recent color frame, written by capture thread.
@@ -343,37 +574,9 @@ class Camera:
         buf = self._wait_depth_buf()
         if not buf:
             return None
-        # Rolling median over the whole frame costs ~256ms for 30x848x480 on the
-        # Pi — far more than the ~30ms tracking period, so recomputing it on
-        # every call pinned one core permanently. The capture thread only
-        # advances _frame_count when a new frame lands, so keying the result on
-        # it reuses the identical median across calls that see no new frame.
-        key = self._frame_count
-        if key != self._stacked_key:
-            self._stacked_frame = np.median(np.stack(buf), axis=0).astype(float)
-            self._stacked_key = key
-        full = self._stacked_frame
+        full = np.median(np.stack(buf), axis=0).astype(float)
         fx = self.intrinsics["fx"]; fy = self.intrinsics["fy"]
         cx = self.intrinsics["cx"]; cy = self.intrinsics["cy"]
-
-        # The seed is the marked centroid, which can land on a depth hole (a
-        # specular/dark dot) or its noisy edge — the seed-patch plane fit then
-        # comes out garbage and connectedComponents can't seed a component
-        # there, so align fails every cycle (observed 2026-09-25). Re-seat the
-        # seed on the centroid of the largest solid-depth component near it.
-        rr = 30
-        sy_a = max(0, int(seed_y) - rr); sy_b = min(self.h - 1, int(seed_y) + rr)
-        sx_a = max(0, int(seed_x) - rr); sx_b = min(self.w - 1, int(seed_x) + rr)
-        sub_valid = (full[sy_a:sy_b, sx_a:sx_b] > MIN_DEPTH_MM * 0.8).astype(np.uint8)
-        if sub_valid.sum() >= 50:
-            n_lbl, _, sts, cents = cv2.connectedComponentsWithStats(sub_valid)
-            if n_lbl > 1:
-                k = int(np.argmax(sts[1:, cv2.CC_STAT_AREA])) + 1
-                n_seed_x = int(cents[k][0] + sx_a); n_seed_y = int(cents[k][1] + sy_a)
-                if (n_seed_x, n_seed_y) != (int(seed_x), int(seed_y)):
-                    log(f"  [Cam] region-grow: seed re-seated to solid region "
-                        f"({int(seed_x)},{int(seed_y)}) -> ({n_seed_x},{n_seed_y})")
-                    seed_x, seed_y = n_seed_x, n_seed_y
 
         # ── seed-patch plane estimate ───────────────────────────────────
         r = DEPTH_ROI

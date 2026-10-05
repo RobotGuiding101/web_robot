@@ -24,6 +24,11 @@ CAM_Y_SIGN     = int(os.environ.get("CAM_Y_SIGN", "1"))
 MIN_DEPTH_MM   = float(os.environ.get("MIN_DEPTH_MM", "330.0"))
 DEPTH_N_FRAMES = int(os.environ.get("DEPTH_N_FRAMES", "30"))
 DEPTH_ROI      = int(os.environ.get("DEPTH_ROI", "15"))
+# D455 inter-camera hardware sync (needs the physical sync cable): 0 off,
+# 1 master, 2 slave. Two separate values so cam1 (CAM_INTER_SYNC) and cam2
+# (CAM2_INTER_SYNC) can be given opposite roles.
+CAM_INTER_SYNC  = int(os.environ.get("CAM_INTER_SYNC", "0"))
+CAM2_INTER_SYNC = int(os.environ.get("CAM2_INTER_SYNC", "0"))
 
 # physical offset: camera optical centre vs robot TCP, in robot frame (mm).
 # Unmeasured (0.0) by default — the pre-align "move to center" step is only

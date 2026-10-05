@@ -1,19 +1,31 @@
+import json
 import time
+import struct
+from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, Response, Query
+from fastapi import APIRouter, Request, Response, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import threading
 import cv2
 import numpy as np
 
-from routers.mapcontrol import cam, state, _mjpeg_generator, _STREAM_HEADERS, _colorize_depth
+from routers.mapcontrol import cam, state, _mjpeg_generator, _STREAM_HEADERS, _colorize_depth, _log_user_event
 from maps_point.camera import list_devices, Camera
 from maps_point.render import draw_overlay
 
 router = APIRouter()
 
 SCAN_TIMEOUT_S = 6.0
+
+# CAM2 shares the link with CAM1 (see mapcontrol.STREAM_TARGET_FPS) and streams
+# at the D455's native 848x480. At a fixed bitrate perceived sharpness is set
+# more by JPEG quality (blockiness) than by resolution, so Q70 @8fps reads
+# cleaner than the old Q55 while still fitting under ~5 Mbps with cam1.
+CAM2_STREAM_W = 848
+CAM2_STREAM_H = 480
+CAM2_STREAM_QUALITY = 70
+CAM2_TARGET_FPS = 8
 
 
 class CameraModeBody(BaseModel):
@@ -27,8 +39,25 @@ class CameraSelectBody(BaseModel):
 # ── Secondary Camera Singleton ───────────────────────────────────────────────
 cam2: Optional[Camera] = None
 cam2_lock = threading.Lock()
+_cam2_start_lock = threading.Lock()
 _cam2_last_active = 0.0
-CAM2_IDLE_STOP_S = 30.0
+
+_SELECTION_PATH = Path(__file__).resolve().parents[1] / "camera_selection.json"
+
+
+def load_saved_selection() -> dict:
+    try:
+        return json.loads(_SELECTION_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_selection(primary: Optional[str] = None, secondary: Optional[str] = None) -> None:
+    try:
+        _SELECTION_PATH.write_text(
+            json.dumps({"primary": primary, "secondary": secondary}), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def get_cam2() -> Camera:
@@ -39,56 +68,73 @@ def get_cam2() -> Camera:
         return cam2
 
 
-def ensure_cam2_running(target_serial: Optional[str] = None) -> Optional[Camera]:
-    global _cam2_last_active
-    c2 = get_cam2()
+def _cam2_pick_serial(target_serial: Optional[str] = None) -> Optional[str]:
+    """Resolve which device serial CAM2 should use (explicit target, else the
+    first enumerated device that is not CAM1's serial)."""
     devices = getattr(state, "camera_devices", [])
     if not devices:
         return None
-
     if target_serial:
         dev = next((d for d in devices if d.get("serial") == target_serial), None)
     else:
-        dev = next((d for d in devices if d.get("serial") and d.get("serial") != cam.serial), None)
+        dev = next((d for d in devices
+                    if d.get("serial") and d.get("serial") != cam.serial), None)
+    return dev["serial"] if dev else None
 
-    if not dev:
-        return None
 
-    dev_serial = dev["serial"]
-    if c2.serial != dev_serial or not c2._running:
+def start_cam2_once(target_serial: Optional[str] = None) -> Optional[Camera]:
+    """Start CAM2 exactly like CAM1: one pipeline, started once, run forever.
+
+    Unlike the old ensure_cam2_running() this never stops/restarts the pipeline
+    while it is already running — a repeated stop()+start() here was racing the
+    USB device with CAM1's pipeline and left both cameras dead with
+    "Device or resource busy". If CAM2 is running it is returned as-is; the
+    capture thread's own _reopen_pipeline() handles USB drops.
+
+    NOTE: a freshly constructed Camera() inherits CAM_SERIAL (= CAM1's serial),
+    so c2.serial is NOT trustworthy until it has been explicitly assigned. Any
+    serial equal to CAM1's is discarded and the *other* enumerated device is
+    used instead — otherwise both pipelines fight over the same D455.
+    """
+    global _cam2_last_active
+    c2 = get_cam2()
+    if c2._running:
+        _cam2_last_active = time.time()
+        return c2
+    with _cam2_start_lock:
+        if c2._running:
+            _cam2_last_active = time.time()
+            return c2
+        serial = c2.serial
+        if not serial or serial == cam.serial:
+            serial = _cam2_pick_serial(target_serial)
+        if not serial or serial == cam.serial:
+            return None
         try:
-            c2.stop()
-            c2.set_serial(dev_serial)
+            c2.set_serial(serial)
+            # Role must be set AFTER set_serial — before this point c2.serial
+            # still equals CAM1's, so an earlier main.py call would have
+            # reprogrammed cam1 instead.
+            from maps_point.config import CAM2_INTER_SYNC
+            c2.set_inter_cam_sync(CAM2_INTER_SYNC)
+            print(f"[Cam2] starting serial={serial}", flush=True)
             c2.start()
         except Exception as e:
             print(f"[Cam2] Start failed: {e}", flush=True)
-    _cam2_last_active = time.time()
-    return c2 if c2._running else None
+            return None
+        _cam2_last_active = time.time()
+        print(f"[Cam2] running={c2._running}", flush=True)
+        return c2 if c2._running else None
 
 
-def _cam2_idle_watchdog():
-    """Stop the CAM2 pipeline once nobody has viewed it for a while.
-
-    The Camera capture thread runs independently of any HTTP client, so
-    without this a single visit to the camera page (or a stream2 request)
-    left the second D455 streaming forever — measured 2026-09-25: backend
-    CPU 175% with zero stream2 clients, which starves CAM1's depth/tracking
-    and makes align fail ("no valid plane fit" / "points not locked on yet").
-    """
-    while True:
-        time.sleep(5.0)
-        c2 = cam2
-        if c2 is None or not c2._running:
-            continue
-        if _cam2_last_active and (time.time() - _cam2_last_active) > CAM2_IDLE_STOP_S:
-            try:
-                c2.stop()
-                print("[Cam2] stopped (idle)", flush=True)
-            except Exception as e:
-                print(f"[Cam2] idle stop failed: {e}", flush=True)
-
-
-threading.Thread(target=_cam2_idle_watchdog, daemon=True).start()
+def ensure_cam2_running(target_serial: Optional[str] = None) -> Optional[Camera]:
+    """Backwards-compatible wrapper: return CAM2 if running, else start once."""
+    c2 = get_cam2()
+    if c2._running:
+        global _cam2_last_active
+        _cam2_last_active = time.time()
+        return c2
+    return start_cam2_once(target_serial)
 
 
 def _cam2_transform(cf, df, mode: Optional[str]):
@@ -120,8 +166,12 @@ def _cam2_encode(cf, df, mode: Optional[str], count: int):
         hit = _CAM2_ENC_CACHE.get(key)
         if hit is not None:
             return hit
-        ok, buf = cv2.imencode(".jpg", _cam2_transform(cf, df, mode),
-                               [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+        frame = _cam2_transform(cf, df, mode)
+        if frame.shape[1] != CAM2_STREAM_W or frame.shape[0] != CAM2_STREAM_H:
+            frame = cv2.resize(frame, (CAM2_STREAM_W, CAM2_STREAM_H),
+                               interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", frame,
+                               [int(cv2.IMWRITE_JPEG_QUALITY), CAM2_STREAM_QUALITY])
         if not ok:
             return None
         payload = buf.tobytes()
@@ -132,6 +182,13 @@ def _cam2_encode(cf, df, mode: Optional[str], count: int):
 
 
 def _mjpeg_generator_cam2(target_serial: Optional[str] = None, mode: Optional[str] = None):
+    """CAM2 MJPEG generator — same pacing as CAM1 (_mjpeg_generator).
+
+    CAM2 now runs as a peer of CAM1 (started once at boot, never restarted by
+    a viewer), so it gets the same uncapped "yield the instant a new frame
+    exists" loop. The old 15fps throttle only added latency — every displayed
+    frame was one to two frames behind the live scene.
+    """
     global _cam2_last_active
     c2 = ensure_cam2_running(target_serial)
     if not c2 or not c2._running:
@@ -152,31 +209,30 @@ def _mjpeg_generator_cam2(target_serial: Optional[str] = None, mode: Optional[st
             return
 
     last_count = -1
+    last_sent = 0.0
+    min_dt = 1.0 / max(CAM2_TARGET_FPS, 1)
     while c2 and c2._running:
-        loop_start = time.time()
         _cam2_last_active = time.time()
         cf, df = c2.get_latest_frames_ref()
         if cf is None:
-            time.sleep(0.04)
+            time.sleep(0.01)
             continue
 
         count = c2._frame_count
         if count == last_count:
-            time.sleep(0.02)
+            time.sleep(0.002)
+            continue
+        now = time.monotonic()
+        if now - last_sent < min_dt:
+            time.sleep(0.002)
             continue
         last_count = count
+        last_sent = now
 
         payload = _cam2_encode(cf, df, mode, count)
         if payload is None:
             continue
         yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + payload + b"\r\n")
-
-        # Lower CAM2 fps while the control pipeline needs the CPU, so align/draw
-        # (cam1 capture + tracking) is not starved by the display stream.
-        fps = 8 if (state.align_running or state.draw_running) else 15
-        dt = time.time() - loop_start
-        if dt < 1.0 / fps:
-            time.sleep(1.0 / fps - dt)
 
 
 @router.get("/mode")
@@ -186,22 +242,41 @@ def get_camera_mode():
 
 
 @router.post("/mode")
-def set_camera_mode(body: CameraModeBody):
+def set_camera_mode(request: Request, body: CameraModeBody):
     """Set camera display mode (rgb, gray, or depth)."""
     m = body.mode.lower()
     if m not in ("rgb", "gray", "depth"):
         return {"ok": False, "error": f"Invalid mode '{body.mode}'. Expected 'rgb', 'gray', or 'depth'"}
     state.camera_mode = m
+    _log_user_event(request, "camera", "mode", f"cam1={m}")
     return {"ok": True, "mode": state.camera_mode}
 
 
+@router.get("/mode2")
+def get_camera_mode2():
+    """Get current CAM2 display mode (rgb, gray, or depth)."""
+    return {"mode": getattr(state, "camera2_mode", "rgb")}
+
+
+@router.post("/mode2")
+def set_camera_mode2(request: Request, body: CameraModeBody):
+    """Set CAM2 display mode (rgb, gray, or depth)."""
+    m = body.mode.lower()
+    if m not in ("rgb", "gray", "depth"):
+        return {"ok": False, "error": f"Invalid mode '{body.mode}'. Expected 'rgb', 'gray', or 'depth'"}
+    state.camera2_mode = m
+    _log_user_event(request, "camera", "mode", f"cam2={m}")
+    return {"ok": True, "mode": state.camera2_mode}
+
+
 @router.post("/mode/toggle")
-def toggle_camera_mode():
+def toggle_camera_mode(request: Request):
     """Cycle between rgb, gray, and depth mode."""
     modes = ["rgb", "gray", "depth"]
     current = getattr(state, "camera_mode", "rgb")
     next_idx = (modes.index(current) + 1) % len(modes) if current in modes else 0
     state.camera_mode = modes[next_idx]
+    _log_user_event(request, "camera", "mode", f"cam1={state.camera_mode}")
     return {"ok": True, "mode": state.camera_mode}
 
 
@@ -289,6 +364,7 @@ def select_camera(body: CameraSelectBody):
             c2.set_serial(old_primary)
             c2.start()
 
+    save_selection(cam.serial, c2.serial if c2 else None)
     return {"ok": ok, "selected": cam.serial, "running": cam._running}
 
 
@@ -324,6 +400,7 @@ def swap_cameras():
     else:
         ok2 = False
 
+    save_selection(cam.serial, c2.serial if c2 else None)
     return {
         "ok": ok1,
         "selected": cam.serial,
@@ -346,11 +423,127 @@ def camera_stream(mode: Optional[str] = None):
 @router.get("/stream2")
 def camera_stream_secondary(serial: Optional[str] = None, mode: Optional[str] = None):
     """Stream MJPEG video feed for secondary camera (optional ?mode=rgb|gray|depth)."""
+    if mode:
+        m = mode.lower()
+        if m in ("rgb", "gray", "depth"):
+            state.camera2_mode = m
     return StreamingResponse(
         _mjpeg_generator_cam2(target_serial=serial, mode=mode),
         media_type="multipart/x-mixed-replace; boundary=frame",
         headers=_STREAM_HEADERS,
     )
+
+
+@router.get("/pointcloud2")
+def camera_pointcloud2(serial: Optional[str] = None,
+                       max_pts: int = Query(default=0, alias="max")):
+    """Secondary camera's SDK colored cloud, same binary layout as
+    /api/map/pointcloud (uint32 N + int16 mm xyz + uint8 rgb).
+    ?max=N subsamples before serializing (see /api/map/pointcloud)."""
+    c2 = ensure_cam2_running(target_serial=serial)
+    if not c2 or not c2._running:
+        return Response(status_code=503)
+    pos, col = c2.get_latest_pointcloud()
+    if pos is None or pos.shape[0] == 0:
+        return Response(status_code=503)
+    if max_pts and pos.shape[0] > max_pts:
+        idx = np.linspace(0, pos.shape[0] - 1, max_pts).astype(np.int64)
+        pos = pos[idx]
+        col = col[idx]
+    mm = np.clip(pos * 1000.0, -32767.0, 32767.0).astype("<i2")
+    rgb = np.ascontiguousarray(col, dtype=np.uint8)
+    body = struct.pack("<I", mm.shape[0]) + mm.tobytes() + rgb.tobytes()
+    return Response(content=body, media_type="application/octet-stream",
+                    headers=_STREAM_HEADERS)
+
+
+_cam2_depth_map = None            # float32 212x120 persistent depth grid
+_cam2_occ_ts = None               # per-cell first-occluded timestamp (idle accept)
+_cam2_depth_lock = threading.Lock()
+# New depth below this fraction of the stored value is an occluder (the arm or
+# something placed in front), not the surface — keep the stored value so the
+# mesh survives. 0.9 also covers the viewer's >80mm neighbour-jump hole rule.
+CAM2_OCCLUDE_RATIO = 0.9
+# A cell that stays occluded this long while the arm is idle is a real scene
+# change (object placed in front), not the arm — accept the new value so the
+# mesh tracks the scene; brief occlusions (the sweeping arm) never touch it.
+CAM2_OCCLUDE_ACCEPT_S = 20.0
+# D455 depth under ~30cm is unreliable; returns closer than this are discarded
+# (treated as unseen) so the near arm never paints garbage onto the mesh.
+CAM2_MIN_DEPTH_MM = 300.0
+# While the robot has moved within this window the arm may be the occluder —
+# keep the stored surface and restart the accept clock once the arm stops.
+CAM2_ARM_COOLDOWN_S = 2.0
+
+
+def reset_cam2_depth_map() -> None:
+    """Drop the persistent cam2 depth grid (the Clear button / camera restart)."""
+    global _cam2_depth_map, _cam2_occ_ts
+    with _cam2_depth_lock:
+        _cam2_depth_map = None
+        _cam2_occ_ts = None
+
+
+def _get_cam2_depth_persistent():
+    """Depth grid for the cam2 3D mesh that survives occluders (the sweeping
+    arm, or anything passing between cam2 and the surface).
+
+    The viewer hides any cell whose depth jumps >80mm from a neighbour, so a
+    closer occluder written over the surface punches a hole. A return below
+    CAM2_MIN_DEPTH_MM is discarded (unreliable near-range) and treated as
+    unseen. While the arm moves (or just moved) a closer return is the arm and
+    the stored surface is kept; once the arm is idle a cell that stays occluded
+    for CAM2_OCCLUDE_ACCEPT_S is accepted — a real scene change (object placed
+    in front) appears in the mesh, while brief occlusions never touch it.
+    Cleared via the Clear button."""
+    global _cam2_depth_map, _cam2_occ_ts
+    c2 = ensure_cam2_running()
+    if c2 is None or not c2._running:
+        reset_cam2_depth_map()
+        return None
+    cf, df = c2.get_latest_frames_ref()
+    with _cam2_depth_lock:
+        if df is None:
+            return _cam2_depth_map
+        d = cv2.resize(df, (212, 120), interpolation=cv2.INTER_NEAREST).astype(np.float32)
+        valid_new = d >= CAM2_MIN_DEPTH_MM
+        now = time.time()
+        arm_active = bool(getattr(state, "align_running", False)
+                          or getattr(state, "draw_running", False)
+                          or now - getattr(state, "robot_motion_ts", 0.0) < CAM2_ARM_COOLDOWN_S)
+        if _cam2_depth_map is None:
+            _cam2_depth_map = np.where(valid_new, d, 0.0)
+            _cam2_occ_ts = np.zeros(d.shape, dtype=np.float32)
+        else:
+            prev = _cam2_depth_map
+            occluder = valid_new & (prev > 0) & (d < prev * CAM2_OCCLUDE_RATIO)
+            if arm_active:
+                # The arm may be the occluder — keep the stored surface and let
+                # the accept clock restart once the arm stops moving.
+                _cam2_occ_ts[:] = 0.0
+                update = valid_new & ~occluder
+            else:
+                # Arm idle: a newly-occluded cell starts a clock; only accept
+                # it after CAM2_OCCLUDE_ACCEPT_S (a real change), so a briefly
+                # blocking arm never punches holes in the mesh.
+                first = occluder & (_cam2_occ_ts == 0)
+                _cam2_occ_ts[first] = now
+                _cam2_occ_ts[~occluder] = 0.0
+                accept = occluder & (now - _cam2_occ_ts > CAM2_OCCLUDE_ACCEPT_S)
+                update = valid_new & (~occluder | accept)
+            prev[update] = d[update]
+        return _cam2_depth_map
+
+
+@router.get("/depth_grid2")
+def camera_depth_grid2(serial: Optional[str] = None):
+    d = _get_cam2_depth_persistent()
+    if d is None:
+        return Response(status_code=503)
+    d = np.ascontiguousarray(np.clip(d, 0, 65535).astype("<u2"))
+    hdr = struct.pack("<HH", 212, 120)
+    return Response(content=hdr + d.tobytes(), media_type="application/octet-stream",
+                    headers=_STREAM_HEADERS)
 
 
 @router.get("/snapshot")

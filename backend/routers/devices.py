@@ -113,6 +113,78 @@ async def get_relay_history(
     return {"history": [{"state": l.state, "time": l.created_at.isoformat()} for l in logs]}
 
 
+@router.get("/events")
+async def get_events(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    device: str = "",
+    username: str = "",
+    search: str = "",
+    limit: int = 100,
+    offset: int = 0,
+):
+    """Activity log with the acting user — "who did what" (robot / camera /
+    align / estop / relay). Newest first; filter by device, username, or a
+    free-text match on `detail`; page with limit + offset."""
+    stmt = (
+        select(DeviceLog, User.username)
+        .join(User, DeviceLog.user_id == User.id, isouter=True)
+    )
+    if device:
+        stmt = stmt.where(DeviceLog.device == device)
+    if username:
+        stmt = stmt.where(User.username == username)
+    if search:
+        stmt = stmt.where(DeviceLog.detail.ilike(f"%{search}%"))
+    stmt = (
+        stmt.order_by(desc(DeviceLog.created_at))
+        .limit(max(1, min(limit, 500)))
+        .offset(max(0, offset))
+    )
+    rows = (await db.execute(stmt)).all()
+    return {
+        "events": [
+            {
+                "id": log.id,
+                "time": log.created_at.isoformat() if log.created_at else None,
+                "user": uname or log.user_id,
+                "device": log.device,
+                "action": log.state,
+                "detail": log.detail,
+            }
+            for log, uname in rows
+        ]
+    }
+
+
+@router.post("/events/prune")
+async def prune_events(
+    device: str = "",
+    keep: int = 100,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete all but the newest `keep` rows (optionally for one device).
+
+    device_logs only ever grows; the auto-align loop in particular can write
+    hundreds of near-identical rows. This trims the table on demand."""
+    from sqlalchemy import delete
+    keep = max(1, min(int(keep), 5000))
+    sub = select(DeviceLog.id).where(DeviceLog.user_id == user.id)
+    if device:
+        sub = sub.where(DeviceLog.device == device)
+    sub = sub.order_by(desc(DeviceLog.created_at)).limit(keep)
+    keep_ids = list((await db.execute(sub)).scalars().all())
+    stmt = delete(DeviceLog).where(DeviceLog.user_id == user.id)
+    if keep_ids:
+        stmt = stmt.where(DeviceLog.id.notin_(keep_ids))
+    if device:
+        stmt = stmt.where(DeviceLog.device == device)
+    res = await db.execute(stmt)
+    await db.commit()
+    return {"ok": True, "deleted": int(res.rowcount or 0)}
+
+
 @router.get("/ping")
 async def ping_robot():
     """Quick ping check for robot at 192.168.10.110."""

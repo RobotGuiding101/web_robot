@@ -56,7 +56,10 @@ const SystemSettingsPage = () => {
   const [homeX, setHomeX] = useState(() => localStorage.getItem('home_x') || '0.0')
   const [homeY, setHomeY] = useState(() => localStorage.getItem('home_y') || '0.0')
   const [homeZ, setHomeZ] = useState(() => localStorage.getItem('home_z') || '0.0')
-  const [feedbackMsg, setFeedbackMsg] = useState(null)
+  const [homeRx, setHomeRx] = useState(() => localStorage.getItem('home_rx') || '0.0')
+  const [homeRy, setHomeRy] = useState(() => localStorage.getItem('home_ry') || '0.0')
+  const [homeRz, setHomeRz] = useState(() => localStorage.getItem('home_rz') || '0.0')
+  const [feedbackMsg, setFeedbackMsg] = useState(null) // { text, type: 'ok'|'error' }
 
   /* Save states */
   const [savedSection, setSavedSection] = useState(null)
@@ -66,8 +69,8 @@ const SystemSettingsPage = () => {
     setTimeout(() => setSavedSection(null), 2000)
   }
 
-  const showFeedback = (msg) => {
-    setFeedbackMsg(msg)
+  const showFeedback = (msg, type = 'ok') => {
+    setFeedbackMsg({ text: msg, type })
     setTimeout(() => setFeedbackMsg(null), 3000)
   }
 
@@ -94,6 +97,26 @@ const SystemSettingsPage = () => {
       .catch(() => {})
   }, [])
 
+  useEffect(() => {
+    apiFetch('/api/settings')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!d) return
+        if (d.home_x !== undefined) setHomeX(String(d.home_x))
+        if (d.home_y !== undefined) setHomeY(String(d.home_y))
+        if (d.home_z !== undefined) setHomeZ(String(d.home_z))
+        if (d.home_rx !== undefined) setHomeRx(String(d.home_rx))
+        if (d.home_ry !== undefined) setHomeRy(String(d.home_ry))
+        if (d.home_rz !== undefined) setHomeRz(String(d.home_rz))
+        if (d.cam_serial) setCamSelected(String(d.cam_serial))
+        try {
+          const arr = JSON.parse(d.cam_devices || '[]')
+          if (Array.isArray(arr) && arr.length) setCamDevices(arr)
+        } catch { /* ignore malformed cache */ }
+      })
+      .catch(() => {})
+  }, [])
+
   /* ── Camera device scan / select ── */
   const handleScanCameras = async () => {
     setCamBusy(true)
@@ -101,11 +124,19 @@ const SystemSettingsPage = () => {
     try {
       const res = await apiFetch('/api/camera/scan', { method: 'POST' })
       const data = await res.json()
-      setCamDevices(Array.isArray(data.devices) ? data.devices : [])
+      const arr = Array.isArray(data.devices) ? data.devices : []
+      setCamDevices(arr)
       setCamSelected(data.selected || '')
       setCamRunning(!!data.running)
-      const n = data.devices ? data.devices.length : 0
+      const n = arr.length
       setCamMsg(n > 0 ? `พบ ${n} กล้อง` : 'ไม่พบกล้อง')
+      if (n > 0) {
+        apiFetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ settings: [{ key: 'cam_devices', value: JSON.stringify(arr) }] }),
+        }).catch(() => {})
+      }
     } catch {
       setCamMsg('สแกนไม่สำเร็จ')
     } finally {
@@ -127,6 +158,13 @@ const SystemSettingsPage = () => {
       setCamSelected(data.selected || serial)
       setCamRunning(!!data.running)
       setCamMsg(data.ok ? 'สลับกล้องแล้ว' : 'เปิดกล้องไม่สำเร็จ')
+      if (data.ok) {
+        apiFetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ settings: [{ key: 'cam_serial', value: serial }] }),
+        }).catch(() => {})
+      }
     } catch {
       setCamMsg('สลับกล้องไม่สำเร็จ')
     } finally {
@@ -151,13 +189,13 @@ const SystemSettingsPage = () => {
       const data = await res.json()
       setRobotConnected(!!data.ok)
       if (data.ok) {
-        showFeedback('Robot connected')
+        showFeedback('Robot connected', 'ok')
       } else {
-        showFeedback('Robot connection failed')
+        showFeedback('Robot connection failed', 'error')
       }
     } catch {
       setRobotConnected(false)
-      showFeedback('Network error')
+      showFeedback('Network error', 'error')
     } finally {
       setRobotLoading(false)
     }
@@ -172,11 +210,30 @@ const SystemSettingsPage = () => {
     showSaved('robot')
   }
 
-  const handleSaveHome = () => {
+  const handleSaveHome = async () => {
     localStorage.setItem('home_x', homeX)
     localStorage.setItem('home_y', homeY)
     localStorage.setItem('home_z', homeZ)
-    showSaved('home')
+    localStorage.setItem('home_rx', homeRx)
+    localStorage.setItem('home_ry', homeRy)
+    localStorage.setItem('home_rz', homeRz)
+    try {
+      await apiFetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings: [
+          { key: 'home_x', value: String(homeX) },
+          { key: 'home_y', value: String(homeY) },
+          { key: 'home_z', value: String(homeZ) },
+          { key: 'home_rx', value: String(homeRx) },
+          { key: 'home_ry', value: String(homeRy) },
+          { key: 'home_rz', value: String(homeRz) },
+        ] }),
+      })
+      showSaved('home')
+    } catch {
+      showFeedback('บันทึก home ไม่สำเร็จ', 'error')
+    }
   }
 
   const handleEmergency = () => {
@@ -232,7 +289,11 @@ const SystemSettingsPage = () => {
               <StatusBadge connected={robotConnected} />
             </SettingsRow>
             <div className="settings-actions">
-              {feedbackMsg && <span className="settings-feedback-msg">{feedbackMsg}</span>}
+              {feedbackMsg && (
+                <span className={`settings-feedback-msg${feedbackMsg.type === 'error' ? ' settings-feedback-msg--error' : ''}`}>
+                  {feedbackMsg.text}
+                </span>
+              )}
               <button
                 id="btn-test-connection"
                 className={`settings-btn settings-btn--secondary ${robotLoading ? 'loading' : ''}`}
@@ -294,6 +355,42 @@ const SystemSettingsPage = () => {
                   step="0.1"
                   value={homeZ}
                   onChange={(e) => setHomeZ(e.target.value)}
+                  placeholder="0.0"
+                />
+              </div>
+              <div className="settings-coord-field">
+                <label className="settings-coord-label" htmlFor="home-rx">RX</label>
+                <input
+                  id="home-rx"
+                  className="settings-coord-input"
+                  type="number"
+                  step="0.1"
+                  value={homeRx}
+                  onChange={(e) => setHomeRx(e.target.value)}
+                  placeholder="0.0"
+                />
+              </div>
+              <div className="settings-coord-field">
+                <label className="settings-coord-label" htmlFor="home-ry">RY</label>
+                <input
+                  id="home-ry"
+                  className="settings-coord-input"
+                  type="number"
+                  step="0.1"
+                  value={homeRy}
+                  onChange={(e) => setHomeRy(e.target.value)}
+                  placeholder="0.0"
+                />
+              </div>
+              <div className="settings-coord-field">
+                <label className="settings-coord-label" htmlFor="home-rz">RZ</label>
+                <input
+                  id="home-rz"
+                  className="settings-coord-input"
+                  type="number"
+                  step="0.1"
+                  value={homeRz}
+                  onChange={(e) => setHomeRz(e.target.value)}
                   placeholder="0.0"
                 />
               </div>

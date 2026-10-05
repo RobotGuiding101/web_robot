@@ -4,6 +4,8 @@ STRUCTURE.md
 PI5.md
 
 # Python
+.venv/
+venv/
 __pycache__/
 *.py[cod]
 
@@ -21,3 +23,9 @@ dist/
 !.env.example
 .maps_point.env
 !.maps_point.env.example
+
+# Floor calibration (runtime)
+backend/floor_calib.json
+
+# Excel lock/temp files
+~\$*.xlsx

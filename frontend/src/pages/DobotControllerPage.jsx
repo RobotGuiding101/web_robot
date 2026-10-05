@@ -7,7 +7,7 @@ const STEP_VALUES = [0.1, 1, 5, 10, 20, 50]
 const CARTESIAN_AXES = ['X', 'Y', 'Z', 'RX', 'RY', 'RZ']
 const JOINT_AXES = ['J1', 'J2', 'J3', 'J4', 'J5', 'J6']
 const LOG_MAX = 200
-const STATUS_POLL_MS = 1000
+const STATUS_POLL_MS = 1500
 
 // ── Jog Button Group ──────────────────────────────────────────────────────────
 const JogGroup = ({ axes, onMove, disabled }) => (
@@ -55,33 +55,29 @@ const LogPanel = ({ title, channel, accentClass }) => {
 
   useEffect(() => {
     let dead = false
+    let lastId = 0
 
-    const addLine = (entry) => {
-      if (pausedRef.current) { pendingRef.current.push(entry); return }
+    const apply = (data) => {
+      if (dead || !Array.isArray(data.entries)) return
+      if (typeof data.latest === 'number') lastId = data.latest
+      const fresh = data.entries.map(e => ({ t: e.t || '', msg: e.msg || e }))
+      if (fresh.length === 0) return
       setLines((prev) => {
-        const next = [...prev, entry]
+        const next = [...prev, ...fresh]
         return next.length > LOG_MAX ? next.slice(-LOG_MAX) : next
       })
     }
 
     apiFetch('/api/map/robot_logs')
       .then((r) => r.json())
-      .then((data) => {
-        if (!dead && Array.isArray(data.entries)) {
-          setLines(data.entries.map(e => ({ t: e.t || '', msg: e.msg || e })))
-        }
-      })
+      .then(apply)
       .catch(() => { })
 
     const pollInterval = setInterval(() => {
       if (dead || pausedRef.current) return
-      apiFetch('/api/map/robot_logs')
+      apiFetch(`/api/map/robot_logs?since=${lastId}`)
         .then((r) => r.json())
-        .then((data) => {
-          if (!dead && Array.isArray(data.entries)) {
-            setLines(data.entries.map(e => ({ t: e.t || '', msg: e.msg || e })))
-          }
-        })
+        .then(apply)
         .catch(() => { })
     }, 2000)
 
@@ -148,6 +144,7 @@ const DobotControllerPage = () => {
   const [stepValue, setStepValue] = useState(1)
   const [speed, setSpeed] = useState(10)  // SpeedFactor 1-100%, loaded from DB
   const [pos, setPos] = useState({ X: 0, Y: 0, Z: 150, RX: 0, RY: 0, RZ: 0 })
+  const [tipPos, setTipPos] = useState({ X: 0, Y: 0, Z: 0 })
   const [joints, setJoints] = useState({ J1: 0, J2: 0, J3: 0, J4: 0, J5: 0, J6: 0 })
   const [lastMoved, setLastMoved] = useState(null)
 
@@ -185,6 +182,13 @@ const DobotControllerPage = () => {
   const [moveToLoading, setMoveToLoading] = useState(false)
   const [moveToStatus, setMoveToStatus] = useState(null) // 'ok' | 'error' | null
   const [moveToError, setMoveToError] = useState(null)
+
+  // ── Snap List (multi-point capture from model) ──
+  const [snapList, setSnapList] = useState([])          // [{ id, label, x,y,z,rx,ry,rz,joints }]
+  const [snapRunning, setSnapRunning] = useState(false)
+  const [snapRunIndex, setSnapRunIndex] = useState(0)
+  const [snapRunTotal, setSnapRunTotal] = useState(0)
+  const snapPendingRef = useRef(false)                  // flag: next targetPoseUpdate → add to snapList
 
   // ── Ghost Sequence Execution States ──
   const [sequenceRunning, setSequenceRunning] = useState(false)
@@ -282,14 +286,59 @@ const DobotControllerPage = () => {
     return () => clearInterval(interval)
   }, [fetchStatus])
 
-  // ── Sync real robot joints → 3D model iframe ─────────────────────────────
+  // ── Live pose/joints over WebSocket (~10 Hz) for the coordinate readout.
+  // The 3D model gets its own joint feed inside the iframe, so this page no
+  // longer pushes setJoints; /status is only needed for the slower fields. ──
   useEffect(() => {
-    if (!viewerReady || !getCoordinatesEnabled) return
+    if (!viewerReady) return
+    let dead = false
+    let ws = null
+    let timer = null
+    const connect = () => {
+      if (dead) return
+      const token = localStorage.getItem('access_token') || ''
+      if (!token) { timer = setTimeout(connect, 2000); return }
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+      try {
+        ws = new WebSocket(proto + '//' + location.host + '/ws/joints?token=' + encodeURIComponent(token))
+      } catch {
+        timer = setTimeout(connect, 2000)
+        return
+      }
+      ws.onmessage = (ev) => {
+        if (!getCoordinatesRef.current) return
+        let d
+        try { d = JSON.parse(ev.data) } catch { return }
+        if (Array.isArray(d.pose) && d.pose.length === 6) {
+          setPos({
+            X: +Number(d.pose[0]).toFixed(2), Y: +Number(d.pose[1]).toFixed(2), Z: +Number(d.pose[2]).toFixed(2),
+            RX: +Number(d.pose[3]).toFixed(2), RY: +Number(d.pose[4]).toFixed(2), RZ: +Number(d.pose[5]).toFixed(2),
+          })
+        }
+        if (Array.isArray(d.angles) && d.angles.length === 6) {
+          setJoints({
+            J1: +Number(d.angles[0]).toFixed(2), J2: +Number(d.angles[1]).toFixed(2), J3: +Number(d.angles[2]).toFixed(2),
+            J4: +Number(d.angles[3]).toFixed(2), J5: +Number(d.angles[4]).toFixed(2), J6: +Number(d.angles[5]).toFixed(2),
+          })
+        }
+      }
+      ws.onclose = () => { ws = null; timer = setTimeout(connect, 1000) }
+    }
+    connect()
+    return () => {
+      dead = true
+      if (timer) clearTimeout(timer)
+      try { if (ws) ws.close() } catch { /* ignore */ }
+    }
+  }, [viewerReady])
+
+  // ── Tell the viewer when to stop following the arm: while Get Pos is OFF,
+  // cam1 is pinned in place instead of swinging with the dragged model. ──
+  useEffect(() => {
     const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
     if (!iframe || !iframe.contentWindow) return
-    const jArr = [joints.J1, joints.J2, joints.J3, joints.J4, joints.J5, joints.J6]
-    iframe.contentWindow.postMessage({ type: 'setJoints', joints: jArr }, '*')
-  }, [joints, viewerReady, getCoordinatesEnabled])
+    iframe.contentWindow.postMessage({ type: 'getPosState', enabled: getCoordinatesEnabled }, '*')
+  }, [getCoordinatesEnabled, viewerReady])
 
   // ── Receive 3D viewer TCP / Joint updates + Gizmo drag events ─
   useEffect(() => {
@@ -305,7 +354,7 @@ const DobotControllerPage = () => {
       // Gizmo drag released — capture the final IK-solved target pose
       if (e.data.type === 'targetPoseUpdate') {
         if (typeof e.data.x === 'number') {
-          setTargetPose({
+          const pose = {
             x: +Number(e.data.x).toFixed(1),
             y: +Number(e.data.y).toFixed(1),
             z: +Number(e.data.z).toFixed(1),
@@ -313,7 +362,16 @@ const DobotControllerPage = () => {
             ry: +Number(e.data.ry || 0).toFixed(1),
             rz: +Number(e.data.rz || 0).toFixed(1),
             joints: Array.isArray(e.data.joints) ? e.data.joints : null,
-          })
+          }
+          setTargetPose(pose)
+          // If Snap was triggered, also push to snapList
+          if (snapPendingRef.current) {
+            snapPendingRef.current = false
+            setSnapList(prev => [
+              ...prev,
+              { id: Date.now(), label: `จุด ${prev.length + 1}`, ...pose },
+            ])
+          }
         }
         return
       }
@@ -370,6 +428,15 @@ const DobotControllerPage = () => {
 
       // Legacy tcpUpdate — only update UI coords when auto-sync is off
       if (e.data.type === 'tcpUpdate') {
+        // Tool-tip position is model-derived, so show it regardless of the
+        // Get Pos toggle (the model always follows the real joints).
+        if (typeof e.data.tipX === 'number') {
+          setTipPos({
+            X: +Number(e.data.tipX).toFixed(2),
+            Y: +Number(e.data.tipY).toFixed(2),
+            Z: +Number(e.data.tipZ).toFixed(2),
+          })
+        }
         if (!getCoordinatesRef.current) {
           if (typeof e.data.x === 'number') {
             setPos({
@@ -566,6 +633,72 @@ const DobotControllerPage = () => {
       setTimeout(() => setMoveToStatus(null), 3000)
     }
   }, [targetPose, connected, moveMode, speed, fetchStatus])
+
+  // ── Snap current 3D model position (sets targetPose + appends to snapList) ──
+  const handleSnapPos = useCallback(() => {
+    snapPendingRef.current = true
+    const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
+    if (iframe && iframe.contentWindow) {
+      iframe.contentWindow.postMessage({ type: 'snapPos' }, '*')
+    }
+  }, [])
+
+  const handleDeleteSnap = useCallback((id) => {
+    setSnapList(prev => {
+      const idx = prev.findIndex(s => s.id === id)
+      const next = prev.filter(s => s.id !== id).map((s, i) => ({ ...s, label: `จุด ${i + 1}` }))
+      const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
+      if (iframe && iframe.contentWindow) {
+        if (next.length === 0) {
+          // หมดแล้ว clear ทั้งหมด
+          iframe.contentWindow.postMessage({ type: 'clearGhost' }, '*')
+        } else if (idx >= 0) {
+          // ลบเฉพาะ ghost ที่ index นั้น
+          iframe.contentWindow.postMessage({ type: 'deleteGhostTarget', index: idx }, '*')
+        }
+      }
+      return next
+    })
+  }, [])
+
+  const handleMoveToSnap = useCallback(async (snap) => {
+    if (!connected) return
+    setTargetPose(snap)
+    setMoveToLoading(true); setMoveToStatus(null); setMoveToError(null)
+    try {
+      const body = { mode: moveMode, speed: Math.max(1, Math.min(100, speed || 20)) }
+      if (moveMode === 'joint' && snap.joints) { body.joints = snap.joints }
+      else { body.x = snap.x; body.y = snap.y; body.z = snap.z; body.rx = snap.rx; body.ry = snap.ry; body.rz = snap.rz }
+      const res = await apiFetch('/api/map/move_to', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      const data = await res.json()
+      if (data.ok) { setMoveToStatus('ok'); setLastMoved(snap.label) }
+      else { setMoveToStatus('error'); setMoveToError(data.error || 'Move failed') }
+    } catch (err) { setMoveToStatus('error'); setMoveToError(String(err)) }
+    finally { setMoveToLoading(false); setTimeout(() => setMoveToStatus(null), 3000) }
+  }, [connected, moveMode, speed])
+
+  const handleRunSnapSequence = useCallback(async () => {
+    if (!connected || snapList.length === 0 || snapRunning) return
+    setSnapRunning(true); setSnapRunIndex(0); setSnapRunTotal(snapList.length)
+    try {
+      const points = snapList.map(s => ({
+        x: s.x, y: s.y, z: s.z, rx: s.rx, ry: s.ry, rz: s.rz, joints: s.joints || null,
+      }))
+      const res = await apiFetch('/api/map/move_sequence', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ points, mode: sequenceMode, speed: Math.max(1, Math.min(100, speed || 20)), pause_s: Number(sequencePause) || 0.5 }),
+      })
+      const data = await res.json()
+      if (data.ok) { setSnapRunIndex(1); setLastMoved(`Run Snap (1..${points.length})`) }
+      else { setSnapRunning(false) }
+    } catch { setSnapRunning(false) }
+  }, [connected, snapList, snapRunning, sequenceMode, speed, sequencePause])
+
+  const handleStopSnapSequence = useCallback(async () => {
+    try { await apiFetch('/api/map/move_sequence/stop', { method: 'POST' }) }
+    finally { setSnapRunning(false); setSnapRunIndex(0) }
+  }, [])
 
   // ── Ghost selection & direct move handlers ─────────────────────────────────
   const handleSelectGhost = (idx) => {
@@ -800,14 +933,14 @@ const DobotControllerPage = () => {
                   >
                     {getCoordinatesEnabled ? 'Get Pos: ON' : 'Get Pos: OFF'}
                   </button>
-                  <button
-                    id="btn-clear-error"
+                  <buttonclear
+                    id="btn--error"
                     className={`init-btn init-btn--secondary${errorStatus === 'ok' ? ' init-btn--ok' : ''}${errorStatus === 'error' ? ' init-btn--error' : ''}`}
                     onClick={handleClearError}
                     title="Clear robot errors and reset alarms (/error)"
                   >
                     {errorStatus === 'ok' ? 'Cleared' : errorStatus === 'error' ? 'Error' : 'Clear Error'}
-                  </button>
+                  </buttonclear>
                   <button
                     id="btn-init-robot"
                     className={`init-btn${initLoading ? ' init-btn--loading' : ''}${initStatus === 'ok' ? ' init-btn--ok' : ''}${initStatus === 'error' ? ' init-btn--error' : ''}`}
@@ -844,6 +977,20 @@ const DobotControllerPage = () => {
                   </div>
                   <div className="coord-items">
                     {Object.entries(pos).map(([k, v]) => (
+                      <div key={k} className="coord-item">
+                        <span className="coord-axis">{k}</span>
+                        <span className="coord-val">{v.toFixed(2)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="coord-group">
+                  <div className="coord-group-header">
+                    <span className="coord-group-dot" style={{ background: '#f59e0b' }} />
+                    <span className="coord-group-label">Tip — ปลายแหลม (mm)</span>
+                  </div>
+                  <div className="coord-items">
+                    {Object.entries(tipPos).map(([k, v]) => (
                       <div key={k} className="coord-item">
                         <span className="coord-axis">{k}</span>
                         <span className="coord-val">{v.toFixed(2)}</span>
@@ -934,368 +1081,48 @@ const DobotControllerPage = () => {
                 </div>
               </div>
 
-            {/* ── Ghost Control Card (selector + list + sequence) ── */}
-              <div className="ghost-control-card">
-                {/* ── Ghost Pose Multi-Round Bar ── */}
-                <div className="ghost-pose-banner">
-                  <div className="ghost-pose-info">
-                    <span className="ghost-badge">เงาสีเทา</span>
-                    {ghostList.length > 0 ? (
-                      <span className="ghost-coords">
-                        บันทึก <strong>{ghostList.length}</strong> จุด (ล่าสุด: X:{latestGhost?.pose?.x} Y:{latestGhost?.pose?.y} Z:{latestGhost?.pose?.z})
-                      </span>
-                    ) : (
-                      <span className="ghost-empty-tip">
-                        กด <strong>Snap เงา (R)</strong> เพื่อบันทึกเงาใน 3D (ทำได้หลายจุด)
-                      </span>
-                    )}
-                  </div>
-                  <div className="ghost-actions">
-                    <button
-                      type="button"
-                      className="ghost-action-btn ghost-action-btn--snap"
-                      title="กด Snap เพื่อบันทึกเงาสีเทา ณ ตำแหน่งนี้ (กดได้หลายรอบตามต้องการ)"
-                      onClick={() => {
-                        const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
-                        if (iframe && iframe.contentWindow) {
-                          iframe.contentWindow.postMessage({ type: 'snapGhost' }, '*')
-                        }
-                      }}
-                    >
-                      Snap เงา (R)
-                    </button>
-                    {ghostList.length > 0 && (
-                      <button
-                        type="button"
-                        className="ghost-action-btn ghost-action-btn--clear"
-                        title="ลบเงาทั้งหมดออกจาก 3D"
-                        onClick={() => {
-                          const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
-                          if (iframe && iframe.contentWindow) {
-                            iframe.contentWindow.postMessage({ type: 'clearAllGhosts' }, '*')
-                          }
-                        }}
-                      >
-                        ลบเงาทั้งหมด ({ghostList.length})
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {/* ── Ghost Selector (Dropdown) ── */}
-                <div className="ghost-dropdown-row">
-                  <label className="ghost-dropdown-label">
-                    <span>เลือกเงาที่จะขยับ:</span>
-                    <select
-                      className="ghost-dropdown-select"
-                      value={selectedGhostIndex ?? ''}
-                      disabled={ghostList.length === 0}
-                      onChange={(e) => {
-                        if (e.target.value !== '') handleSelectGhost(Number(e.target.value))
-                      }}
-                    >
-                      {ghostList.length === 0 ? (
-                        <option value="">-- ยังไม่มีจุดเงา (กด Snap เงา ใน 3D ก่อน) --</option>
-                      ) : (
-                        <>
-                          <option value="" disabled>-- เลือกเงาจากลิสต์ --</option>
-                          {ghostList.map((g, idx) => (
-                            <option key={idx} value={idx}>
-                              เงา #{idx + 1} (X:{g.pose?.x} Y:{g.pose?.y} Z:{g.pose?.z})
-                            </option>
-                          ))}
-                        </>
-                      )}
-                    </select>
-                  </label>
-                  <button
-                    type="button"
-                    className="ghost-btn-move"
-                    disabled={selectedGhostIndex === null || ghostList.length === 0 || !connected || moveToLoading || sequenceRunning}
-                    onClick={() => handleMoveToGhost(selectedGhostIndex)}
-                    title="ขยับหุ่นยนต์ไปยังเงาที่เลือกทันที"
-                  >
-                    ขยับไปที่เงานี้
-                  </button>
-                </div>
-
-                {/* Chips Strip with Prev/Next (shown when ghosts exist) */}
-                {ghostList.length > 0 && (
-                  <div className="ghost-selector-bar">
-                    <button
-                      type="button"
-                      className="ghost-nav-btn"
-                      title="เลือกเงาก่อนหน้า"
-                      disabled={selectedGhostIndex === null || selectedGhostIndex <= 0}
-                      onClick={() => handleSelectGhost(Math.max(0, (selectedGhostIndex ?? 0) - 1))}
-                    >
-                      ◀
-                    </button>
-
-                    <div className="ghost-chips-list">
-                      {ghostList.map((g, idx) => (
-                        <button
-                          key={g.id || idx}
-                          type="button"
-                          className={`ghost-chip ${selectedGhostIndex === idx ? 'active' : ''}`}
-                          onClick={() => handleSelectGhost(idx)}
-                          title={`เลือกเงา #${idx + 1} (X:${g.pose?.x} Y:${g.pose?.y} Z:${g.pose?.z})`}
-                        >
-                          <span>#{idx + 1}</span>
-                          {selectedGhostIndex === idx && <span>✓</span>}
-                        </button>
-                      ))}
-                    </div>
-
-                    <button
-                      type="button"
-                      className="ghost-nav-btn"
-                      title="เลือกเงาถัดไป"
-                      disabled={selectedGhostIndex === null || selectedGhostIndex >= ghostList.length - 1}
-                      onClick={() => handleSelectGhost(Math.min(ghostList.length - 1, (selectedGhostIndex ?? 0) + 1))}
-                    >
-                      ▶
-                    </button>
-                  </div>
-                )}
-
-                {/* List View of All Ghosts (Always visible table container) */}
-                <div className="ghost-list-container">
-                  <div className="ghost-list-header">
-                    <span className="ghost-list-title">ตารางเงาทั้งหมด ({ghostList.length})</span>
-                    <span className="ghost-list-sub">
-                      {ghostList.length > 0 ? 'คลิกที่แถวเพื่อเลือก หรือกดปุ่มขยับ' : 'กด Snap เงา (R) เพื่อเพิ่มจุดลงในตาราง'}
-                    </span>
-                  </div>
-                  <div className="ghost-items-list">
-                    {ghostList.length === 0 ? (
-                      <div className="ghost-list-empty-row">
-                        ยังไม่มีจุดเงาที่บันทึก — กด <strong>Snap เงา (R)</strong> ด้านบน หรือกดแป้น <strong>R</strong> ในโมเดล 3D เพื่อบันทึกจุดเงาลงตารางนี้
-                      </div>
-                    ) : (
-                      ghostList.map((g, idx) => {
-                        const isSel = selectedGhostIndex === idx
-                        return (
-                          <div
-                            key={g.id || idx}
-                            className={`ghost-item-row ${isSel ? 'selected' : ''}`}
-                            onClick={() => handleSelectGhost(idx)}
-                            title={`เลือกเงา #${idx + 1}`}
-                          >
-                            <div className="ghost-item-info">
-                              <div className="ghost-item-name">
-                                <span>เงา #{idx + 1}</span>
-                                {isSel && <span className="ghost-item-active-badge">กำลังเลือก</span>}
-                              </div>
-                              <div className="ghost-item-coords">
-                                X: {g.pose?.x} | Y: {g.pose?.y} | Z: {g.pose?.z} mm
-                              </div>
-                            </div>
-                            <div className="ghost-item-actions" onClick={(e) => e.stopPropagation()}>
-                              <button
-                                type="button"
-                                className="ghost-item-btn-move"
-                                disabled={!connected || moveToLoading || sequenceRunning}
-                                onClick={() => handleMoveToGhost(idx)}
-                                title={`ขยับหุ่นยนต์ไปยังเงา #${idx + 1}`}
-                              >
-                                ขยับ
-                              </button>
-                              <button
-                                type="button"
-                                className="ghost-item-btn-delete"
-                                onClick={() => handleDeleteGhost(idx)}
-                                title={`ลบเงา #${idx + 1}`}
-                              >
-                                ลบ
-                              </button>
-                            </div>
-                          </div>
-                        )
-                      })
-                    )}
-                  </div>
-                </div>
-
-                {/* Selected Ghost Details & Actions */}
-                {selectedGhostIndex !== null && ghostList[selectedGhostIndex] && (
-                  <div className="ghost-details-card">
-                    <div className="ghost-details-title">
-                      <span>เงา #{selectedGhostIndex + 1}</span>
-                      <span className="ghost-details-coords">
-                        X: {ghostList[selectedGhostIndex].pose?.x} | Y: {ghostList[selectedGhostIndex].pose?.y} | Z: {ghostList[selectedGhostIndex].pose?.z} mm
-                      </span>
-                    </div>
-                    <div className="ghost-details-actions">
-                      <button
-                        type="button"
-                        className="ghost-btn-move"
-                        disabled={!connected || moveToLoading || sequenceRunning}
-                        onClick={() => handleMoveToGhost(selectedGhostIndex)}
-                        title={`ขยับหุ่นยนต์ไปยังเงา #${selectedGhostIndex + 1} ทันที (${moveMode.toUpperCase()})`}
-                      >
-                        ขยับไปที่เงานี้
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost-action-btn ghost-action-btn--restore"
-                        onClick={() => handleSelectGhost(selectedGhostIndex)}
-                        title="ตั้งพิกัดเงานี้เป็นเป้าหมายในแผงควบคุม"
-                      >
-                        ตั้งเป็นเป้าหมาย
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost-btn-delete"
-                        onClick={() => handleDeleteGhost(selectedGhostIndex)}
-                        title={`ลบเงา #${selectedGhostIndex + 1} ออก`}
-                      >
-                        ลบเงานี้
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* ── Sequential Motion Panel (ขยับทุกเงา เรียงตามลำดับ) ── */}
-                {ghostList.length > 0 && (
-                  <div className="ghost-sequence-box">
-                    <div className="ghost-sequence-header">
-                      <div className="ghost-sequence-title">
-                        <span>ขยับทุกเงา เรียงตามลำดับ</span>
-                        <span style={{ fontSize: '10px', color: '#64748b', fontWeight: 'normal' }}>
-                          (1 → {ghostList.length})
-                        </span>
-                      </div>
-                      <div className="ghost-sequence-config">
-                        <label>โหมด:
-                          <select
-                            value={sequenceMode}
-                            onChange={(e) => setSequenceMode(e.target.value)}
-                            disabled={sequenceRunning}
-                            style={{ marginLeft: '4px' }}
-                          >
-                            <option value="movj">MovJ</option>
-                            <option value="movl">MovL</option>
-                            <option value="joint">Joint</option>
-                          </select>
-                        </label>
-                        <label style={{ marginLeft: '6px' }}>พักจุดละ:
-                          <select
-                            value={sequencePause}
-                            onChange={(e) => setSequencePause(Number(e.target.value))}
-                            disabled={sequenceRunning}
-                            style={{ marginLeft: '4px' }}
-                          >
-                            <option value={0.2}>0.2s</option>
-                            <option value={0.5}>0.5s</option>
-                            <option value={1.0}>1.0s</option>
-                            <option value={2.0}>2.0s</option>
-                          </select>
-                        </label>
-                      </div>
-                    </div>
-
-                    {/* Visual flow indicator */}
-                    <div className="ghost-sequence-flow">
-                      {ghostList.map((g, idx) => (
-                        <React.Fragment key={idx}>
-                          <span
-                            className={`ghost-flow-step ${
-                              sequenceRunning && sequenceIndex === idx + 1
-                                ? 'active'
-                                : sequenceRunning && sequenceIndex > idx + 1
-                                ? 'completed'
-                                : ''
-                            }`}
-                          >
-                            เงา #{idx + 1}
-                          </span>
-                          {idx < ghostList.length - 1 && (
-                            <span className="ghost-flow-arrow">→</span>
-                          )}
-                        </React.Fragment>
-                      ))}
-                    </div>
-
-                    {/* Actions & Progress */}
-                    <div className="ghost-sequence-actions">
-                      {!sequenceRunning ? (
-                        <button
-                          type="button"
-                          className="ghost-sequence-btn ghost-sequence-btn--start"
-                          disabled={!connected || ghostList.length === 0 || moveToLoading}
-                          onClick={handleStartSequence}
-                          title="สั่งหุ่นยนต์ขยับผ่านเงาทุกจุดตามลำดับ 1 ถึง N"
-                        >
-                          เริ่มขยับทุกเงา เรียงตามลำดับ ({ghostList.length} จุด)
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          className="ghost-sequence-btn ghost-sequence-btn--stop"
-                          onClick={handleStopSequence}
-                          title="หยุดการเคลื่อนที่เรียงลำดับทันที"
-                        >
-                          หยุดการขยับลำดับ (กำลังทำจุดที่ {sequenceIndex}/{sequenceTotal})
-                        </button>
-                      )}
-                    </div>
-
-                    {sequenceRunning && (
-                      <div className="sequence-progress-bar-container">
-                        <div
-                          className="sequence-progress-bar-fill"
-                          style={{ width: `${Math.min(100, Math.max(5, (sequenceIndex / (sequenceTotal || 1)) * 100))}%` }}
-                        />
-                      </div>
-                    )}
-
-                    {sequenceMsg && (
-                      <div className="sequence-status-text">{sequenceMsg}</div>
-                    )}
-                  </div>
-                )}
-              </div>{/* end ghost-control-card */}
-
             {/* ── Target Pose & Move Card ── */}
               <div className="target-pose-card">
+                {/* ── Header ── */}
                 <div className="target-pose-header">
                   <span className="target-pose-title">เป้าหมายจากการลาก</span>
-                  {targetPose
-                    ? <span className="target-pose-ready">✓ พร้อมสั่ง</span>
-                    : <span className="target-pose-empty">ลาก Gizmo ใน 3D เพื่อตั้งเป้าหมาย</span>
-                  }
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    {targetPose
+                      ? <span className="target-pose-ready">พร้อมสั่ง</span>
+                      : <span className="target-pose-empty">ลาก Gizmo ใน 3D เพื่อตั้งเป้าหมาย</span>
+                    }
+                    <button
+                      id="btn-snap-pos"
+                      className="snap-pos-btn"
+                      onClick={handleSnapPos}
+                      title="จับตำแหน่งปัจจุบันของโมเดล 3D เป็นเป้าหมาย (ไม่ต้องลาก Gizmo)"
+                    >
+                      Snap
+                    </button>
+                  </div>
                 </div>
 
+                {/* ── Coord readout ── */}
                 {targetPose && (
                   <div className="target-pose-coords">
-                    <div className="tp-col">
-                      <div className="tp-label">X</div><div className="tp-val">{targetPose.x}</div>
-                      <div className="tp-diff">{(targetPose.x - pos.X).toFixed(1)}</div>
-                    </div>
-                    <div className="tp-col">
-                      <div className="tp-label">Y</div><div className="tp-val">{targetPose.y}</div>
-                      <div className="tp-diff">{(targetPose.y - pos.Y).toFixed(1)}</div>
-                    </div>
-                    <div className="tp-col">
-                      <div className="tp-label">Z</div><div className="tp-val">{targetPose.z}</div>
-                      <div className="tp-diff">{(targetPose.z - pos.Z).toFixed(1)}</div>
-                    </div>
-                    <div className="tp-col">
-                      <div className="tp-label">Rx</div><div className="tp-val">{targetPose.rx}</div>
-                      <div className="tp-diff">{(targetPose.rx - pos.RX).toFixed(1)}</div>
-                    </div>
-                    <div className="tp-col">
-                      <div className="tp-label">Ry</div><div className="tp-val">{targetPose.ry}</div>
-                      <div className="tp-diff">{(targetPose.ry - pos.RY).toFixed(1)}</div>
-                    </div>
-                    <div className="tp-col">
-                      <div className="tp-label">Rz</div><div className="tp-val">{targetPose.rz}</div>
-                      <div className="tp-diff">{(targetPose.rz - pos.RZ).toFixed(1)}</div>
-                    </div>
+                    {[
+                      { label: 'X',  tVal: targetPose.x,  cVal: pos.X  },
+                      { label: 'Y',  tVal: targetPose.y,  cVal: pos.Y  },
+                      { label: 'Z',  tVal: targetPose.z,  cVal: pos.Z  },
+                      { label: 'Rx', tVal: targetPose.rx, cVal: pos.RX },
+                      { label: 'Ry', tVal: targetPose.ry, cVal: pos.RY },
+                      { label: 'Rz', tVal: targetPose.rz, cVal: pos.RZ },
+                    ].map(({ label, tVal, cVal }) => (
+                      <div key={label} className="tp-col">
+                        <div className="tp-label">{label}</div>
+                        <div className="tp-val">{tVal}</div>
+                        <div className="tp-diff">{(Number(tVal) - Number(cVal)).toFixed(1)}</div>
+                      </div>
+                    ))}
                   </div>
                 )}
 
+                {/* ── Move actions ── */}
                 <div className="target-pose-actions">
                   <div className="move-mode-pills">
                     {[['movj', 'MovJ'], ['movl', 'MovL'], ['joint', 'Joint']].map(([val, label]) => (
@@ -1303,13 +1130,9 @@ const DobotControllerPage = () => {
                         key={val}
                         className={`move-mode-pill ${moveMode === val ? 'active' : ''}`}
                         onClick={() => setMoveMode(val)}
-                        title={val === 'movj' ? 'Joint interpolation (safer, recommended)' : val === 'movl' ? 'Linear Cartesian move' : 'Direct joint angles'}
-                      >
-                        {label}
-                      </button>
+                      >{label}</button>
                     ))}
                   </div>
-
                   <div className="target-pose-btns">
                     <button
                       id="btn-move-to-target"
@@ -1320,28 +1143,107 @@ const DobotControllerPage = () => {
                       }`}
                       onClick={handleMoveTo}
                       disabled={!targetPose || !connected || moveToLoading}
-                      title={!connected ? 'Robot not connected' : !targetPose ? 'Drag Gizmo in 3D viewer first' : 'Send robot to target position'}
                     >
                       {moveToLoading ? <><span className="init-btn-spinner" /> Executing…</>
-                        : moveToStatus === 'ok' ? <>✓ Sent!</>
-                        : moveToStatus === 'error' ? <>✕ Error</>
-                        : <>▶ Move Robot to Target</>}
+                        : moveToStatus === 'ok' ? 'Sent!'
+                        : moveToStatus === 'error' ? 'Error'
+                        : 'Move Robot to Target'}
                     </button>
-
                     <button
                       id="btn-reset-target"
                       className="reset-target-btn"
                       onClick={() => { setTargetPose(null); setGetCoordinatesEnabled(true); setTimeout(fetchStatus, 50) }}
-                      title="Clear target pose and resume auto position sync"
-                    >
-                      ↺ Reset
-                    </button>
+                    >Reset</button>
                   </div>
+                  {moveToError && <div className="move-to-error">{moveToError}</div>}
+                </div>
 
-                  {moveToError && (
-                    <div className="move-to-error">{moveToError}</div>
+                {/* ── Divider ── */}
+                <div style={{ height: '1px', background: 'rgba(59,130,246,0.15)', margin: '0 12px' }} />
+
+                {/* ── Snap List header ── */}
+                <div className="target-pose-header" style={{ borderBottom: 'none', paddingBottom: '6px' }}>
+                  <span className="target-pose-title">Snap List ({snapList.length} จุด)</span>
+                  {snapList.length > 0 && (
+                    <button className="reset-target-btn" onClick={() => {
+                      setSnapList([])
+                      const iframe = document.querySelector('iframe[title="Robot Arm 3D Viewer"]')
+                      if (iframe && iframe.contentWindow) {
+                        iframe.contentWindow.postMessage({ type: 'clearGhost' }, '*')
+                      }
+                    }}>ล้าง</button>
                   )}
                 </div>
+
+                {/* ── Snap items ── */}
+                {snapList.length === 0 ? (
+                  <div style={{ padding: '8px 14px 10px', fontSize: '11px', color: '#64748b', fontStyle: 'italic' }}>
+                    กด Snap เพื่อบันทึกตำแหน่ง
+                  </div>
+                ) : (
+                  <div className="snap-list-items">
+                    {snapList.map((snap) => (
+                      <div key={snap.id} className="snap-item">
+                        <div className="snap-item-left">
+                          <span className="snap-item-label">{snap.label}</span>
+                          <span className="snap-item-coords">X:{snap.x} Y:{snap.y} Z:{snap.z}</span>
+                        </div>
+                        <div className="snap-item-actions">
+                          <button
+                            className="snap-item-move-btn"
+                            onClick={() => handleMoveToSnap(snap)}
+                            disabled={!connected || moveToLoading}
+                          >Move</button>
+                          <button
+                            className="snap-item-del-btn"
+                            onClick={() => handleDeleteSnap(snap.id)}
+                          >Del</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* ── Sequence controls (show when 2+ snaps) ── */}
+                {snapList.length > 1 && (
+                  <div className="snap-list-footer">
+                    <div className="snap-seq-controls">
+                      <div className="move-mode-pills" style={{ flex: 1 }}>
+                        {[['movj', 'MovJ'], ['movl', 'MovL'], ['joint', 'Joint']].map(([val, label]) => (
+                          <button
+                            key={val}
+                            className={`move-mode-pill ${sequenceMode === val ? 'active' : ''}`}
+                            onClick={() => setSequenceMode(val)}
+                          >{label}</button>
+                        ))}
+                      </div>
+                      <label className="snap-pause-label">
+                        หยุด
+                        <input
+                          type="number" min="0" max="10" step="0.1"
+                          value={sequencePause}
+                          onChange={e => setSequencePause(+e.target.value)}
+                          className="snap-pause-input"
+                        />s
+                      </label>
+                    </div>
+                    {!snapRunning ? (
+                      <button className="snap-run-btn" onClick={handleRunSnapSequence} disabled={!connected}>
+                        Run All {snapList.length} จุด
+                      </button>
+                    ) : (
+                      <>
+                        <button className="snap-stop-btn" onClick={handleStopSnapSequence}>
+                          หยุด ({snapRunIndex}/{snapList.length})
+                        </button>
+                        <div className="snap-progress-bar">
+                          <div className="snap-progress-fill"
+                            style={{ width: `${Math.max(5, (snapRunIndex / snapList.length) * 100)}%` }} />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
 
             </div>{/* end ctrl-box */}

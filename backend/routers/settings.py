@@ -38,6 +38,8 @@ DEFAULTS: dict[str, str] = {
     "home_ry": "0.0",
     "home_rz": "0.0",
     "cam_serial": "",
+    "cam_serial2": "",
+    "cam_devices": "[]",
     "depth_roi": "15",
     "min_depth_mm": "330.0",
     "sidebar_speed": "50",
@@ -57,7 +59,7 @@ async def get_settings(
     )
     saved = {s.key: s.value for s in result.scalars().all()}
 
-    return {k: saved.get(k, v) for k, v in DEFAULTS.items()}
+    return {**DEFAULTS, **saved}
 
 
 @router.put("")

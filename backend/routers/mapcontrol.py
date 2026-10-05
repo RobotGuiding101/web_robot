@@ -7,25 +7,38 @@ Module-level globals (robot/cam/state + the continuous tracking thread)
 mirror maps_point/main.py's setup exactly.
 """
 import math
+import struct
 import threading
 import time
 from typing import Optional
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
+from jose import jwt
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from database import get_db
+from models import User, UserSetting
+from routers.auth import ALGORITHM, SECRET_KEY, get_current_user
+from routers.device_events import log_event
+import state_store
 
 from maps_point.config import (ROBOT_IP, ROBOT_MODE_LABELS,
                                DRAW_GRID_MAX_ROWS, DRAW_GRID_MAX_COLS,
                                DRAW_MIN_GRID_SPAN_MM, Z_SURFACE,
-                               CAM_TIP_OFFSET_MM, DRAW_SURFACE_GAP_MM)
+                               CAM_TIP_OFFSET_MM, DRAW_SURFACE_GAP_MM,
+                               MIN_DEPTH_MM)
 from maps_point.logs import log, server_ring, robot_ring
 from maps_point.robot import Robot, RobotMoveError
 from maps_point.camera import Camera
 from maps_point.align import AppState, do_align, start_tracking_thread
 from maps_point.motion import do_goto, pixel_to_world_xy
+from maps_point import floorcalib
 from maps_point.planegrid import do_draw, validate_grid, project_grid_2d, bilinear_cell, grid_pose
 from maps_point.render import draw_overlay
 
@@ -35,7 +48,40 @@ router = APIRouter(prefix="/api/map", tags=["MapControl"])
 robot = Robot(ROBOT_IP)
 cam = Camera()
 state = AppState()
+state.robot_motion_ts = 0.0      # set by _safe_call/_run_locked on every motion
+state_store.load(state)             # restore marks/grid from the last session
+state_store.start_autosave(state)   # persist again on change
 start_tracking_thread(cam, state)   # keeps state.points glued to the object
+
+
+def _log_user_event(request: Request, device: str, state_name: str, detail: str = ""):
+    """Fire-and-forget DeviceLog entry, attributed to the JWT subject.
+
+    The HTTP auth middleware has already validated the token by the time any
+    /api/map/* handler runs, so a missing/invalid subject simply skips logging
+    (best-effort by design — logging must never fail the robot action).
+    """
+    try:
+        header = request.headers.get("authorization", "")
+        if header.startswith("Bearer "):
+            payload = jwt.decode(header[7:], SECRET_KEY, algorithms=[ALGORITHM])
+            log_event(payload.get("sub", ""), device, state_name, detail)
+    except Exception:
+        pass
+
+
+def _bind_draw_done_hook(request: Request) -> None:
+    """Give the (thread-run) do_draw a way to log its outcome to device_logs
+    with the requesting user's id, since a background thread has no request."""
+    try:
+        header = request.headers.get("authorization", "")
+        if not header.startswith("Bearer "):
+            state.on_draw_done = None
+            return
+        sub = jwt.decode(header[7:], SECRET_KEY, algorithms=[ALGORITHM]).get("sub", "")
+        state.on_draw_done = lambda action, detail="": log_event(sub, "draw", action, detail)
+    except Exception:
+        state.on_draw_done = None
 
 
 class ConnectBody(BaseModel):
@@ -179,13 +225,31 @@ def _do_move_sequence(robot_inst, points, mode, speed, pause_s):
         sequence_running = False
 
 
+# One lock for every robot motion. Rapid jog / move / align / draw / sequence
+# each run in their own thread; without serialising them they race the CR5's
+# single move queue. RLock so a locked action may re-enter safely.
+robot_lock = threading.RLock()
+
+
+def _run_locked(fn, *args, **kwargs):
+    """Run a (usually long) robot action while holding the move lock, so it
+    cannot overlap another motion from a different thread."""
+    with robot_lock:
+        # Timestamp every motion so cam2's mesh knows the arm may be in view
+        # (see routers/camera.py _get_cam2_depth_persistent).
+        state.robot_motion_ts = time.time()
+        return fn(*args, **kwargs)
+
+
 def _safe_call(fn, *args, **kwargs):
     """Run a Robot method as a thread target, logging any failure instead of
     letting the daemon thread die with an unhandled traceback. Keep the
     generic branch: a socket timeout (robot unplugged mid-session) used to
     vanish silently here, so the UI just looked like nothing happened."""
     try:
-        fn(*args, **kwargs)
+        state.robot_motion_ts = time.time()
+        with robot_lock:
+            fn(*args, **kwargs)
     except RobotMoveError as e:
         log(f"  [Robot] move rejected — {e}")
     except Exception as e:
@@ -259,17 +323,33 @@ def _grid_fully_marked() -> bool:
 
 STREAM_FPS = 30
 STREAM_FPS_IDLE = 30
-STREAM_W = 640
-STREAM_H = 360
-STREAM_JPEG_QUALITY = 70
+# cam1 at the D455's native 848x480 (no downscale — sharpest possible) with fps
+# traded down to 15 so it still fits the ~3 Mbps 2.4 GHz budget: full-res at
+# 20-25fps measured ~6.5 Mbps and bufferbloated. Raise STREAM_TARGET_FPS first
+# for smoother motion, or lower STREAM_JPEG_QUALITY if it still stutters.
+STREAM_W = 848
+STREAM_H = 480
+STREAM_JPEG_QUALITY = 65
+STREAM_TARGET_FPS = 15
+
+
+_DEPTH_CMAP = getattr(cv2, "COLORMAP_TURBO", cv2.COLORMAP_JET)
 
 
 def _colorize_depth(df):
-    vmax = int(df.max())
-    if vmax <= 0:
-        vmax = 1
-    norm = cv2.convertScaleAbs(df, alpha=255.0 / vmax)
-    return cv2.applyColorMap(norm, cv2.COLORMAP_JET)
+    valid = df > 0
+    if not valid.any():
+        return np.zeros((df.shape[0], df.shape[1], 3), np.uint8)
+    vals = df[valid]
+    lo = float(np.percentile(vals, 2))
+    hi = float(np.percentile(vals, 98))
+    if hi - lo < 50.0:
+        hi = lo + 50.0
+    norm = np.clip((df.astype(np.float32) - lo) * (255.0 / (hi - lo)), 0, 255).astype(np.uint8)
+    norm[~valid] = 0
+    out = cv2.applyColorMap(norm, _DEPTH_CMAP)
+    out[~valid] = (0, 0, 0)
+    return out
 
 
 _ENC_LOCK = threading.Lock()
@@ -336,6 +416,8 @@ def _mjpeg_generator(mode: Optional[str] = None):
     waiting for one.
     """
     last_count = -1
+    last_sent = 0.0
+    min_dt = 1.0 / max(STREAM_TARGET_FPS, 1)
     while True:
         if not cam._running:
             time.sleep(0.2)
@@ -350,7 +432,12 @@ def _mjpeg_generator(mode: Optional[str] = None):
         if count == last_count:
             time.sleep(0.002)
             continue
+        now = time.monotonic()
+        if now - last_sent < min_dt:
+            time.sleep(0.002)
+            continue
         last_count = count
+        last_sent = now
 
         effective_mode = (mode or getattr(state, "camera_mode", "rgb")).lower()
         payload = _encode_frame(cf, df, effective_mode, count)
@@ -375,25 +462,566 @@ def video_feed(mode: Optional[str] = None):
                              headers=_STREAM_HEADERS)
 
 
+DEPTH_FRAME_W = 212
+DEPTH_FRAME_H = 120
+DEPTH_FRAME_MAX_MM = 4000.0
+
+
+@router.get("/depth_grid")
+def api_depth_grid():
+    cf, df = cam.get_latest_frames_ref()
+    if df is None:
+        return Response(status_code=503)
+    d = cv2.resize(df, (DEPTH_FRAME_W, DEPTH_FRAME_H), interpolation=cv2.INTER_NEAREST)
+    d = np.ascontiguousarray(d, dtype="<u2")
+    hdr = struct.pack("<HH", DEPTH_FRAME_W, DEPTH_FRAME_H)
+    return Response(content=hdr + d.tobytes(), media_type="application/octet-stream",
+                    headers=_STREAM_HEADERS)
+
+
+@router.get("/camera_intrinsics")
+def api_camera_intrinsics():
+    intr = cam.intrinsics or {}
+    return {
+        "fx": intr.get("fx"),
+        "fy": intr.get("fy"),
+        "cx": intr.get("cx"),
+        "cy": intr.get("cy"),
+        "w": cam.w,
+        "h": cam.h,
+    }
+
+
+@router.get("/depth_frame")
+def api_depth_frame():
+    cf, df = cam.get_latest_frames_ref()
+    if df is None:
+        return Response(status_code=503)
+    d = cv2.resize(df, (DEPTH_FRAME_W, DEPTH_FRAME_H), interpolation=cv2.INTER_NEAREST)
+    d = d.astype(np.float32)
+    valid = d > 0
+    if not valid.any():
+        return Response(status_code=503)
+    norm = np.clip(d / DEPTH_FRAME_MAX_MM, 0.0, 1.0)
+    img = (norm * 255.0).astype(np.uint8)
+    img[~valid] = 0
+    ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+    if not ok:
+        return Response(status_code=503)
+    return Response(content=buf.tobytes(), media_type="image/jpeg", headers=_STREAM_HEADERS)
+
+
+@router.get("/pointcloud")
+def api_pointcloud(max_pts: int = Query(default=0, alias="max")):
+    pos, col = cam.get_latest_pointcloud()
+    if pos is None or pos.shape[0] == 0:
+        return Response(status_code=503)
+    # ?max=N subsamples before serializing. Auto-align only needs a coarse
+    # cloud, so the full-resolution payload (hundreds of KB) is pure waste for
+    # it; 0 keeps the old full-resolution behaviour for the display toggle.
+    if max_pts and pos.shape[0] > max_pts:
+        idx = np.linspace(0, pos.shape[0] - 1, max_pts).astype(np.int64)
+        pos = pos[idx]
+        col = col[idx]
+    mm = np.clip(pos * 1000.0, -32767.0, 32767.0).astype("<i2")
+    rgb = np.ascontiguousarray(col, dtype=np.uint8)
+    body = struct.pack("<I", mm.shape[0]) + mm.tobytes() + rgb.tobytes()
+    return Response(content=body, media_type="application/octet-stream",
+                    headers=_STREAM_HEADERS)
+
+
+class ObjectAreaBody(BaseModel):
+    cam: int = 1
+    above_mm: float = 8.0
+    band_mm: float = 400.0
+    cell_mm: float = 3.0
+    min_area_cm2: float = 1.0
+    min_points: int = 40
+
+
+def _fit_plane_ransac(P, iters=300, thresh=0.006, seed=0):
+    """RANSAC + least-squares refit of the dominant plane (the flat surface).
+
+    Returns (unit_normal, d) with plane n·p = d, or None. The camera cloud is
+    unordered, so a plain least-squares fit would be dragged by the objects on
+    the surface; RANSAC locks onto the plane with the most inliers first."""
+    N = len(P)
+    if N < 50:
+        return None
+    rng = np.random.default_rng(seed)
+    best_n = None
+    best_d = 0.0
+    best_count = 0
+    for _ in range(iters):
+        i, j, k = rng.choice(N, 3, replace=False)
+        n = np.cross(P[j] - P[i], P[k] - P[i])
+        nlen = np.linalg.norm(n)
+        if nlen < 1e-9:
+            continue
+        n = n / nlen
+        d = float(n @ P[i])
+        count = int(np.count_nonzero(np.abs(P @ n - d) < thresh))
+        if count > best_count:
+            best_count = count
+            best_n, best_d = n, d
+    if best_n is None:
+        return None
+    inliers = P[np.abs(P @ best_n - best_d) < thresh]
+    if len(inliers) >= 3:
+        c = inliers.mean(axis=0)
+        _, _, vt = np.linalg.svd(inliers - c, full_matrices=False)
+        best_n = vt[-1] / np.linalg.norm(vt[-1])
+        best_d = float(best_n @ c)
+    return best_n, best_d
+
+
+@router.post("/object_area")
+def api_object_area(body: ObjectAreaBody):
+    """Area of each object resting on a flat surface, from a camera point cloud.
+
+    Fits the dominant plane (the surface) with RANSAC, keeps points that sit
+    above it within a height band (so the floor/background below is ignored),
+    clusters them on a raster grid and returns each cluster's planar area
+    (convex hull) in cm². Intended for "flat surface + objects on top".
+    """
+    c = cam if body.cam == 1 else None
+    if c is None:
+        from routers.camera import get_cam2
+        c = get_cam2()
+    if c is None or not getattr(c, "_running", False):
+        return {"ok": False, "error": "camera not running"}
+    pos, _ = c.get_latest_pointcloud()
+    if pos is None or len(pos) < 100:
+        return {"ok": False, "error": "point cloud not ready"}
+
+    P = np.asarray(pos, dtype=np.float64)
+    fit = _fit_plane_ransac(P)
+    if fit is None:
+        return {"ok": False, "error": "could not fit surface plane"}
+    n, d = fit
+    # Orient the normal so the camera (origin) is on the +n side; then object
+    # points (between camera and surface) get a positive height.
+    if -d < 0:
+        n, d = -n, -d
+
+    h = P @ n - d
+    lo = max(0.0, body.above_mm) / 1000.0
+    hi = max(lo + 0.001, body.band_mm / 1000.0)
+    obj = P[(h > lo) & (h < hi)]
+    if len(obj) < 30:
+        return {"ok": True, "cam": body.cam, "count": 0, "total_cm2": 0.0, "objects": []}
+
+    a = np.array([1.0, 0.0, 0.0])
+    if abs(n @ a) > 0.9:
+        a = np.array([0.0, 1.0, 0.0])
+    u = np.cross(n, a)
+    u /= np.linalg.norm(u)
+    v = np.cross(n, u)
+    uv = np.stack([obj @ u, obj @ v], axis=1)
+
+    cell = max(0.001, body.cell_mm / 1000.0)
+    mn = uv.min(axis=0)
+    idx = np.floor((uv - mn) / cell).astype(np.int64)
+    W = int(idx[:, 0].max()) + 3
+    H = int(idx[:, 1].max()) + 3
+    if W * H > 8_000_000:
+        return {"ok": False, "error": "scene too large to cluster"}
+    grid = np.zeros((H, W), np.uint8)
+    grid[idx[:, 1], idx[:, 0]] = 1
+    grid = cv2.morphologyEx(grid, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    grid = cv2.morphologyEx(grid, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    nlab, labels = cv2.connectedComponents(grid, connectivity=8)
+    plabels = labels[idx[:, 1], idx[:, 0]]
+
+    objects = []
+    cell_area_cm2 = (cell * 100.0) ** 2
+    for lab in range(1, nlab):
+        sel = plabels == lab
+        cnt = int(sel.sum())
+        if cnt < body.min_points:
+            continue
+        # Cell-count area instead of a convex hull: a single stray point would
+        # blow the hull out to hundreds of cm² and the cell count is robust to
+        # those outliers.
+        cells = int(np.count_nonzero(labels == lab))
+        area_cm2 = cells * cell_area_cm2
+        if area_cm2 < body.min_area_cm2:
+            continue
+        cen = uv[sel].mean(axis=0)
+        objects.append({
+            "area_cm2": round(float(area_cm2), 2),
+            "centroid_mm": [round(float(cen[0]) * 1000, 1), round(float(cen[1]) * 1000, 1)],
+            "points": cnt,
+        })
+
+    objects.sort(key=lambda o: -o["area_cm2"])
+    total = round(sum(o["area_cm2"] for o in objects), 2)
+    return {"ok": True, "cam": body.cam, "count": len(objects),
+            "total_cm2": total, "objects": objects}
+
+
+class PlaneCamBody(BaseModel):
+    cam: int = 2
+
+
+class PlaneAreaBody(BaseModel):
+    cam: int = 2
+    thr: float = 25.0
+    min_area_cm2: float = 1.0
+    cell_mm: float = 5.0
+
+
+_PLANE_BG: dict = {}
+_PLANE_BG_LOCK = threading.Lock()
+
+
+def _area_cam(cam_id: int):
+    if cam_id == 1:
+        return cam
+    from routers.camera import get_cam2
+    return get_cam2()
+
+
+@router.get("/color_frame")
+def api_color_frame(cam: int = 1):
+    """Latest native-resolution colour frame as JPEG — lets the calibration UI
+    show a flat image the user can click to pick a pixel (u,v) at 1:1 scale."""
+    c = _area_cam(cam)
+    if c is None or not getattr(c, "_running", False):
+        return Response(status_code=503)
+    img = c.get_latest_color()
+    if img is None:
+        return Response(status_code=503)
+    ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+    if not ok:
+        return Response(status_code=503)
+    return Response(content=buf.tobytes(), media_type="image/jpeg", headers=_STREAM_HEADERS)
+
+
+@router.post("/plane_background")
+def api_plane_background(body: PlaneCamBody):
+    """Store the current (empty) surface image as the subtraction background."""
+    c = _area_cam(body.cam)
+    if c is None or not getattr(c, "_running", False):
+        return {"ok": False, "error": "camera not running"}
+    img = c.get_latest_color()
+    if img is None:
+        return {"ok": False, "error": "no frame"}
+    with _PLANE_BG_LOCK:
+        _PLANE_BG[body.cam] = img.copy()
+    return {"ok": True, "cam": body.cam, "height": int(img.shape[0]), "width": int(img.shape[1])}
+
+
+@router.get("/plane_background")
+def api_plane_background_status():
+    with _PLANE_BG_LOCK:
+        cams = {str(k): [int(v.shape[0]), int(v.shape[1])] for k, v in _PLANE_BG.items()}
+    return {"ok": True, "cams": cams}
+
+
+@router.post("/area_plane")
+def api_area_plane(body: PlaneAreaBody):
+    """Depth-free planar area using the floor-calibration homography.
+
+    The D455 cannot resolve depth closer than ~0.3 m, but a fixed camera looking
+    at a flat surface only needs a pixel→robot-XY homography (floorcalib):
+    subtract the taught empty-surface background to get the object mask, then
+    push every mask pixel through H and rasterise on a real-mm grid. No depth
+    is used, so the <30 cm range limit does not apply.
+    """
+    pairs, H, _fz = floorcalib.load()
+    if H is None:
+        return {"ok": False, "error": "calibrate floor first (need >=4 taught points)"}
+    c = _area_cam(body.cam)
+    if c is None or not getattr(c, "_running", False):
+        return {"ok": False, "error": "camera not running"}
+    img = c.get_latest_color()
+    if img is None:
+        return {"ok": False, "error": "no frame"}
+    with _PLANE_BG_LOCK:
+        bg = _PLANE_BG.get(body.cam)
+    if bg is None or bg.shape != img.shape:
+        return {"ok": False, "error": "capture the empty-surface background first"}
+
+    diff = cv2.absdiff(img, bg)
+    gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+    _, mask = cv2.threshold(gray, body.thr, 255, cv2.THRESH_BINARY)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
+
+    nlab, labels, stats, _cents = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    cell = max(1.0, body.cell_mm)
+    objects = []
+    for lab in range(1, nlab):
+        px = int(stats[lab, cv2.CC_STAT_AREA])
+        if px < 30:
+            continue
+        ys, xs = np.where(labels == lab)
+        hom = H @ np.vstack([xs, ys, np.ones_like(xs)]).astype(np.float64)
+        w = hom[2]
+        ok = np.abs(w) > 1e-9
+        X = hom[0][ok] / w[ok]
+        Y = hom[1][ok] / w[ok]
+        if X.size < 3:
+            continue
+        ix = np.floor((X - X.min()) / cell).astype(np.int64)
+        iy = np.floor((Y - Y.min()) / cell).astype(np.int64)
+        Wc, Hc = int(ix.max()) + 2, int(iy.max()) + 2
+        if Wc * Hc > 4_000_000:
+            continue
+        grid = np.zeros((Hc, Wc), np.uint8)
+        grid[iy, ix] = 1
+        area_cm2 = float(grid.sum()) * (cell / 10.0) ** 2
+        if area_cm2 < body.min_area_cm2:
+            continue
+        objects.append({
+            "area_cm2": round(area_cm2, 2),
+            "centroid_mm": [round(float(X.mean()), 1), round(float(Y.mean()), 1)],
+            "pixels": px,
+        })
+
+    objects.sort(key=lambda o: -o["area_cm2"])
+    return {"ok": True, "cam": body.cam, "count": len(objects),
+            "total_cm2": round(sum(o["area_cm2"] for o in objects), 2),
+            "objects": objects,
+            "rmse_mm": floorcalib.reprojection_rmse(H, pairs)}
+
+
+class AlignIcpBody(BaseModel):
+    source: list          # [[x,y,z], ...] to be moved
+    target: list          # [[x,y,z], ...] reference
+    iters: int = 30
+    max_dist: float = 0.05
+
+
+def _voxel_downsample(P, voxel):
+    """One point per voxel (keeps the cloud's shape, cuts density)."""
+    if voxel <= 0 or len(P) == 0:
+        return P
+    keys = np.floor(P / voxel).astype(np.int64)
+    _, idx = np.unique(keys, axis=0, return_index=True)
+    return P[idx]
+
+
+def _icp_core(cur, dst, iters, max_dist, keep_frac, min_inliers):
+    """One fixed-scale trimmed-ICP pass. cur is already near dst. Returns
+    (T_delta, cur_moved, fitness, rmse)."""
+    n = cur.shape[0]
+    T = np.eye(4)
+    fitness = 0.0
+    rmse = float("inf")
+    k = max(min_inliers, int(n * keep_frac))
+    for _ in range(iters):
+        diff = cur[:, None, :] - dst[None, :, :]
+        d2 = np.einsum("ijk,ijk->ij", diff, diff)
+        idx = d2.argmin(axis=1)
+        dmin = np.sqrt(d2[np.arange(n), idx])
+        order = np.argsort(dmin)
+        keep = order[:k]
+        keep = keep[dmin[keep] < max_dist]
+        if keep.size < min_inliers:
+            break
+        P = cur[keep]
+        Q = dst[idx[keep]]
+        fitness = float(keep.size) / float(n)
+        rmse = float(np.sqrt(np.mean(dmin[keep] ** 2)))
+        pc = P.mean(axis=0)
+        qc = Q.mean(axis=0)
+        H = (P - pc).T @ (Q - qc)
+        U, _S, Vt = np.linalg.svd(H)
+        R = Vt.T @ U.T
+        if np.linalg.det(R) < 0:
+            Vt[-1, :] *= -1
+            R = Vt.T @ U.T
+        t = qc - R @ pc
+        cur = (R @ cur.T).T + t
+        dT = np.eye(4)
+        dT[:3, :3] = R
+        dT[:3, 3] = t
+        T = dT @ T
+        ang = np.arccos(np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0))
+        if np.linalg.norm(t) < 1e-5 and ang < 1e-4:
+            break
+    return T, cur, fitness, rmse
+
+
+def _rot_between(a, b):
+    """Rotation matrix taking unit vector a onto unit vector b (Rodrigues)."""
+    a = a / np.linalg.norm(a)
+    b = b / np.linalg.norm(b)
+    v = np.cross(a, b)
+    c = float(a @ b)
+    if np.linalg.norm(v) < 1e-8:
+        if c > 0:
+            return np.eye(3)
+        perp = np.array([1.0, 0.0, 0.0]) if abs(a[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+        ax = np.cross(a, perp)
+        ax /= np.linalg.norm(ax)
+        K = np.array([[0, -ax[2], ax[1]], [ax[2], 0, -ax[0]], [-ax[1], ax[0], 0]])
+        return np.eye(3) + 2 * (K @ K)
+    K = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+    return np.eye(3) + K + (K @ K) * (1.0 / (1.0 + c))
+
+
+def _rot_axis(axis, angle):
+    """Rotation matrix about a (unit) axis by angle (Rodrigues)."""
+    ax = axis / np.linalg.norm(axis)
+    K = np.array([[0, -ax[2], ax[1]], [ax[2], 0, -ax[0]], [-ax[1], ax[0], 0]])
+    return np.eye(3) + np.sin(angle) * K + (1.0 - np.cos(angle)) * (K @ K)
+
+
+def _icp_run(src, dst, T0, schedule, keep_frac):
+    T = T0.copy()
+    fitness = 0.0
+    rmse = float("inf")
+    for voxel, md, it, mi in schedule:
+        s = _voxel_downsample(src, voxel)
+        d = _voxel_downsample(dst, voxel)
+        if s.shape[0] < 10 or d.shape[0] < 10:
+            continue
+        cur = (T[:3, :3] @ s.T).T + T[:3, 3]
+        Td, _cur, fit, r = _icp_core(cur, d, it, md, keep_frac, mi)
+        T = Td @ T
+        fitness, rmse = fit, r
+    return T, fitness, rmse
+
+
+def _icp_align(src, dst, iters=30, max_dist=0.05, keep_frac=0.6, min_inliers=60):
+    """Trimmed rigid ICP (Umeyama / SVD), coarse-to-fine with a seeded search.
+
+    Both arrays must already be in a common frame. Returns (T, fitness, rmse)
+    with T a 4x4 aligning src onto dst, or None.
+
+    Plain ICP stalls unless the initial offset is under ~one point spacing. Two
+    cameras placed by hand-tuned mounts easily start tens of cm apart, so we
+    seed it: match centroids (removes the bulk translation) and, since both
+    cameras see the same flat surface, align the dominant plane normals too
+    (fixes the tilt). Coarse-to-fine then refines. A large in-plane rotation
+    cannot be recovered this way on a small flat scene — ICP's basin is narrower
+    than the rotation — so rough manual alignment of the mounts is still needed
+    before auto-align; that is where extrinsic calibration would help."""
+    src = np.asarray(src, dtype=np.float64)
+    dst = np.asarray(dst, dtype=np.float64)
+    if src.ndim != 2 or dst.ndim != 2 or src.shape[0] < 10 or dst.shape[0] < 10:
+        return None
+
+    if src.shape[0] > 900:
+        src = src[np.linspace(0, src.shape[0] - 1, 900).astype(np.int64)]
+    if dst.shape[0] > 900:
+        dst = dst[np.linspace(0, dst.shape[0] - 1, 900).astype(np.int64)]
+
+    c_src = src.mean(axis=0)
+    c_dst = dst.mean(axis=0)
+    coarse = [
+        (0.06, 0.50, 30, max(15, min_inliers // 4)),
+        (0.03, 0.15, 30, max(25, min_inliers // 2)),
+    ]
+    fine = [(0.0, max_dist, iters, min_inliers)]
+
+    candidates = []
+    t0 = np.eye(4)
+    t0[:3, 3] = c_dst - c_src
+    candidates.append(t0)
+
+    fp_src = _fit_plane_ransac(src, iters=80)
+    fp_dst = _fit_plane_ransac(dst, iters=80)
+    if fp_src is not None and fp_dst is not None:
+        n_src = fp_src[0]
+        n_dst = fp_dst[0]
+        for sgn in (1.0, -1.0):
+            R_tilt = _rot_between(n_src, sgn * n_dst)
+            tc = np.eye(4)
+            tc[:3, :3] = R_tilt
+            tc[:3, 3] = c_dst - R_tilt @ c_src
+            candidates.append(tc)
+
+    best = None
+    for T0 in candidates:
+        T, fit, rmse = _icp_run(src, dst, T0, coarse, keep_frac)
+        if best is None or rmse < best[2]:
+            best = (T, fit, rmse)
+
+    T, fit, rmse = _icp_run(src, dst, best[0], fine, keep_frac)
+    return T, fit, rmse
+
+
+_ALIGN_LOG = {"state": None, "time": 0.0}
+_ALIGN_LOG_LOCK = threading.Lock()
+
+
+def _log_align(request: Request, state_name: str, detail: str = ""):
+    """Log an ICP-align result only on a state change (or every 60 s as a
+    heartbeat). Device is `align_icp` — the point-cloud align endpoint, kept
+    distinct from the 3-phase plane align (`maps_point/align.py`, device
+    `align`). The auto-align runs in a loop; on a persistently failing scene
+    it produced ~580 identical "fail" rows in an afternoon, so one row per
+    transition keeps the history meaningful and the table bounded."""
+    now = time.time()
+    with _ALIGN_LOG_LOCK:
+        changed = state_name != _ALIGN_LOG["state"]
+        stale = now - _ALIGN_LOG["time"] > 60.0
+        if not (changed or stale):
+            return
+        _ALIGN_LOG["state"] = state_name
+        _ALIGN_LOG["time"] = now
+    _log_user_event(request, "align_icp", state_name, detail)
+
+
+@router.post("/align_icp")
+def api_align_icp(request: Request, body: AlignIcpBody):
+    res = _icp_align(body.source, body.target, iters=body.iters, max_dist=body.max_dist)
+    if res is None:
+        _log_align(request, "fail", "not enough overlap")
+        return {"ok": False, "error": "not enough overlap between the two clouds"}
+    T, fitness, rmse = res
+    t_norm = float(np.linalg.norm(T[:3, 3]))
+    ang = float(np.arccos(np.clip((np.trace(T[:3, :3]) - 1.0) / 2.0, -1.0, 1.0)))
+    if t_norm > 0.30 or ang > np.deg2rad(30.0):
+        _log_align(request, "fail",
+                   f"correction too large (t={t_norm:.3f}m, r={np.rad2deg(ang):.1f}deg)")
+        return {"ok": False,
+                "error": f"correction too large (t={t_norm:.3f}m, r={np.rad2deg(ang):.1f}deg)"}
+    if fitness < 0.5 or rmse > 0.02:
+        _log_align(request, "fail",
+                   f"poor fit (fitness={fitness:.2f}, rmse={rmse * 1000:.0f}mm)")
+        return {"ok": False,
+                "error": f"poor fit (fitness={fitness:.2f}, rmse={rmse * 1000:.0f}mm)"}
+    _log_align(request, "ok",
+               f"fitness={fitness:.3f} rmse={rmse * 1000:.1f}mm t={t_norm * 1000:.0f}mm")
+    return {"ok": True, "transform": T.T.reshape(-1).tolist(),
+            "fitness": round(fitness, 3), "rmse": round(rmse, 5)}
+
+
 # ── robot / camera lifecycle ─────────────────────────────────────────────────
 @router.post("/connect")
-def api_connect(body: Optional[ConnectBody] = None):
-    if body:
-        robot.connect(ip=body.ip, dashboard_port=body.dashboard_port, move_port=body.move_port)
-    else:
-        robot.connect()
+def api_connect(request: Request, body: Optional[ConnectBody] = None):
+    try:
+        if body:
+            robot.connect(ip=body.ip, dashboard_port=body.dashboard_port, move_port=body.move_port)
+        else:
+            robot.connect()
+    except Exception as e:
+        _log_user_event(request, "robot", "connect", f"failed: {e}")
+        return {"ok": False, "error": str(e)}
+    _log_user_event(request, "robot", "connect", "connected")
     return {"ok": robot.connected}
 
 
 @router.post("/init")
-def api_init():
-    robot.init_robot()
+def api_init(request: Request):
+    try:
+        robot.init_robot()
+        _log_user_event(request, "robot", "init", "ok")
+    except Exception as e:
+        _log_user_event(request, "robot", "init", f"failed: {e}")
+        return {"ok": False, "error": str(e)}
     return {"ok": True, "connected": robot.connected}
 
 
 @router.post("/camstart")
-def api_camstart():
+def api_camstart(request: Request):
     ok = cam.start()
+    _log_user_event(request, "camera", "start", f"ok={ok}")
     return {"ok": ok}
 
 
@@ -406,7 +1034,7 @@ def api_error():
 
 
 @router.post("/emergency")
-def api_emergency():
+def api_emergency(request: Request):
     global sequence_running
     sequence_stop.set()
     sequence_running = False
@@ -416,14 +1044,47 @@ def api_emergency():
     state.draw_running = False
     if robot.connected:
         robot.emergency_stop()
+    _log_user_event(request, "estop", "on", "emergency stop triggered")
     return {"ok": True, "status": "emergency_stop_triggered"}
 
 
-@router.post("/home")
-def api_home():
+_HOME_KEYS = ("home_x", "home_y", "home_z", "home_rx", "home_ry", "home_rz")
+
+
+async def _user_home_pose(db: AsyncSession, user_id: str):
+    rows = await db.execute(
+        select(UserSetting).where(
+            UserSetting.user_id == user_id,
+            UserSetting.key.in_(_HOME_KEYS),
+        )
+    )
+    saved = {s.key: s.value for s in rows.scalars().all()}
     try:
-        robot.go_home()
+        pose = [float(saved.get(k, "0.0")) for k in _HOME_KEYS]
+    except (TypeError, ValueError):
+        return None
+    return tuple(pose) if any(pose[:3]) else None
+
+
+@router.post("/home")
+async def api_home(request: Request,
+                   user: User = Depends(get_current_user),
+                   db: AsyncSession = Depends(get_db)):
+    if state.align_running or state.draw_running or sequence_running:
+        return {"ok": False, "error": "robot busy (align/draw/sequence running)"}
+    home = await _user_home_pose(db, user.id)
+    await db.close()
+    try:
+        if home:
+            await run_in_threadpool(_run_locked, robot.movl, *home)
+        else:
+            await run_in_threadpool(_run_locked, robot.go_home)
+        _log_user_event(request, "robot", "home", "ok")
     except RobotMoveError as e:
+        _log_user_event(request, "robot", "home", f"failed: {e}")
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        _log_user_event(request, "robot", "home", f"failed: {e}")
         return {"ok": False, "error": str(e)}
     return {"ok": True}
 
@@ -439,12 +1100,103 @@ def api_point(body: PointBody):
 
 
 @router.post("/goto")
-def api_goto(body: GotoBody):
+def api_goto(request: Request, body: GotoBody):
     if not robot.connected or not cam._running:
         return {"ok": False, "error": "robot/camera not ready"}
     threading.Thread(target=do_goto, args=(robot, cam, state, body.x, body.y),
                      daemon=True).start()
+    _log_user_event(request, "robot", "goto", f"x={body.x} y={body.y}")
     return {"ok": True}
+
+
+# ── floor calibration (fixed overhead camera → robot XY homography) ──────────
+class FloorPointBody(BaseModel):
+    u: float
+    v: float
+
+
+class FloorGotoBody(BaseModel):
+    u: float
+    v: float
+    lift: float = 0.0
+
+
+class FloorZBody(BaseModel):
+    z: float
+
+
+def _floor_status():
+    pairs, h, fz = floorcalib.load()
+    return {
+        "ok": True,
+        "calibrated": h is not None,
+        "count": len(pairs),
+        "min_points": floorcalib.MIN_POINTS,
+        "points": [{"u": u, "v": v, "X": X, "Y": Y} for (u, v), (X, Y) in pairs],
+        "rmse_mm": None if h is None else floorcalib.reprojection_rmse(h, pairs),
+        "floor_z": fz,
+        "H": None if h is None else h.tolist(),
+        "H_inv": None if h is None else floorcalib.invert(h),
+    }
+
+
+@router.get("/floorcalib")
+def api_floorcalib_status():
+    return _floor_status()
+
+
+@router.post("/floorcalib/point")
+def api_floorcalib_add(body: FloorPointBody):
+    if not robot.connected:
+        return {"ok": False, "error": "robot not connected"}
+    robot.ensure_frame()
+    X, Y, Z = robot.get_pose()[:3]
+    pairs, _h, _fz = floorcalib.load()
+    pairs = [p for p in pairs if abs(p[0][0] - body.u) > 1 or abs(p[0][1] - body.v) > 1]
+    pairs.append(((float(body.u), float(body.v)), (X, Y)))
+    h = floorcalib.compute_homography(pairs)
+    floorcalib.save(pairs, h, floor_z=Z)
+    return _floor_status()
+
+
+@router.post("/floorcalib/reset")
+def api_floorcalib_reset():
+    floorcalib.save([], None, None)
+    return _floor_status()
+
+
+@router.post("/floorcalib/floorz")
+def api_floorcalib_setz(body: FloorZBody):
+    pairs, h, _fz = floorcalib.load()
+    floorcalib.save(pairs, h, floor_z=body.z)
+    return _floor_status()
+
+
+def _do_floor_goto(X: float, Y: float, fz, lift: float):
+    try:
+        robot.ensure_frame()
+        cur = robot.get_pose()
+        tZ = (fz if fz is not None else cur[2]) + lift
+        robot.movl(X, Y, tZ, cur[3], cur[4], cur[5])
+        state.status = f"floor-goto done ({X:.1f}, {Y:.1f}, {tZ:.1f})"
+    except RobotMoveError as e:
+        state.status = f"floor-goto rejected — {e}"
+    log(f"  [Floor] {state.status}")
+
+
+@router.post("/floorcalib/goto")
+def api_floorcalib_goto(body: FloorGotoBody):
+    if not robot.connected:
+        return {"ok": False, "error": "robot not connected"}
+    _pairs, h, fz = floorcalib.load()
+    if h is None:
+        return {"ok": False, "error": "not calibrated (need >= 4 points)"}
+    xy = floorcalib.apply_homography(h, body.u, body.v)
+    if xy is None:
+        return {"ok": False, "error": "pixel maps to infinity"}
+    threading.Thread(target=_do_floor_goto, args=(xy[0], xy[1], fz, body.lift),
+                     daemon=True).start()
+    return {"ok": True, "target": {"X": xy[0], "Y": xy[1]}}
 
 
 @router.post("/reset_points")
@@ -490,6 +1242,8 @@ def api_jog(body: JogBody):
         return {"ok": False, "error": "axis must be x/y/z/rx/ry/rz"}
     if not robot.connected:
         return {"ok": False, "error": "not connected"}
+    if state.align_running or state.draw_running or sequence_running:
+        return {"ok": False, "error": "robot busy (align/draw/sequence running)"}
     # Apply speed (1-100%) before jog
     speed = max(1, min(100, body.speed))
     robot.dashboard.SpeedFactor(speed)
@@ -504,6 +1258,8 @@ def api_jog_joint(body: JogJointBody):
         return {"ok": False, "error": "joint must be 1-6"}
     if not robot.connected:
         return {"ok": False, "error": "not connected"}
+    if state.align_running or state.draw_running or sequence_running:
+        return {"ok": False, "error": "robot busy (align/draw/sequence running)"}
     # Apply speed (1-100%) before jog
     speed = max(1, min(100, body.speed))
     robot.dashboard.SpeedFactor(speed)
@@ -560,8 +1316,8 @@ def api_move_sequence(body: MoveSequenceBody):
     pause_s = max(0.0, min(10.0, float(body.pause_s if body.pause_s is not None else 0.5)))
 
     threading.Thread(
-        target=_do_move_sequence,
-        args=(robot, body.points, mode, speed, pause_s),
+        target=_run_locked,
+        args=(_do_move_sequence, robot, body.points, mode, speed, pause_s),
         daemon=True,
     ).start()
 
@@ -590,41 +1346,62 @@ def api_frame(body: FrameBody):
 
 
 # ── align ────────────────────────────────────────────────────────────────────
+def _bind_align_progress_hook(request: Request) -> None:
+    """Let the (thread-run) do_align log per-step progress to device_logs with
+    the requesting user's id. Progress rows are keyed by their `step`/`rz_step`
+    action only on a change of tilt/roll bucket, so a long run doesn't flood
+    the table."""
+    try:
+        header = request.headers.get("authorization", "")
+        if not header.startswith("Bearer "):
+            state.on_align_progress = None
+            return
+        sub = jwt.decode(header[7:], SECRET_KEY, algorithms=[ALGORITHM]).get("sub", "")
+        state.on_align_progress = lambda action, detail="": log_event(sub, "align", action, detail)
+    except Exception:
+        state.on_align_progress = None
+
+
 @router.post("/align")
-def api_align():
+def api_align(request: Request):
     if len(state.points) < 4:
         return {"ok": False, "error": "need 4 points"}
     if state.align_running or state.draw_running:
         return {"ok": False, "error": "already running"}
-    threading.Thread(target=do_align, args=(robot, cam, state), daemon=True).start()
+    _log_user_event(request, "align", "start", f"points={len(state.points)}")
+    _bind_align_progress_hook(request)
+    threading.Thread(target=_run_locked, args=(do_align, robot, cam, state), daemon=True).start()
     return {"ok": True}
 
 
 @router.post("/align/stop")
-def api_align_stop():
+def api_align_stop(request: Request):
     state.align_stop.set()
+    _log_user_event(request, "align", "stop", "stop requested")
     return {"ok": True}
 
 
 # ── draw grid ────────────────────────────────────────────────────────────────
 @router.post("/grid/size")
-def api_grid_size(body: GridSizeBody):
+def api_grid_size(request: Request, body: GridSizeBody):
     ok, msg = _set_grid_size(body.rows, body.cols)
     if not ok:
         return {"ok": False, "error": msg}
+    _log_user_event(request, "draw", "grid_size", f"{state.grid_rows}x{state.grid_cols}")
     return {"ok": True, "rows": state.grid_rows, "cols": state.grid_cols}
 
 
 @router.post("/grid/mark")
-def api_grid_mark(body: GridMarkBody):
+def api_grid_mark(request: Request, body: GridMarkBody):
     ok, msg = _mark_grid_point(body.row, body.col)
     if not ok:
         return {"ok": False, "error": msg}
+    _log_user_event(request, "draw", "grid_mark", f"R{body.row + 1}C{body.col + 1}")
     return {"ok": True, "message": msg, "grid_points": state.grid_points}
 
 
 @router.post("/grid/autofill")
-def api_grid_autofill():
+def api_grid_autofill(request: Request):
     """Fill the whole grid from the 4 image points already marked on the
     feed, so no jogging is needed. Each pixel maps to robot XY AND its own
     surface Z via the depth at that pixel (the camera rides on the arm, so
@@ -675,6 +1452,8 @@ def api_grid_autofill():
     zs = [grid[i][j][2] for i in range(rows) for j in range(cols)]
     state.status = (f"grid auto-filled from 4 marked points (span={span:.1f}mm, "
                     f"surface Z={sum(zs)/len(zs):.1f})")
+    _log_user_event(request, "draw", "grid_autofill",
+                    f"span={span:.1f}mm z={sum(zs)/len(zs):.1f}")
     return {"ok": True, "grid_points": grid, "span_mm": span,
             "surface_z": sum(zs) / len(zs)}
 
@@ -684,7 +1463,7 @@ class GridSetZBody(BaseModel):
 
 
 @router.post("/grid/setz")
-def api_grid_setz(body: GridSetZBody = GridSetZBody()):
+def api_grid_setz(request: Request, body: GridSetZBody = GridSetZBody()):
     """Re-teach ONLY the Z + orientation of every marked grid cell, keeping
     each cell's X/Y. With no body it uses the CURRENT pose Z (jog down until
     the pen touches the workpiece, then press). With {"z": <mm>} it uses that
@@ -703,12 +1482,14 @@ def api_grid_setz(body: GridSetZBody = GridSetZBody()):
             p[2], p[3], p[4], p[5] = Z, Rx, Ry, Rz
     state.status = (f"grid Z set to {Z:.1f}mm "
                      f"({'current pose' if body.z is None else 'requested'})")
+    _log_user_event(request, "draw", "grid_setz",
+                    f"z={Z:.1f} from={'pose' if body.z is None else 'request'}")
     return {"ok": True, "z": Z, "from_current_pose": body.z is None,
             "grid_points": state.grid_points}
 
 
 @router.post("/grid/surfacez")
-def api_grid_surfacez():
+def api_grid_surfacez(request: Request):
     """Estimate the workpiece surface Z from the LIVE depth reading and move
     the grid onto it — no jogging. Valid while the tool is squared to the
     surface (run Align first) so the camera looks straight down at it:
@@ -732,16 +1513,18 @@ def api_grid_surfacez():
     state.status = (f"grid Z -> measured surface {surface_z:.1f}mm "
                      f"(pose {pose_z:.1f} - depth {depth:.1f} + "
                      f"{CAM_TIP_OFFSET_MM:.1f} + {DRAW_SURFACE_GAP_MM:.1f})")
+    _log_user_event(request, "draw", "grid_surfacez", f"z={surface_z:.1f} depth={depth:.1f}")
     return {"ok": True, "z": surface_z, "pose_z": pose_z, "depth": depth,
             "tip_offset": CAM_TIP_OFFSET_MM, "gap": DRAW_SURFACE_GAP_MM,
             "grid_points": state.grid_points}
 
 
 @router.post("/grid/reset")
-def api_grid_reset():
+def api_grid_reset(request: Request):
     for i in range(state.grid_rows):
         for j in range(state.grid_cols):
             state.grid_points[i][j] = None
+    _log_user_event(request, "draw", "grid_reset", f"{state.grid_rows}x{state.grid_cols}")
     return {"ok": True}
 
 
@@ -752,7 +1535,7 @@ class GridRestoreBody(BaseModel):
 
 
 @router.post("/grid/restore")
-def api_grid_restore(body: GridRestoreBody):
+def api_grid_restore(request: Request, body: GridRestoreBody):
     """Set the whole taught grid directly from poses (the same rows/cols/
     points shape /api/map/status reports back). The grid lives in memory, so
     every backend restart wipes a hand-taught grid — this puts one back
@@ -782,6 +1565,8 @@ def api_grid_restore(body: GridRestoreBody):
     state.grid_points = grid
     span = _grid_span_mm()
     state.status = f"grid restored {body.rows}x{body.cols} (span={span:.1f}mm)"
+    _log_user_event(request, "draw", "grid_restore",
+                    f"{body.rows}x{body.cols} span={span:.1f}mm")
     return {"ok": True, "rows": body.rows, "cols": body.cols,
             "grid_points": grid, "span_mm": span}
 
@@ -820,7 +1605,7 @@ def _log_grid_mapping(strokes):
 
 
 @router.post("/draw")
-def api_draw(body: DrawBody):
+def api_draw(request: Request, body: DrawBody):
     if not isinstance(body.strokes, list) or not body.strokes:
         return {"ok": False, "error": "invalid strokes"}
     strokes = []
@@ -846,17 +1631,28 @@ def api_draw(body: DrawBody):
         return {"ok": False, "error": "already running"}
 
     _log_grid_mapping(strokes)
-    threading.Thread(target=do_draw, args=(robot, state, strokes), daemon=True).start()
+    _log_user_event(request, "draw", "start",
+                    f"strokes={len(strokes)} grid={state.grid_rows}x{state.grid_cols}")
+    _bind_draw_done_hook(request)
+    threading.Thread(target=_run_locked, args=(do_draw, robot, state, strokes), daemon=True).start()
     return {"ok": True}
 
 
 @router.post("/draw/stop")
-def api_draw_stop():
+def api_draw_stop(request: Request):
     state.draw_stop.set()
+    _log_user_event(request, "draw", "stop", "stop requested")
     return {"ok": True}
 
 
 # ── status / logs / cli ──────────────────────────────────────────────────────
+@router.get("/joints")
+def api_joints():
+    """Joint angles only — the lightweight poll target for the 3D viewer, which
+    needs joints several times a second but not /status's pose/mode/grid work."""
+    return {"angles": robot.get_angle() if robot.connected else [0.0] * 6}
+
+
 @router.get("/status")
 def api_status():
     pose = robot.get_pose() if robot.connected else [0.0] * 6
@@ -879,6 +1675,8 @@ def api_status():
         "points": state.points,
         "align_running": state.align_running,
         "last_tilt": state.last_tilt,
+        "final_tilt": getattr(state, 'final_tilt', None),
+        "final_rmse": getattr(state, 'final_rmse', None),
         "last_rmse": state.last_rmse,
         "last_depth_range": state.last_depth_range,
         "last_roll_deg": state.last_roll_deg,
@@ -979,7 +1777,7 @@ def _run_cli_command(raw: str) -> str:
             return "need 4 points first — click 4 corners on the video"
         if state.align_running or state.draw_running:
             return "already running"
-        threading.Thread(target=do_align, args=(robot, cam, state), daemon=True).start()
+        threading.Thread(target=_run_locked, args=(do_align, robot, cam, state), daemon=True).start()
         return "align started"
     elif cmd == "stop":
         state.align_stop.set()

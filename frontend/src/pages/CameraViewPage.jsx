@@ -4,6 +4,115 @@ import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
 import CameraStream, { setStreamMode } from '../components/CameraStream'
 
+// ── Server Log Panel ────────────────────────────────────────────────────────
+const SRV_LOG_MAX = 200
+const SRV_LOG_POLL_MS = 700
+
+const ServerLogPanel = () => {
+  const [lines, setLines] = useState([])
+  const [paused, setPaused] = useState(false)
+  const bottomRef = useRef(null)
+  const bodyRef   = useRef(null)
+  const pausedRef = useRef(false)
+  const pendingRef = useRef([])
+  const lastIdRef = useRef(0)
+  pausedRef.current = paused
+
+  useEffect(() => {
+    if (!paused && bodyRef.current) {
+      bodyRef.current.scrollTop = bodyRef.current.scrollHeight
+    }
+  }, [lines, paused])
+
+  useEffect(() => {
+    let dead = false
+
+    const fmt = (entry) => {
+      const d = new Date(entry.t * 1000)
+      const t = d.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+      return { t, msg: entry.msg }
+    }
+
+    const poll = () => {
+      if (dead) return
+      apiFetch(`/api/map/logs?since=${lastIdRef.current}`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (dead || !Array.isArray(data.entries) || data.entries.length === 0) return
+          if (typeof data.latest === 'number') lastIdRef.current = data.latest
+          const newLines = data.entries.map(fmt)
+          if (pausedRef.current) { pendingRef.current.push(...newLines); return }
+          setLines((prev) => {
+            const next = [...prev, ...newLines]
+            return next.length > SRV_LOG_MAX ? next.slice(-SRV_LOG_MAX) : next
+          })
+        })
+        .catch(() => {})
+    }
+
+    apiFetch('/api/map/logs')
+      .then((r) => r.json())
+      .then((data) => {
+        if (!dead && Array.isArray(data.entries)) {
+          if (typeof data.latest === 'number') lastIdRef.current = data.latest
+          const initial = data.entries.map(fmt)
+          setLines(initial.length > SRV_LOG_MAX ? initial.slice(-SRV_LOG_MAX) : initial)
+        }
+      })
+      .catch(() => {})
+
+    const interval = setInterval(poll, SRV_LOG_POLL_MS)
+    return () => { dead = true; clearInterval(interval) }
+  }, [])
+
+  const handleResume = useCallback(() => {
+    setPaused(false)
+    if (pendingRef.current.length) {
+      setLines((prev) => {
+        const next = [...prev, ...pendingRef.current]
+        pendingRef.current = []
+        return next.length > SRV_LOG_MAX ? next.slice(-SRV_LOG_MAX) : next
+      })
+    }
+  }, [])
+
+  const handleClear = useCallback(() => {
+    setLines([])
+    pendingRef.current = []
+  }, [])
+
+  return (
+    <div className="log-panel-box log-panel-box--server" style={{ flex: 1, minHeight: 0 }}>
+      <div className="log-panel-header">
+        <span className="log-panel-title">Server Log</span>
+        <div className="log-panel-actions">
+          {paused
+            ? <button className="log-btn log-btn--resume" onClick={handleResume}>Resume</button>
+            : <button className="log-btn log-btn--pause" onClick={() => setPaused(true)}>Pause</button>
+          }
+          <button className="log-btn log-btn--clear" onClick={handleClear}>Clear</button>
+        </div>
+      </div>
+      <div className="log-panel-body" ref={bodyRef}>
+        {lines.length === 0
+          ? <span className="log-empty">No log entries yet…</span>
+          : lines.map((l, i) => (
+            <div key={i} className="log-line">
+              <span className="log-time">{l.t}</span>
+              <span className="log-msg">{l.msg}</span>
+            </div>
+          ))
+        }
+      </div>
+      {paused && pendingRef.current.length > 0 && (
+        <div className="log-paused-banner">
+          Paused — {pendingRef.current.length} new line{pendingRef.current.length > 1 ? 's' : ''} waiting
+        </div>
+      )}
+    </div>
+  )
+}
+
 const CameraViewPage = () => {
   const [status, setStatus] = useState({ connected: false, camera_running: false })
   const [cameraMode, setCameraMode] = useState('rgb')
@@ -196,11 +305,12 @@ const CameraViewPage = () => {
                       width: '8px',
                       height: '8px',
                       borderRadius: '50%',
-                      background: status.camera_running ? '#4ade80' : '#22c55e',
-                      boxShadow: '0 0 8px #4ade80',
+                      background: status.camera_running ? '#4ade80' : '#94a3b8',
+                      boxShadow: status.camera_running ? '0 0 8px rgba(74,222,128,0.7)' : 'none',
+                      transition: 'background 0.2s ease, box-shadow 0.2s ease',
                     }}
                   />
-                  LIVE
+                  {status.camera_running ? 'LIVE' : 'OFFLINE'}
                 </div>
 
                 <div
@@ -530,7 +640,6 @@ const CameraViewPage = () => {
                             style={{
                               position: 'absolute',
                               inset: 0,
-                              display: stream2Error ? 'none' : 'block',
                             }}
                           >
                             <CameraStream
@@ -554,28 +663,6 @@ const CameraViewPage = () => {
                                 padding: '16px',
                               }}
                             >
-                              <span style={{ fontSize: '28px', opacity: 0.5 }}>📷</span>
-                              <span>กำลังเชื่อมต่อกล้องตัวที่ 2…</span>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setStream2Key(Date.now())
-                                  setStream2Error(false)
-                                }}
-                                style={{
-                                  marginTop: '4px',
-                                  background: '#2563eb',
-                                  border: 'none',
-                                  color: '#fff',
-                                  borderRadius: '6px',
-                                  padding: '5px 12px',
-                                  fontSize: '11px',
-                                  fontWeight: 600,
-                                  cursor: 'pointer',
-                                }}
-                              >
-                                ลองใหม่ (Retry)
-                              </button>
                             </div>
                           )}
                         </>
@@ -690,19 +777,19 @@ const CameraViewPage = () => {
                     </div>
 
                     {/* ── Coordinate Readout ── */}
-                    <div className="coord-bar" style={{ margin: 0, padding: '10px' }}>
+                    <div className="coord-bar" style={{ margin: 0, padding: '6px 8px' }}>
                       {/* Cartesian */}
                       <div className="coord-group">
                         <div className="coord-group-header">
                           <span className="coord-group-dot coord-group-dot--cartesian" />
-                          <span className="coord-group-label">Cartesian (mm / deg)</span>
+                          <span className="coord-group-label" style={{ fontSize: '10px' }}>Cartesian (mm / deg)</span>
                         </div>
-                        <div className="coord-items">
+                        <div className="coord-items" style={{ padding: '4px', gap: '3px' }}>
                           {cartLabels.map((axis, i) => (
-                            <div key={axis} className="coord-item">
-                              <span className="coord-axis">{axis}</span>
-                              <span className="coord-val">
-                                {(pose[i] !== undefined && pose[i] !== null ? Number(pose[i]) : 0).toFixed(2)}
+                            <div key={axis} className="coord-item" style={{ padding: '2px 0' }}>
+                              <span className="coord-axis" style={{ fontSize: '9px' }}>{axis}</span>
+                              <span className="coord-val" style={{ fontSize: '10px' }}>
+                                {(pose[i] !== undefined && pose[i] !== null ? Number(pose[i]) : 0).toFixed(1)}
                               </span>
                             </div>
                           ))}
@@ -713,14 +800,14 @@ const CameraViewPage = () => {
                       <div className="coord-group">
                         <div className="coord-group-header">
                           <span className="coord-group-dot coord-group-dot--joint" />
-                          <span className="coord-group-label">Joint Angles (deg)</span>
+                          <span className="coord-group-label" style={{ fontSize: '10px' }}>Joint Angles (deg)</span>
                         </div>
-                        <div className="coord-items">
+                        <div className="coord-items" style={{ padding: '4px', gap: '3px' }}>
                           {jointLabels.map((axis, i) => (
-                            <div key={axis} className="coord-item">
-                              <span className="coord-axis">{axis}</span>
-                              <span className="coord-val">
-                                {(angles[i] !== undefined && angles[i] !== null ? Number(angles[i]) : 0).toFixed(2)}
+                            <div key={axis} className="coord-item" style={{ padding: '2px 0' }}>
+                              <span className="coord-axis" style={{ fontSize: '9px' }}>{axis}</span>
+                              <span className="coord-val" style={{ fontSize: '10px' }}>
+                                {(angles[i] !== undefined && angles[i] !== null ? Number(angles[i]) : 0).toFixed(1)}
                               </span>
                             </div>
                           ))}
@@ -745,6 +832,9 @@ const CameraViewPage = () => {
                         {homeMsg.text}
                       </div>
                     )}
+
+                    {/* ── Server Log ── */}
+                    <ServerLogPanel />
                   </div>
                 )
               })()}

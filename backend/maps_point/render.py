@@ -13,6 +13,7 @@ def draw_overlay(frame, state):
     cv2.drawMarker(frame, (cx_i, cy_i), (100, 100, 100), cv2.MARKER_CROSS, 20, 1, cv2.LINE_AA)
 
     for i, (px, py) in enumerate(state.points):
+        px, py = int(px), int(py)
         cv2.drawMarker(frame, (px, py), (0, 230, 255), cv2.MARKER_CROSS, 20, 2, cv2.LINE_AA)
         cv2.putText(frame, str(i + 1), (px + 8, py - 8),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 230, 255), 1, cv2.LINE_AA)
