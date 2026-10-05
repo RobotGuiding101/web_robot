@@ -4,6 +4,8 @@ These functions are the safest, highest-value things to unit test: no camera,
 no robot, no sockets — just arithmetic on taught poses.
 """
 import math
+import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -524,3 +526,80 @@ class TestDrawEndCheck:
         assert state.status.startswith("draw done")
         assert state.draw_running is False
         assert robot.replayed == 1
+
+
+class TestDrawApproach:
+    @staticmethod
+    def _state():
+        return SimpleNamespace(
+            align_running=False,
+            draw_running=False,
+            draw_stop=threading.Event(),
+            grid_rows=2,
+            grid_cols=2,
+            grid_points=GRID2,
+            status="",
+        )
+
+    def test_approaches_and_descends_before_replaying_path(self, monkeypatch):
+        start_pose = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        first_pose = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
+        poses = [first_pose, [11.0, 21.0, 30.0, 40.0, 50.0, 60.0]]
+        events = []
+
+        class FakeRobot:
+            connected = True
+
+            def ensure_frame(self):
+                pass
+
+            def get_pose(self):
+                return start_pose
+
+            def movl(self, *pose):
+                events.append(("movl", list(pose)))
+
+            def movl_path(self, path, **kwargs):
+                events.append(("path", path))
+
+        monkeypatch.setattr(pg, "DRAW_MOTION_MODE", "cp")
+        monkeypatch.setattr(pg, "DRAW_LIFT_MM", 15.0)
+        monkeypatch.setattr(pg, "_assemble_strokes", lambda *args: poses)
+
+        pg.do_draw(FakeRobot(), self._state(), [{"tool": "pen", "points": [(0, 0)]}])
+
+        assert events[:4] == [
+            ("movl", [1.0, 2.0, 18.0, 4.0, 5.0, 6.0]),
+            ("movl", [10.0, 20.0, 45.0, 40.0, 50.0, 60.0]),
+            ("movl", first_pose),
+            ("path", poses),
+        ]
+
+    def test_stop_during_approach_prevents_next_move_and_draw(self, monkeypatch):
+        state = self._state()
+        events = []
+
+        class FakeRobot:
+            connected = True
+
+            def ensure_frame(self):
+                pass
+
+            def get_pose(self):
+                return [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+
+            def movl(self, *pose):
+                events.append(("movl", pose))
+                state.draw_stop.set()
+
+            def movl_path(self, path, **kwargs):
+                events.append(("path", path))
+
+        monkeypatch.setattr(pg, "DRAW_LIFT_MM", 15.0)
+        monkeypatch.setattr(pg, "_assemble_strokes", lambda *args: [[10, 20, 30, 40, 50, 60]])
+
+        pg.do_draw(FakeRobot(), state, [{"tool": "pen", "points": [(0, 0)]}])
+
+        assert len(events) == 1
+        assert events[0][0] == "movl"
+        assert "aborted" in state.status
