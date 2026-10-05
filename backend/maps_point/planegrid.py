@@ -247,10 +247,8 @@ def _assemble_strokes(strokes: list, grid_points, rows: int, cols: int, lift_mm:
     any other segment) — no special-casing needed beyond building the
     list this way.
 
-    Only strokes AFTER the first get a lift-in transition — the very
-    first stroke's starting move is untouched (robot just moves straight
-    there from wherever it currently is), matching this feature's
-    pre-existing single-stroke behavior."""
+    Only transitions BETWEEN strokes are added here. The initial lift and
+    approach to the first point are handled by do_draw() before path replay."""
     poses: list = []
     for stroke in strokes:
         pts = _stroke_to_poses(stroke, grid_points, rows, cols)
@@ -283,6 +281,15 @@ def _return_to_start(robot: Robot, state, start_pose) -> None:
     except RobotMoveError as e:
         state.status = f"draw done — return to start failed: {e}"
         log(f"  [Draw] {state.status}")
+
+
+def _abort_before_stroke(state, phase: str) -> bool:
+    if not state.draw_stop.is_set():
+        return False
+    state.status = f"draw aborted during {phase}"
+    log(f"  [Draw] {state.status}")
+    _notify_draw_done(state, "abort", f"stopped during {phase}")
+    return True
 
 
 def do_draw(robot: Robot, state, strokes: list) -> None:
@@ -354,6 +361,23 @@ def do_draw(robot: Robot, state, strokes: list) -> None:
             return
         robot.ensure_frame()
         start_pose = robot.get_pose()
+
+        approach_pose = list(start_pose)
+        approach_pose[2] += DRAW_LIFT_MM
+        first_pose = list(poses[0])
+        above_first_pose = list(first_pose)
+        above_first_pose[2] += DRAW_LIFT_MM
+        approach_steps = (
+            ("lifting from current pose", approach_pose),
+            ("moving above first point", above_first_pose),
+            ("lowering to first point", first_pose),
+        )
+        for phase, pose in approach_steps:
+            state.status = f"draw: {phase}…"
+            log(f"  [Draw] {state.status}")
+            robot.movl(*pose)
+            if _abort_before_stroke(state, phase):
+                return
 
         if DRAW_MOTION_MODE == "servo":
             dense = densify_path(poses, DRAW_SERVOP_STEP_MM, DRAW_SERVOP_MAX_STREAM_POINTS)
