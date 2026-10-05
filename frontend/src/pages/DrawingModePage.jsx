@@ -4,6 +4,8 @@ import {
   Canvas,
   PencilBrush,
   Line,
+  Point,
+  Polyline,
 } from 'fabric'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
@@ -14,13 +16,16 @@ const TOOLS = {
   SELECT: 'select',
   PEN: 'pen',
   LINE: 'line',
-
+  RECTANGLE: 'rectangle',
+  CIRCLE: 'circle',
 }
 
 const TOOL_META = [
   { id: TOOLS.SELECT, label: 'Select', icon: '↖' },
   { id: TOOLS.PEN, label: 'Pen', icon: '✎' },
   { id: TOOLS.LINE, label: 'Line', icon: '╱' },
+  { id: TOOLS.RECTANGLE, label: 'Rectangle', icon: '□' },
+  { id: TOOLS.CIRCLE, label: 'Circle', icon: '○' },
 ]
 
 const PRESET_COLORS = [
@@ -60,7 +65,43 @@ function getCanvasPathData(fc) {
     const base = { type, left: obj.left, top: obj.top }
     if (type === 'path') return { ...base, path: obj.path, stroke: obj.stroke, strokeWidth: obj.strokeWidth }
     if (type === 'line') return { ...base, x1: obj.x1, y1: obj.y1, x2: obj.x2, y2: obj.y2, stroke: obj.stroke, strokeWidth: obj.strokeWidth }
+    if (type === 'polyline' && obj.pathOffset) {
+      const matrix = obj.calcTransformMatrix()
+      return {
+        ...base,
+        points: obj.points.map((point) => {
+          const x = point.x - obj.pathOffset.x
+          const y = point.y - obj.pathOffset.y
+          return new Point(
+            matrix[0] * x + matrix[2] * y + matrix[4],
+            matrix[1] * x + matrix[3] * y + matrix[5],
+          )
+        }),
+      }
+    }
     return base
+  })
+}
+
+function shapePoints(tool, start, end) {
+  if (tool === TOOLS.RECTANGLE) {
+    const left = Math.min(start.x, end.x)
+    const right = Math.max(start.x, end.x)
+    const top = Math.min(start.y, end.y)
+    const bottom = Math.max(start.y, end.y)
+    return [
+      new Point(left, top),
+      new Point(right, top),
+      new Point(right, bottom),
+      new Point(left, bottom),
+      new Point(left, top),
+    ]
+  }
+
+  const radius = Math.hypot(end.x - start.x, end.y - start.y)
+  return Array.from({ length: 49 }, (_, index) => {
+    const angle = (index / 48) * Math.PI * 2
+    return new Point(start.x + Math.cos(angle) * radius, start.y + Math.sin(angle) * radius)
   })
 }
 
@@ -193,6 +234,7 @@ const DrawingModePage = () => {
   const [strokeWidth, setStrokeWidth] = useState(2)
   const [canUndo, setCanUndo] = useState(false)
   const [canRedo, setCanRedo] = useState(false)
+  const [hasSelection, setHasSelection] = useState(false)
   const [status, setStatus] = useState('Ready')
   const [objectCount, setObjectCount] = useState(0)
   const [isSending, setIsSending] = useState(false)
@@ -275,6 +317,11 @@ const DrawingModePage = () => {
     })
     fabricRef.current = fc
 
+    const updateSelection = () => setHasSelection(fc.getActiveObjects().length > 0)
+    fc.on('selection:created', updateSelection)
+    fc.on('selection:updated', updateSelection)
+    fc.on('selection:cleared', updateSelection)
+
     // Initial history snapshot
     historyRef.current = [fc.toJSON()]
     historyIdxRef.current = 0
@@ -295,6 +342,9 @@ const DrawingModePage = () => {
 
     return () => {
       ro.disconnect()
+      fc.off('selection:created', updateSelection)
+      fc.off('selection:updated', updateSelection)
+      fc.off('selection:cleared', updateSelection)
       fc.dispose()
     }
   }, [updateCounts])
@@ -338,7 +388,7 @@ const DrawingModePage = () => {
       return
     }
 
-    // Shape tool: only Line is exposed (see TOOL_META)
+    // Shape tools create one object per stroke so the robot follows a continuous path.
     fc.isDrawingMode = false
     fc.selection = false
     fc.getObjects().forEach((o) => { o.selectable = false; o.evented = false })
@@ -350,17 +400,36 @@ const DrawingModePage = () => {
       const sc = strokeColorRef.current
       const sw = strokeWidthRef.current
 
-      const line = new Line([ptr.x, ptr.y, ptr.x, ptr.y], {
-        stroke: sc, strokeWidth: sw, selectable: false, evented: false,
-      })
-      fc.add(line)
-      tempObjRef.current = line
+      if (activeTool === TOOLS.LINE) {
+        const line = new Line([ptr.x, ptr.y, ptr.x, ptr.y], {
+          stroke: sc, strokeWidth: sw, selectable: false, evented: false,
+        })
+        fc.add(line)
+        tempObjRef.current = line
+      }
     }
 
     const onMove = (opt) => {
-      if (!isDrawingRef.current || !tempObjRef.current) return
+      if (!isDrawingRef.current) return
       const ptr = fc.getScenePoint(opt.e)
-      tempObjRef.current.set({ x2: ptr.x, y2: ptr.y })
+      if (activeTool === TOOLS.LINE) {
+        if (!tempObjRef.current) return
+        tempObjRef.current.set({ x2: ptr.x, y2: ptr.y })
+      } else {
+        if (tempObjRef.current) fc.remove(tempObjRef.current)
+        const polyline = new Polyline(shapePoints(activeTool, startPtRef.current, ptr), {
+          fill: 'rgba(0,0,0,0)',
+          stroke: strokeColorRef.current,
+          strokeWidth: strokeWidthRef.current,
+          strokeLineCap: 'round',
+          strokeLineJoin: 'round',
+          selectable: false,
+          evented: false,
+          objectCaching: false,
+        })
+        fc.add(polyline)
+        tempObjRef.current = polyline
+      }
       fc.renderAll()
     }
 
@@ -421,6 +490,7 @@ const DrawingModePage = () => {
     fc.clear()
     fc.backgroundColor = null   // keep transparent
     fc.renderAll()
+    setHasSelection(false)
     saveHistory()
     setStatus('Canvas cleared')
   }, [saveHistory])
@@ -434,6 +504,7 @@ const DrawingModePage = () => {
     active.forEach((o) => fc.remove(o))
     fc.discardActiveObject()
     fc.renderAll()
+    setHasSelection(false)
     saveHistory()
   }, [saveHistory])
 
@@ -472,6 +543,8 @@ const DrawingModePage = () => {
           })
         } else if (obj.type === 'line') {
           points.push([obj.x1 / cw, obj.y1 / ch], [obj.x2 / cw, obj.y2 / ch])
+        } else if (obj.type === 'polyline' && obj.points) {
+          obj.points.forEach((point) => points.push([point.x / cw, point.y / ch]))
         }
         return { tool: 'pen', points }
       }).filter(s => s.points.length > 0)
@@ -1767,7 +1840,71 @@ const DrawingModePage = () => {
                       {panelTab === 'draw' && (
                         <div className="dm-panel-card">
                           <div className="dm-panel-card-head">
-                            <span className="dm-panel-card-title">Send Drawing to Robot</span>
+                            <span className="dm-panel-card-title">Draw Tools</span>
+                          </div>
+
+                          <div className="dm-draw-tool-row">
+                            {TOOL_META.map((tool) => (
+                              <button
+                                key={tool.id}
+                                id={`tool-${tool.id}`}
+                                className={`dm-bar-btn ${activeTool === tool.id ? 'dm-bar-btn--active' : ''}`}
+                                title={tool.label}
+                                onClick={() => setActiveTool(tool.id)}
+                              >
+                                <span style={{ fontSize: 20 }}>{tool.icon}</span>
+                                <span style={{ fontSize: 9, fontWeight: 700 }}>{tool.label}</span>
+                              </button>
+                            ))}
+                          </div>
+
+                          <div className="dm-draw-options-row">
+                            <div className="dm-draw-colors">
+                              {PRESET_COLORS.map((color) => (
+                                <button
+                                  key={color}
+                                  className={`dm-dot ${strokeColor === color ? 'dm-dot--active' : ''}`}
+                                  style={{ background: color, border: color === '#ffffff' ? '1.5px solid #aac8e8' : `1.5px solid ${color}` }}
+                                  title={color}
+                                  aria-label={`Set drawing color ${color}`}
+                                  onClick={() => setStrokeColor(color)}
+                                />
+                              ))}
+                              <input
+                                id="stroke-color-picker"
+                                type="color"
+                                value={strokeColor}
+                                onChange={(event) => setStrokeColor(event.target.value)}
+                                className="dm-bar-color-input"
+                                title="Custom color"
+                              />
+                            </div>
+                            <div className="dm-draw-widths">
+                              {STROKE_WIDTHS.map((width) => (
+                                <button
+                                  key={width}
+                                  id={`stroke-width-${width}`}
+                                  className={`dm-bar-w-btn ${strokeWidth === width ? 'dm-bar-btn--active' : ''}`}
+                                  title={`${width}px`}
+                                  onClick={() => setStrokeWidth(width)}
+                                >{width}</button>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="dm-draw-actions-row">
+                            <button id="btn-undo" className="dm-bar-btn" onClick={undo} disabled={!canUndo} title="Undo (Ctrl+Z)">↩</button>
+                            <button id="btn-redo" className="dm-bar-btn" onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Y)">↪</button>
+                            <button
+                              id="btn-delete-selected"
+                              className="dm-bar-btn"
+                              onClick={deleteSelected}
+                              disabled={!hasSelection}
+                              aria-label="Delete selected objects"
+                              title="Delete selected object(s) (Delete)"
+                            >⌫</button>
+                            <button id="btn-clear" className="dm-bar-btn dm-bar-btn--danger" onClick={clearCanvas} title="Clear all objects">✕</button>
+                            <button id="btn-export-png" className="dm-bar-btn" onClick={exportPNG} title="Export PNG">⬇</button>
                           </div>
 
                           {/* Status */}
@@ -1839,97 +1976,6 @@ const DrawingModePage = () => {
                   </>
                 )}
               </div>
-            </div>
-
-            {/* ── Bottom Toolbar ── */}
-            <div className="dm-bottom-bar">
-
-              {/* Tools */}
-              <div className="dm-bar-group">
-                {TOOL_META.map((t) => (
-                  <button
-                    key={t.id}
-                    id={`tool-${t.id}`}
-                    className={`dm-bar-btn ${activeTool === t.id ? 'dm-bar-btn--active' : ''}`}
-                    title={t.label}
-                    onClick={() => setActiveTool(t.id)}
-                  >
-                    <span style={{ fontSize: 20 }}>{t.icon}</span>
-                    <span style={{ fontSize: 9, fontWeight: 700 }}>{t.label}</span>
-                  </button>
-                ))}
-              </div>
-
-              <div className="dm-bar-sep" />
-
-              {/* Colors */}
-              <div className="dm-bar-group">
-                {PRESET_COLORS.map((c) => (
-                  <button
-                    key={c}
-                    className={`dm-dot ${strokeColor === c ? 'dm-dot--active' : ''}`}
-                    style={{ background: c, border: c === '#ffffff' ? '1.5px solid #aac8e8' : `1.5px solid ${c}` }}
-                    title={c}
-                    onClick={() => setStrokeColor(c)}
-                  />
-                ))}
-                <input
-                  id="stroke-color-picker"
-                  type="color"
-                  value={strokeColor}
-                  onChange={(e) => setStrokeColor(e.target.value)}
-                  className="dm-bar-color-input"
-                  title="Custom color"
-                />
-              </div>
-
-              <div className="dm-bar-sep" />
-
-              {/* Widths */}
-              <div className="dm-bar-group">
-                {STROKE_WIDTHS.map((w) => (
-                  <button
-                    key={w}
-                    id={`stroke-width-${w}`}
-                    className={`dm-bar-w-btn ${strokeWidth === w ? 'dm-bar-btn--active' : ''}`}
-                    title={`${w}px`}
-                    onClick={() => setStrokeWidth(w)}
-                  >{w}</button>
-                ))}
-              </div>
-
-              <div className="dm-bar-sep" />
-
-              {/* Actions */}
-              <div className="dm-bar-group">
-                <button id="btn-undo" className="dm-bar-btn" onClick={undo} disabled={!canUndo} title="Undo (Ctrl+Z)">↩</button>
-                <button id="btn-redo" className="dm-bar-btn" onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Y)">↪</button>
-                <button id="btn-clear" className="dm-bar-btn dm-bar-btn--danger" onClick={clearCanvas} title="Clear all">✕</button>
-                <button id="btn-export-png" className="dm-bar-btn" onClick={exportPNG} title="Export PNG">⬇</button>
-                <button
-                  id="btn-send-robot"
-                  className={`dm-bar-send ${isSending ? 'dm-bar-send--busy' : ''}`}
-                  onClick={sendToRobot}
-                  disabled={isSending}
-                  title="Send paths to Robot"
-                >
-                  {isSending ? '…' : 'Send'}
-                </button>
-                <button
-                  id="btn-draw-stop"
-                  className="dm-bar-btn dm-bar-btn--danger"
-                  onClick={stopDraw}
-                  disabled={!isSending && !(teachStatus && teachStatus.draw_running)}
-                  title="Stop the running draw (ClearError + ResetRobot)"
-                >■</button>
-              </div>
-
-              {/* Status */}
-              <div className="dm-bar-sep" />
-              <span className="dm-bottom-status">
-                <span className="dm-status-bar-tool">{activeTool}</span>
-                &nbsp;·&nbsp;{objectCount} obj&nbsp;·&nbsp;{status}
-              </span>
             </div>
 
           </div>

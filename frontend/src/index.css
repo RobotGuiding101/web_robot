@@ -2488,7 +2488,7 @@ body {
 /* Side toggle button mounted on the edge of the menu */
 .dm-teach-side-toggle {
   position: absolute;
-  top: 10px;
+  top: 50%;
   left: -14px;
   width: 28px;
   height: 28px;
@@ -2503,6 +2503,7 @@ body {
   z-index: 50;
   color: #475569;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transform: translateY(-50%);
   padding: 0;
 }
 
@@ -2511,24 +2512,26 @@ body {
   color: #ffffff;
   border-color: #2563eb;
   box-shadow: 0 3px 10px rgba(37, 99, 235, 0.28);
-  transform: scale(1.1);
+  transform: translateY(-50%) scale(1.1);
 }
 
 .dm-teach-col--minimized .dm-teach-side-toggle {
   left: -28px;
-  top: 14px;
+  top: 50%;
   width: 28px;
   height: 48px;
   border-radius: 8px 0 0 8px;
   border-right: none;
   background: #ffffff;
   box-shadow: -3px 2px 8px rgba(15, 23, 42, 0.14);
+  transform: translateY(-50%);
 }
 
 .dm-teach-col--minimized .dm-teach-side-toggle:hover {
   background: #2563eb;
   color: #ffffff;
   border-color: #2563eb;
+  transform: translateY(-50%);
 }
 
 .dm-teach-header {
@@ -2699,6 +2702,35 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.dm-draw-tool-row,
+.dm-draw-actions-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.dm-draw-options-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.dm-draw-colors,
+.dm-draw-widths {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dm-draw-actions-row {
+  justify-content: flex-start;
 }
 
 /* Live pose readout */
