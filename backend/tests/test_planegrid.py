@@ -161,6 +161,35 @@ class TestSimplifyStroke:
         out = pg.simplify_stroke(pts)
         assert len(out) >= 2 and len(out) <= DRAW_MAX_POINTS
 
+    def test_disabling_simplify_bypasses_douglas_peucker(self, monkeypatch):
+        pts = [(math.cos(t / 40.0) * 0.4 + 0.5, math.sin(t / 40.0) * 0.4 + 0.5)
+               for t in range(400)]
+        with_dp = pg.simplify_stroke(pts)
+        monkeypatch.setattr(pg, "DRAW_SIMPLIFY_ENABLED", False)
+        without_dp = pg.simplify_stroke(pts)
+        assert without_dp == pg._cap_points(pts, DRAW_MAX_POINTS)
+        assert len(without_dp) > len(with_dp)
+
+    def test_disabling_simplify_still_bounds_the_point_count(self, monkeypatch):
+        monkeypatch.setattr(pg, "DRAW_SIMPLIFY_ENABLED", False)
+        pts = [(i / 500.0, (i % 7) / 50.0) for i in range(501)]
+        assert len(pg.simplify_stroke(pts)) == DRAW_MAX_POINTS
+
+    def test_disabling_simplify_keeps_both_endpoints(self, monkeypatch):
+        pts = [(i / 300.0, math.sin(i / 30.0) * 0.3 + 0.5) for i in range(301)]
+        monkeypatch.setattr(pg, "DRAW_SIMPLIFY_ENABLED", False)
+        out = pg.simplify_stroke(pts)
+        assert out[0] == pts[0] and out[-1] == pts[-1]
+
+    def test_draw_stats_reports_which_reduction_ran(self, monkeypatch):
+        pts = [(i / 200.0, 0.0) for i in range(201)]
+        assert pg.draw_stats([{"tool": "pen", "points": pts}],
+                             GRID2, 2, 2, 5.0)["simplify_enabled"] is True
+        monkeypatch.setattr(pg, "DRAW_SIMPLIFY_ENABLED", False)
+        off = pg.draw_stats([{"tool": "pen", "points": pts}], GRID2, 2, 2, 5.0)
+        assert off["simplify_enabled"] is False
+        assert off["points_after"] == DRAW_MAX_POINTS
+
 
 class TestDrawStats:
     """draw_stats feeds the experiment record's stroke/point-count columns, so

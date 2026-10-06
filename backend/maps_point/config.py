@@ -156,6 +156,11 @@ ALIGN_RZ_MAX_ITERS    = int(os.environ.get("ALIGN_RZ_MAX_ITERS",      "20"))
 # from queuing an unbounded number of blocking moves. Units are normalized
 # canvas fractions (0..1), not pixels or mm, since the canvas element's own
 # pixel size is arbitrary.
+# Master switch for the reduction stage: 0/false/no/off skips Douglas-Peucker
+# and keeps only the uniform cap below — for A/B-ing whether DP visibly
+# flattens a hand-drawn shape. DRAW_SIMPLIFY_EPS is unused while off.
+DRAW_SIMPLIFY_ENABLED = os.environ.get(
+    "DRAW_SIMPLIFY_ENABLED", "1").strip().lower() not in ("0", "false", "no", "off")
 DRAW_SIMPLIFY_EPS = float(os.environ.get("DRAW_SIMPLIFY_EPS", "0.015"))
 # Hard cap on waypoints AFTER simplification (uniformly downsampled further
 # if still over) — bounds how long a single draw run can take/queue.
