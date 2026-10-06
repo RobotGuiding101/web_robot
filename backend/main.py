@@ -104,12 +104,23 @@ app = FastAPI(title="Robot Arm API", version="0.2.0", lifespan=lifespan)
 OPEN_PREFIXES = ("/api/auth/",)
 
 
+def _is_websocket_upgrade(request: Request) -> bool:
+    """Browser WebSocket handshakes cannot carry an Authorization header -
+    the JS API exposes no way to set one - so the browser puts the JWT in a
+    query param instead. Requiring the header here rejected every
+    /api/scan/ws* handshake with 401 before the route could read ?token=,
+    which is why the align progress feed never connected. The websocket
+    routes each verify the query token themselves."""
+    return "websocket" in request.headers.get("upgrade", "").lower()
+
+
 @app.middleware("http")
 async def require_bearer_token(request: Request, call_next):
     path = request.url.path
     if (path.startswith("/api/")
             and not path.startswith(OPEN_PREFIXES)
-            and request.method != "OPTIONS"):
+            and request.method != "OPTIONS"
+            and not _is_websocket_upgrade(request)):
         header = request.headers.get("authorization", "")
         if not header.startswith("Bearer "):
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
