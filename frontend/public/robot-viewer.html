@@ -500,7 +500,7 @@
         depthTexture.magFilter = THREE.LinearFilter;
 
         function readDepthFrame() {
-            if (isDisplayOnly || !cloudVisible('chk-mesh1')) return;
+            if (!cloudVisible('chk-mesh1')) return;
             const token = localStorage.getItem('access_token') || '';
             if (!token) { setTimeout(readDepthFrame, 2000); return; }
             fetch('/api/map/depth_frame?_t=' + Date.now(), {
@@ -547,7 +547,6 @@
         }
 
         function readCamStream() {
-            if (isDisplayOnly) return;
             const token = localStorage.getItem('access_token') || '';
             if (!token) { setTimeout(readCamStream, 2000); return; }
             fetch('/api/map/video_feed?_t=' + Date.now(), {
@@ -594,7 +593,6 @@
         }
 
         function readCam2Stream() {
-            if (isDisplayOnly) return;
             const token = localStorage.getItem('access_token') || '';
             if (!token) { setTimeout(readCam2Stream, 2000); return; }
             fetch('/api/camera/stream2?_t=' + Date.now(), {
@@ -989,7 +987,7 @@
         projectorMount.add(depthMesh);
 
         function readDepthGrid() {
-            if (isDisplayOnly || !cloudVisible('chk-mesh1')) return;
+            if (!cloudVisible('chk-mesh1')) return;
             const token = localStorage.getItem('access_token') || '';
             if (!token) { setTimeout(readDepthGrid, 2000); return; }
             fetch('/api/map/depth_grid?_t=' + Date.now(), {
@@ -1271,7 +1269,7 @@
         cam2Mount.add(depthMesh2);
 
         function readDepthGrid2() {
-            if (isDisplayOnly || !cloudVisible('chk-mesh2')) return;
+            if (!cloudVisible('chk-mesh2')) return;
             const token = localStorage.getItem('access_token') || '';
             if (!token) { setTimeout(readDepthGrid2, 2000); return; }
             fetch('/api/camera/depth_grid2?_t=' + Date.now(), {
