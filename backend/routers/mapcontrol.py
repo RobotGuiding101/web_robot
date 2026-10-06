@@ -1658,6 +1658,22 @@ def api_grid_verify(request: Request):
     return {"ok": True, "positions": GRID_TEST_POSITIONS}
 
 
+@router.get("/pose-source")
+def api_pose_source(request: Request):
+    """Read-only diagnostic: does this controller expose a live pose at all?
+
+    Samples GetPose() and GetAngle() while the arm stands still and reports
+    which of them varies. GetPose() has been seen returning exactly the last
+    commanded target, which makes it unusable as the measured pose for the
+    Grid Mapping form. Nothing here moves the robot.
+    """
+    if not robot.connected:
+        return {"ok": False, "error": "robot not connected"}
+    report = robot.pose_source_report()
+    _log_user_event(request, "draw", "pose_source", report["verdict"])
+    return {"ok": True, **report}
+
+
 @router.get("/test-report")
 def api_test_report(user: User = Depends(get_current_user)):
     """Everything the Grid Mapping (05) and Drawing (09) sheets of the
