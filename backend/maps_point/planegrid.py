@@ -268,7 +268,12 @@ def test_aggregates(points: list) -> dict:
     really was", which is the direction that matters when deciding whether the
     taught plane or the jogging was off. Rows carrying no `error` key are
     skipped rather than counted as zero, so a partial run can never present
-    itself as a perfect one."""
+    itself as a perfect one.
+
+    rmse is the standard root-mean-square of the 3D error magnitudes,
+    sqrt(mean(d^2)) — the same convention validate_grid()'s rmse_mm uses.
+    Dividing by 3n instead of n would report a value 1/sqrt(3) too small
+    under the same name, which is how it used to behave here."""
     rows = [p for p in points if p.get("error")]
     if not rows:
         return {"count": 0, "max_error_x": None, "max_error_y": None,
@@ -286,7 +291,7 @@ def test_aggregates(points: list) -> dict:
         "mean_error_y": sum(e[1] for e in errs) / n,
         "mean_error_z": sum(e[2] for e in errs) / n,
         "mean_error": sum(dist) / n,
-        "rmse": math.sqrt(sum(d * d for d in dist) / (3 * n)),
+        "rmse": math.sqrt(sum(d * d for d in dist) / n),
     }
 
 

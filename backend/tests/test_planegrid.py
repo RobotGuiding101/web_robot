@@ -422,16 +422,24 @@ class TestTestAggregates:
         # magnitude of (1,2,2) is 3
         assert agg["mean_error"] == pytest.approx(3.0)
 
-    def test_rmse_is_not_the_rms_of_the_magnitudes(self):
-        # rmse divides by 3n, so it is the RMS across all 3n scalar
-        # components, NOT sqrt(mean(d^2)) — for one point of magnitude 3 that
-        # is sqrt(3), not 3. Easy to "fix" this into a bug by assuming the
-        # textbook formula; the divisor is deliberate so a three-axis error
-        # does not read as three times worse than a one-axis one.
+    def test_rmse_is_the_standard_root_mean_square_of_the_magnitudes(self):
+        # sqrt(mean(d^2)) — the same convention validate_grid()'s rmse_mm
+        # uses. This used to divide by 3n, which reported a value 1/sqrt(3)
+        # too small under the same name.
         agg = pg.test_aggregates([self._point(1, 2, 2)])
         assert agg["mean_error"] == pytest.approx(3.0)
-        assert agg["rmse"] == pytest.approx(math.sqrt(3.0))
-        assert agg["rmse"] < agg["mean_error"]
+        assert agg["rmse"] == pytest.approx(3.0)
+
+    def test_rmse_matches_mean_when_every_magnitude_is_equal(self):
+        agg = pg.test_aggregates([self._point(1, 1, 0), self._point(-1, -1, 0)])
+        assert agg["mean_error"] == pytest.approx(math.sqrt(2))
+        assert agg["rmse"] == pytest.approx(math.sqrt(2))
+
+    def test_rmse_is_at_least_the_mean(self):
+        # RMS >= arithmetic mean for a non-negative series, which catches a
+        # divisor that is too large.
+        agg = pg.test_aggregates([self._point(0.1, 0, 0), self._point(9, 0, 0)])
+        assert agg["rmse"] >= agg["mean_error"]
 
     def test_max_error_is_the_largest_magnitude_not_the_largest_value(self):
         agg = pg.test_aggregates([self._point(-5, 2, 1), self._point(3, -1, 0.5)])
@@ -453,17 +461,11 @@ class TestTestAggregates:
         assert agg["mean_error"] == pytest.approx(5 / 2)
         assert agg["mean_error_x"] == pytest.approx(1.5)
 
-    def test_rmse_spreads_over_all_three_components(self):
-        # Two points of magnitude 3 and 5 -> sqrt((9+25)/(3*2)) = sqrt(34/6)
+    def test_rmse_uses_the_point_count_not_the_component_count(self):
+        # Two points of magnitude 3 and 5 -> sqrt((9+25)/2). Dividing by 3n
+        # instead would give sqrt(34/6), a third of the real figure.
         agg = pg.test_aggregates([self._point(3, 0, 0), self._point(5, 0, 0)])
-        assert agg["rmse"] == pytest.approx(math.sqrt(34 / 6))
-
-    def test_identical_magnitudes_still_differ_between_mean_and_rmse(self):
-        # Pins the same 3n divisor from the other direction: two equal-
-        # magnitude points give mean == magnitude but rmse == magnitude/sqrt(3).
-        agg = pg.test_aggregates([self._point(1, 1, 0), self._point(-1, -1, 0)])
-        assert agg["mean_error"] == pytest.approx(math.sqrt(2))
-        assert agg["rmse"] == pytest.approx(math.sqrt(2 / 3))
+        assert agg["rmse"] == pytest.approx(math.sqrt(34 / 2))
 
     def test_rmse_is_never_larger_than_the_worst_magnitude(self):
         agg = pg.test_aggregates([self._point(0.1, 0, 0), self._point(9, 0, 0)])
