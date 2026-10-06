@@ -1,0 +1,122 @@
+[
+ {
+  "id": "AUTH-01",
+  "case": "Login สำเร็จ",
+  "expected": "200 + access_token",
+  "observed_code": 200,
+  "observed_body": "token len=203",
+  "note": ""
+ },
+ {
+  "id": "AUTH-02",
+  "case": "Login รหัสผิด",
+  "expected": "401",
+  "observed_code": 401,
+  "observed_body": "{\"detail\":\"Invalid credentials\"}",
+  "note": ""
+ },
+ {
+  "id": "AUTH-03",
+  "case": "Login user ไม่มี",
+  "expected": "401",
+  "observed_code": 401,
+  "observed_body": "{\"detail\":\"Invalid credentials\"}",
+  "note": ""
+ },
+ {
+  "id": "AUTH-04",
+  "case": "เข้าหน้าป้องกันโดยไม่มี token",
+  "expected": "401",
+  "observed_code": 401,
+  "observed_body": "{\"detail\":\"Not authenticated\"}",
+  "note": ""
+ },
+ {
+  "id": "AUTH-05",
+  "case": "token หมดอายุ",
+  "expected": "401",
+  "observed_code": 401,
+  "observed_body": "{\"detail\":\"Invalid token\"}",
+  "note": ""
+ },
+ {
+  "id": "AUTH-06",
+  "case": "token เสียรูป",
+  "expected": "401",
+  "observed_code": 401,
+  "observed_body": "{\"detail\":\"Invalid token\"}",
+  "note": ""
+ },
+ {
+  "id": "AUTH-07",
+  "case": "/me ไม่มี header",
+  "expected": "401",
+  "observed_code": 401,
+  "observed_body": "{\"detail\":\"Not authenticated\"}",
+  "note": ""
+ },
+ {
+  "id": "AUTH-08",
+  "case": "/me token ถูกต้อง",
+  "expected": "200 + username",
+  "observed_code": 200,
+  "observed_body": "{\"id\":\"eeb7de27-13e3-4e04-99ab-b68eab76c625\",\"username\":\"qa_manual_2026\"}",
+  "note": ""
+ },
+ {
+  "id": "AUTH-09",
+  "case": "Register ต้อง login ก่อน",
+  "expected": "401",
+  "observed_code": 401,
+  "observed_body": "{\"detail\":\"Not authenticated\"}",
+  "note": ""
+ },
+ {
+  "id": "AUTH-10",
+  "case": "Register username สั้น",
+  "expected": "400",
+  "observed_code": 400,
+  "observed_body": "{\"detail\":\"Username must be at least 2 characters\"}",
+  "note": ""
+ },
+ {
+  "id": "AUTH-11",
+  "case": "Register password สั้น",
+  "expected": "400",
+  "observed_code": 400,
+  "observed_body": "{\"detail\":\"Password must be at least 4 characters\"}",
+  "note": ""
+ },
+ {
+  "id": "AUTH-12",
+  "case": "Register username ซ้ำ",
+  "expected": "409",
+  "observed_code": 409,
+  "observed_body": "{\"detail\":\"Username already exists\"}",
+  "note": ""
+ },
+ {
+  "id": "AUTH-13",
+  "case": "Register สำเร็จ",
+  "expected": "200 + token",
+  "observed_code": 200,
+  "observed_body": "token len=209",
+  "note": ""
+ },
+ {
+  "id": "AUTH-13b",
+  "case": "user ใหม่ใช้ token ได้",
+  "expected": "200",
+  "observed_code": 200,
+  "observed_body": "{\"id\":\"1968c9f4-e446-4172-ad52-b88a63e770e2\",\"username\":\"qa_manual_created_1\"}",
+  "note": ""
+ },
+ {
+  "id": "AUTH-14",
+  "case": "resource ป้องกัน ปฏิเสธ token เสีย",
+  "expected": "401/403",
+  "observed_code": 401,
+  "observed_body": "{\"detail\":\"Invalid token\"}",
+  "note": ""
+ }
+]
