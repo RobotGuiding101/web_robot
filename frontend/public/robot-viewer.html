@@ -1457,7 +1457,9 @@
             const token = localStorage.getItem('access_token') || '';
             if (!token) { setTimeout(connectScanLive, 2000); return; }
             const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            scanWs = new WebSocket(proto + '//' + location.host + '/api/scan/ws?token=' + encodeURIComponent(token));
+            // /ws not /api/scan/ws - the scan router is mounted without a
+            // prefix, and nginx only sends the Upgrade header on `location /ws`.
+            scanWs = new WebSocket(proto + '//' + location.host + '/ws?token=' + encodeURIComponent(token));
             scanWs.binaryType = 'arraybuffer';
             scanWs.onmessage = (ev) => {
                 const c = parseScanCloud(ev.data);
@@ -1763,7 +1765,8 @@
             if (!token) { alignWsTimer = setTimeout(connectAlignWs, 2000); return; }
             const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
             try {
-                alignWs = new WebSocket(proto + '//' + location.host + '/api/scan/ws/align?token=' + encodeURIComponent(token));
+                // /ws/align, matching how the scan router is mounted. See connectScanLive.
+                alignWs = new WebSocket(proto + '//' + location.host + '/ws/align?token=' + encodeURIComponent(token));
             } catch (err) {
                 alignWsTimer = setTimeout(connectAlignWs, 2000);
                 return;
