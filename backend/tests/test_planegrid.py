@@ -161,19 +161,20 @@ class TestSimplifyStroke:
         out = pg.simplify_stroke(pts)
         assert len(out) >= 2 and len(out) <= DRAW_MAX_POINTS
 
-    def test_disabling_simplify_bypasses_douglas_peucker(self, monkeypatch):
+    def test_disabling_simplify_replays_every_raw_sample(self, monkeypatch):
         pts = [(math.cos(t / 40.0) * 0.4 + 0.5, math.sin(t / 40.0) * 0.4 + 0.5)
                for t in range(400)]
         with_dp = pg.simplify_stroke(pts)
         monkeypatch.setattr(pg, "DRAW_SIMPLIFY_ENABLED", False)
-        without_dp = pg.simplify_stroke(pts)
-        assert without_dp == pg._cap_points(pts, DRAW_MAX_POINTS)
-        assert len(without_dp) > len(with_dp)
+        raw = pg.simplify_stroke(pts)
+        assert raw == [(float(u), float(v)) for u, v in pts]
+        assert len(raw) > DRAW_MAX_POINTS > len(with_dp)
 
-    def test_disabling_simplify_still_bounds_the_point_count(self, monkeypatch):
+    def test_disabling_simplify_uncaps_shapes_that_never_ran_douglas_peucker(self, monkeypatch):
+        pts = [(i / 900.0, (i % 11) / 60.0) for i in range(301)]
         monkeypatch.setattr(pg, "DRAW_SIMPLIFY_ENABLED", False)
-        pts = [(i / 500.0, (i % 7) / 50.0) for i in range(501)]
-        assert len(pg.simplify_stroke(pts)) == DRAW_MAX_POINTS
+        assert pg._stroke_path({"tool": "rect", "points": pts}) == \
+            [(float(u), float(v)) for u, v in pts]
 
     def test_disabling_simplify_keeps_both_endpoints(self, monkeypatch):
         pts = [(i / 300.0, math.sin(i / 30.0) * 0.3 + 0.5) for i in range(301)]
@@ -188,7 +189,7 @@ class TestSimplifyStroke:
         monkeypatch.setattr(pg, "DRAW_SIMPLIFY_ENABLED", False)
         off = pg.draw_stats([{"tool": "pen", "points": pts}], GRID2, 2, 2, 5.0)
         assert off["simplify_enabled"] is False
-        assert off["points_after"] == DRAW_MAX_POINTS
+        assert off["points_before"] == off["points_after"] == len(pts)
 
     def test_download_payload_carries_the_reduction_settings(self, monkeypatch):
         pts = [(i / 200.0, 0.0) for i in range(201)]

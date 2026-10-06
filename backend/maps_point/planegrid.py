@@ -149,6 +149,10 @@ def project_grid_2d(grid_points, rows: int, cols: int) -> list:
     return out
 
 
+def _as_uv_list(points) -> list:
+    return [(float(u), float(v)) for u, v in points]
+
+
 def _cap_points(points_uv, max_points: int) -> list:
     """Uniformly downsample to at most max_points, preserving endpoints —
     shared tail end of simplify_stroke() (below) and the pass-through path
@@ -184,13 +188,18 @@ def simplify_stroke(points_uv, eps: float = DRAW_SIMPLIFY_EPS) -> list:
     arm just went down and didn't trace anything" on hardware. The <3
     fallback guards the over-cap case against the same total collapse.
 
-    DRAW_SIMPLIFY_ENABLED=0 skips Douglas-Peucker entirely and leaves only the
-    uniform cap, which is the knob for A/B-testing whether DP is flattening a
-    hand-drawn shape: uniform downsampling keeps the traced outline, DP replaces
-    it with its vertices. DRAW_SIMPLIFY_EPS has no effect while it is off."""
+    DRAW_SIMPLIFY_ENABLED=0 passes every raw sample straight through — no
+    Douglas-Peucker and no uniform downsample — so the arm traces the outline
+    that was actually drawn instead of a reduced stand-in. It is the knob for
+    when fidelity matters more than move count. Neither DRAW_SIMPLIFY_EPS nor
+    DRAW_MAX_POINTS applies while it is off; in "servo" mode the bound then
+    comes from densify_path()'s DRAW_SERVOP_MAX_STREAM_POINTS, which is a
+    cap on the stream rather than a change to the shape."""
+    if not DRAW_SIMPLIFY_ENABLED:
+        return _as_uv_list(points_uv)
     if len(points_uv) <= 2:
         return list(points_uv)
-    if len(points_uv) <= DRAW_MAX_POINTS or not DRAW_SIMPLIFY_ENABLED:
+    if len(points_uv) <= DRAW_MAX_POINTS:
         return _cap_points(points_uv, DRAW_MAX_POINTS)
     arr = np.array(points_uv, dtype=np.float32).reshape(-1, 1, 2)
     simplified = cv2.approxPolyDP(arr, eps, closed=False).reshape(-1, 2).tolist()
@@ -238,6 +247,9 @@ def _stroke_path(stroke: dict) -> list:
     Douglas-Peucker would facet a smooth curve back into a polygon — see
     simplify_stroke()'s docstring for the full reasoning.
 
+    With DRAW_SIMPLIFY_ENABLED=0 none of that applies and every raw sample is
+    replayed, for shapes and pen alike.
+
     draw_stats(), _stroke_to_poses() and the draw-end accuracy check all
     route through here so a number in the experiment report can never
     describe a different point list than the one the arm followed. When the
@@ -245,6 +257,8 @@ def _stroke_path(stroke: dict) -> list:
     became dead code and the report claimed five rectangles were freehand.
     """
     pts = stroke.get("points") or []
+    if not DRAW_SIMPLIFY_ENABLED:
+        return _as_uv_list(pts)
     if stroke.get("tool") == "pen":
         return simplify_stroke(pts)
     return _cap_points(pts, DRAW_MAX_POINTS)
