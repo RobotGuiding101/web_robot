@@ -75,7 +75,7 @@ export function evaluateReportGate({ report, positions } = {}) {
 export function backendToolFor(obj) {
   if (obj?.type === 'line') return 'line'
   if (obj?.type === 'polyline') {
-    return { rectangle: 'rect', circle: 'circle', line: 'line' }[obj.intendedTool] || 'rect'
+    return { rectangle: 'rect', triangle: 'triangle', circle: 'circle', line: 'line' }[obj.intendedTool] || 'rect'
   }
   return 'pen'
 }

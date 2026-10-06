@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { apiFetch } from '../lib/api'
-import { formatRobotLogLines } from '../lib/robotLogFormat'
+import RobotLogPanel from '../components/RobotLogPanel'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
 
@@ -79,101 +79,6 @@ const JogGroup = ({ axes, onMove, disabled }) => (
   </div>
 )
 
-// ── Log Panel ─────────────────────────────────────────────────────────────────
-const LogPanel = ({ title, channel, accentClass }) => {
-  const [lines, setLines] = useState([])
-  const [paused, setPaused] = useState(false)
-  const bottomRef = useRef(null)
-  const pausedRef = useRef(false)
-  const pendingRef = useRef([])
-
-  pausedRef.current = paused
-
-  useEffect(() => {
-    if (!paused) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [lines, paused])
-
-  useEffect(() => {
-    let dead = false
-    let lastId = 0
-
-    const apply = (data) => {
-      if (dead || !Array.isArray(data.entries)) return
-      if (typeof data.latest === 'number') lastId = data.latest
-      const fresh = formatRobotLogLines(data.entries)
-      if (fresh.length === 0) return
-      setLines((prev) => {
-        const next = [...prev, ...fresh]
-        return next.length > LOG_MAX ? next.slice(-LOG_MAX) : next
-      })
-    }
-
-    apiFetch('/api/map/robot_logs')
-      .then((r) => r.json())
-      .then(apply)
-      .catch(() => { })
-
-    const pollInterval = setInterval(() => {
-      if (dead || pausedRef.current) return
-      apiFetch(`/api/map/robot_logs?since=${lastId}`)
-        .then((r) => r.json())
-        .then(apply)
-        .catch(() => { })
-    }, 2000)
-
-    return () => { dead = true; clearInterval(pollInterval) }
-  }, [channel])
-
-  const handleResume = useCallback(() => {
-    setPaused(false)
-    if (pendingRef.current.length) {
-      setLines((prev) => {
-        const next = [...prev, ...pendingRef.current]
-        pendingRef.current = []
-        return next.length > LOG_MAX ? next.slice(-LOG_MAX) : next
-      })
-    }
-  }, [])
-
-  const handleClear = useCallback(() => {
-    setLines([])
-    pendingRef.current = []
-  }, [])
-
-  return (
-    <div className={`log-panel-box ${accentClass}`}>
-      <div className="log-panel-header">
-        <span className="log-panel-title">{title}</span>
-        <div className="log-panel-actions">
-          {paused
-            ? <button className="log-btn log-btn--resume" onClick={handleResume}>Resume</button>
-            : <button className="log-btn log-btn--pause" onClick={() => setPaused(true)}>Pause</button>
-          }
-          <button className="log-btn log-btn--clear" onClick={handleClear}>Clear</button>
-        </div>
-      </div>
-      <div className="log-panel-body" id={`log-${channel}`}>
-        {lines.length === 0
-          ? <span className="log-empty">No log entries yet…</span>
-          : lines.map((l, i) => (
-            <div key={i} className={`log-line log-line--${l.kind}`} title={l.raw || l.text}>
-              <span className="log-time">{l.t}</span>
-              <span className="log-msg">{l.text}</span>
-            </div>
-          ))
-        }
-        <div ref={bottomRef} />
-      </div>
-      {paused && pendingRef.current.length > 0 && (
-        <div className="log-paused-banner">
-          Paused — {pendingRef.current.length} new line{pendingRef.current.length > 1 ? 's' : ''} waiting
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Section header (compact reusable) ─────────────────────────────────────────
 const SectionHead = ({ children }) => (
   <div className="ctrl-section-head">{children}</div>
 )
@@ -1025,7 +930,7 @@ const DobotControllerPage = () => {
                 >⛶</button>
               </div>
               <div className="dobot-left-log">
-                <LogPanel title="Robot Log" channel="robot" accentClass="log-panel-box--robot" />
+                <RobotLogPanel accentClass="log-panel-box--robot" />
               </div>
             </div>
 

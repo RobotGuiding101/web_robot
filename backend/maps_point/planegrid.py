@@ -168,7 +168,7 @@ def simplify_stroke(points_uv, eps: float = DRAW_SIMPLIFY_EPS) -> list:
     scribble can't queue an unbounded number of blocking moves.
 
     Only for the "pen" tool — see _stroke_to_poses(), which skips this
-    entirely for programmatically-generated shapes (line/rect/circle):
+    entirely for programmatically-generated shapes (line/rect/triangle/circle):
     Douglas-Peucker would happily collapse a circle's ~36 evenly-spaced
     points down to a handful of vertices (each point's deviation from its
     neighbors' chord is tiny for a smooth curve, exactly what eps is
@@ -522,7 +522,7 @@ def densify_path(poses: list, step_mm: float, max_points: int) -> list:
 
 def _stroke_to_poses(stroke: dict, grid_points, rows: int, cols: int) -> list:
     """One entry from the Draw canvas's `strokes` payload (static/draw.js)
-    — {"tool": "pen"|"line"|"rect"|"circle", "points": [(u,v), ...]} —
+    — {"tool": "pen"|"line"|"rect"|"triangle"|"circle", "points": [(u,v), ...]} —
     mapped through the taught grid to Cartesian [X,Y,Z,Rx,Ry,Rz]
     waypoints. Which point list gets replayed is _stroke_path()'s decision,
     not this function's."""
@@ -682,7 +682,7 @@ def _abort_before_stroke(state, phase: str) -> bool:
 
 def do_draw(robot: Robot, state, strokes: list) -> None:
     """Background-thread action (see main.py's /api/draw) — `strokes` is a
-    list of {"tool": "pen"|"line"|"rect"|"circle", "points": [(u,v), ...]}
+    list of {"tool": "pen"|"line"|"rect"|"triangle"|"circle", "points": [(u,v), ...]}
     dicts, one per pen-down-to-pen-up drag on the Draw canvas (static/
     draw.js — added 2026-08-16 alongside the dedicated Draw page,
     replacing the old single-stroke-only canvas embedded in the Align
