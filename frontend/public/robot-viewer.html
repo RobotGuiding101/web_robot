@@ -500,7 +500,7 @@
         depthTexture.magFilter = THREE.LinearFilter;
 
         function readDepthFrame() {
-            if (!cloudVisible('chk-mesh1')) return;
+            if (!cloudVisible('chk-mesh1')) { setTimeout(readDepthFrame, 500); return; }
             const token = localStorage.getItem('access_token') || '';
             if (!token) { setTimeout(readDepthFrame, 2000); return; }
             fetch('/api/map/depth_frame?_t=' + Date.now(), {
@@ -548,7 +548,11 @@
 
         function readCamStream() {
             const token = localStorage.getItem('access_token') || '';
-            if (!token) { setTimeout(readCamStream, 2000); return; }
+            if (!token) {
+                console.warn('[readCamStream] No access_token in localStorage, retrying in 2s...');
+                setTimeout(readCamStream, 2000);
+                return;
+            }
             fetch('/api/map/video_feed?_t=' + Date.now(), {
                 headers: { Authorization: 'Bearer ' + token },
                 cache: 'no-store',
@@ -557,7 +561,11 @@
                 const reader = res.body.getReader();
                 let buf = new Uint8Array(0);
                 const pump = () => reader.read().then(({ value, done }) => {
-                    if (done) return;
+                    if (done) {
+                        console.warn('[readCamStream] Stream finished/closed, reconnecting in 1s...');
+                        setTimeout(readCamStream, 1000);
+                        return;
+                    }
                     buf = catBuf(buf, value);
                     // Real-time: keep ONLY the last complete JPEG in this batch
                     // and drop the older ones. Drawing every buffered frame made
@@ -577,7 +585,10 @@
                     return pump();
                 });
                 return pump();
-            }).catch(() => { setTimeout(readCamStream, 1000); });
+            }).catch((err) => {
+                console.warn('[readCamStream] Error reading stream, retrying in 1s:', err);
+                setTimeout(readCamStream, 1000);
+            });
         }
         readCamStream();
 
@@ -594,7 +605,11 @@
 
         function readCam2Stream() {
             const token = localStorage.getItem('access_token') || '';
-            if (!token) { setTimeout(readCam2Stream, 2000); return; }
+            if (!token) {
+                console.warn('[readCam2Stream] No access_token in localStorage, retrying in 2s...');
+                setTimeout(readCam2Stream, 2000);
+                return;
+            }
             fetch('/api/camera/stream2?_t=' + Date.now(), {
                 headers: { Authorization: 'Bearer ' + token },
                 cache: 'no-store',
@@ -603,7 +618,11 @@
                 const reader = res.body.getReader();
                 let buf = new Uint8Array(0);
                 const pump = () => reader.read().then(({ value, done }) => {
-                    if (done) return;
+                    if (done) {
+                        console.warn('[readCam2Stream] Stream finished/closed, reconnecting in 1s...');
+                        setTimeout(readCam2Stream, 1000);
+                        return;
+                    }
                     buf = catBuf(buf, value);
                     let pos = 0, last = null;
                     for (; ;) {
@@ -619,7 +638,10 @@
                     return pump();
                 });
                 return pump();
-            }).catch(() => { setTimeout(readCam2Stream, 1000); });
+            }).catch((err) => {
+                console.warn('[readCam2Stream] Error reading stream2, retrying in 1s:', err);
+                setTimeout(readCam2Stream, 1000);
+            });
         }
         readCam2Stream();
 
@@ -987,7 +1009,7 @@
         projectorMount.add(depthMesh);
 
         function readDepthGrid() {
-            if (!cloudVisible('chk-mesh1')) return;
+            if (!cloudVisible('chk-mesh1')) { setTimeout(readDepthGrid, 500); return; }
             const token = localStorage.getItem('access_token') || '';
             if (!token) { setTimeout(readDepthGrid, 2000); return; }
             fetch('/api/map/depth_grid?_t=' + Date.now(), {
@@ -1269,7 +1291,7 @@
         cam2Mount.add(depthMesh2);
 
         function readDepthGrid2() {
-            if (!cloudVisible('chk-mesh2')) return;
+            if (!cloudVisible('chk-mesh2')) { setTimeout(readDepthGrid2, 500); return; }
             const token = localStorage.getItem('access_token') || '';
             if (!token) { setTimeout(readDepthGrid2, 2000); return; }
             fetch('/api/camera/depth_grid2?_t=' + Date.now(), {
