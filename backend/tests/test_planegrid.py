@@ -385,6 +385,162 @@ class TestReportMissingCodes:
         assert pg.report_missing_codes(True, GRID2, [stale], {}) == ["no_draw_stats"]
 
 
+class TestTestAggregates:
+    """These four numbers are rows 40-44 of the Grid Mapping sheet, so a bug
+    here lands on the experiment form and nothing else would catch it."""
+
+    @staticmethod
+    def _point(ex, ey, ez):
+        return {"error": [ex, ey, ez]}
+
+    def test_no_points_reports_absence_rather_than_zero(self):
+        # The form must be able to tell "not measured" from "measured as
+        # perfect"; zeros here would read as a flawless result.
+        agg = pg.test_aggregates([])
+        assert agg["count"] == 0
+        for key in ("max_error_x", "max_error_y", "max_error_z",
+                    "mean_error_x", "mean_error_y", "mean_error_z",
+                    "mean_error", "rmse"):
+            assert agg[key] is None, key
+
+    def test_skips_rows_without_an_error_instead_of_counting_them_as_zero(self):
+        agg = pg.test_aggregates([{"u": 0.5, "v": 0.5}, self._point(1, 2, 3)])
+        assert agg["count"] == 1
+        assert agg["max_error_x"] == 1.0
+
+    def test_counting_a_partial_run_never_reports_zero(self):
+        empty = [{}, {"note": "aborted"}]
+        assert pg.test_aggregates(empty)["count"] == 0
+        assert pg.test_aggregates(empty)["rmse"] is None
+
+    def test_single_point(self):
+        agg = pg.test_aggregates([self._point(1, 2, 2)])
+        assert agg["count"] == 1
+        assert agg["max_error_x"] == 1.0
+        assert agg["max_error_y"] == 2.0
+        assert agg["max_error_z"] == 2.0
+        # magnitude of (1,2,2) is 3
+        assert agg["mean_error"] == pytest.approx(3.0)
+
+    def test_rmse_is_not_the_rms_of_the_magnitudes(self):
+        # rmse divides by 3n, so it is the RMS across all 3n scalar
+        # components, NOT sqrt(mean(d^2)) — for one point of magnitude 3 that
+        # is sqrt(3), not 3. Easy to "fix" this into a bug by assuming the
+        # textbook formula; the divisor is deliberate so a three-axis error
+        # does not read as three times worse than a one-axis one.
+        agg = pg.test_aggregates([self._point(1, 2, 2)])
+        assert agg["mean_error"] == pytest.approx(3.0)
+        assert agg["rmse"] == pytest.approx(math.sqrt(3.0))
+        assert agg["rmse"] < agg["mean_error"]
+
+    def test_max_error_is_the_largest_magnitude_not_the_largest_value(self):
+        agg = pg.test_aggregates([self._point(-5, 2, 1), self._point(3, -1, 0.5)])
+        assert agg["max_error_x"] == 5.0
+        assert agg["max_error_y"] == 2.0
+        assert agg["max_error_z"] == 1.0
+
+    def test_mean_error_keeps_the_sign_so_direction_stays_readable(self):
+        # computed-minus-actual: a positive mean means the grid predicts the
+        # tool further out than it really was. Taking abs() here would throw
+        # that information away, which is the whole point of the sign.
+        agg = pg.test_aggregates([self._point(2, 0, 0), self._point(4, 0, 0)])
+        assert agg["mean_error_x"] == pytest.approx(3.0)
+        assert agg["mean_error_x"] > 0
+
+    def test_mean_error_is_the_mean_magnitude_not_the_mean_of_components(self):
+        # (3,4,0) is magnitude 5. Mean of components would be 7/3.
+        agg = pg.test_aggregates([self._point(3, 4, 0), self._point(0, 0, 0)])
+        assert agg["mean_error"] == pytest.approx(5 / 2)
+        assert agg["mean_error_x"] == pytest.approx(1.5)
+
+    def test_rmse_spreads_over_all_three_components(self):
+        # Two points of magnitude 3 and 5 -> sqrt((9+25)/(3*2)) = sqrt(34/6)
+        agg = pg.test_aggregates([self._point(3, 0, 0), self._point(5, 0, 0)])
+        assert agg["rmse"] == pytest.approx(math.sqrt(34 / 6))
+
+    def test_identical_magnitudes_still_differ_between_mean_and_rmse(self):
+        # Pins the same 3n divisor from the other direction: two equal-
+        # magnitude points give mean == magnitude but rmse == magnitude/sqrt(3).
+        agg = pg.test_aggregates([self._point(1, 1, 0), self._point(-1, -1, 0)])
+        assert agg["mean_error"] == pytest.approx(math.sqrt(2))
+        assert agg["rmse"] == pytest.approx(math.sqrt(2 / 3))
+
+    def test_rmse_is_never_larger_than_the_worst_magnitude(self):
+        agg = pg.test_aggregates([self._point(0.1, 0, 0), self._point(9, 0, 0)])
+        assert agg["rmse"] <= agg["max_error_x"]
+
+    def test_all_zero_errors_report_zero_not_none(self):
+        agg = pg.test_aggregates([self._point(0, 0, 0), self._point(0, 0, 0)])
+        assert agg["count"] == 2
+        assert agg["max_error_x"] == 0.0
+        assert agg["mean_error"] == 0.0
+        assert agg["rmse"] == 0.0
+
+    def test_carries_no_metadata_beyond_the_numbers(self):
+        # An English-language "definitions" block once shipped inside the
+        # download; the form has no such column and the docstring explains
+        # the maths instead.
+        assert set(pg.test_aggregates([self._point(1, 1, 1)])) == {
+            "count", "max_error_x", "max_error_y", "max_error_z",
+            "mean_error_x", "mean_error_y", "mean_error_z",
+            "mean_error", "rmse"}
+
+    def test_reads_the_error_key_the_endpoints_actually_write(self):
+        rec = {"index": 1, "u": 0.25, "v": 0.5, "computed": [1, 2, 3],
+               "actual": [1.0, 1.5, 3.0], "error": [0.0, 0.5, 0.0],
+               "deviation_mm": 0.5, "source": "measured"}
+        agg = pg.test_aggregates([rec])
+        assert agg["max_error_y"] == 0.5
+        assert agg["mean_error"] == pytest.approx(0.5)
+
+
+class TestParseMeasuredPose:
+    """Operator-typed numbers are the only path left to a real measurement
+    now that GetPose() echoes commands, so they get validated hard."""
+
+    def test_absent_means_fall_back_to_the_robot_not_an_error(self):
+        assert pg.parse_measured_pose(None) == (None, None)
+
+    def test_accepts_three_numbers(self):
+        assert pg.parse_measured_pose([-142.4, -436.5, 145.6]) == (
+            [-142.4, -436.5, 145.6], None)
+
+    def test_accepts_numeric_strings_from_a_text_field(self):
+        # The UI parses before sending, but a hand-typed string must not be
+        # able to slip a non-number past the form.
+        assert pg.parse_measured_pose(["-142.4", "-436.5", "145.6"])[0] == [-142.4, -436.5, 145.6]
+
+    def test_ignores_extra_trailing_values(self):
+        # Rotations may be appended by a caller that has them; only XYZ is
+        # wanted, and the rest must not cause a rejection.
+        assert pg.parse_measured_pose([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])[0] == [1.0, 2.0, 3.0]
+
+    def test_rejects_a_short_list(self):
+        values, err = pg.parse_measured_pose([1.0, 2.0])
+        assert values is None and "x, y, z" in err
+
+    def test_rejects_a_non_list(self):
+        assert pg.parse_measured_pose("1,2,3")[0] is None
+        assert pg.parse_measured_pose({"x": 1})[0] is None
+
+    def test_rejects_words(self):
+        values, err = pg.parse_measured_pose(["left", "middle", "far"])
+        assert values is None and "three numbers" in err
+
+    def test_rejects_nan_and_infinity(self):
+        # NaN would propagate into every aggregate as a silently wrong cell.
+        assert pg.parse_measured_pose([float("nan"), 2, 3])[0] is None
+        assert pg.parse_measured_pose([1, float("inf"), 3])[0] is None
+
+    def test_rejects_none_inside_the_list(self):
+        assert pg.parse_measured_pose([1, None, 3])[0] is None
+
+    def test_accepts_an_all_zero_measurement(self):
+        # Unlike a robot read, a typed zero is a legitimate coordinate — the
+        # sentinel rejection applies to GetPose()'s failure value only.
+        assert pg.parse_measured_pose([0, 0, 0])[0] == [0.0, 0.0, 0.0]
+
+
 class TestBuildTestReportPayload:
     """The download contract, asserted on the assembled payload.
 
