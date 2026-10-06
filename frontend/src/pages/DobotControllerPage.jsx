@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { apiFetch } from '../lib/api'
+import { formatRobotLogLines } from '../lib/robotLogFormat'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
 
@@ -99,7 +100,7 @@ const LogPanel = ({ title, channel, accentClass }) => {
     const apply = (data) => {
       if (dead || !Array.isArray(data.entries)) return
       if (typeof data.latest === 'number') lastId = data.latest
-      const fresh = data.entries.map(e => ({ t: e.t || '', msg: e.msg || e }))
+      const fresh = formatRobotLogLines(data.entries)
       if (fresh.length === 0) return
       setLines((prev) => {
         const next = [...prev, ...fresh]
@@ -155,9 +156,9 @@ const LogPanel = ({ title, channel, accentClass }) => {
         {lines.length === 0
           ? <span className="log-empty">No log entries yet…</span>
           : lines.map((l, i) => (
-            <div key={i} className="log-line">
+            <div key={i} className={`log-line log-line--${l.kind}`} title={l.raw || l.text}>
               <span className="log-time">{l.t}</span>
-              <span className="log-msg">{l.msg}</span>
+              <span className="log-msg">{l.text}</span>
             </div>
           ))
         }
