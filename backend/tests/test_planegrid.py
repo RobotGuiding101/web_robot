@@ -190,6 +190,17 @@ class TestSimplifyStroke:
         assert off["simplify_enabled"] is False
         assert off["points_after"] == DRAW_MAX_POINTS
 
+    def test_download_payload_carries_the_reduction_settings(self, monkeypatch):
+        pts = [(i / 200.0, 0.0) for i in range(201)]
+        monkeypatch.setattr(pg, "DRAW_SIMPLIFY_ENABLED", False)
+        stats = pg.draw_stats([{"tool": "pen", "points": pts}], GRID2, 2, 2, 5.0)
+        payload = pg.build_test_report_payload(GRID2, 2, 2, True, [], stats,
+                                               "admin", "now")
+        execution = payload["sheet_09_drawing"]["execution"]
+        assert execution["simplify_enabled"] is False
+        assert execution["simplify_eps"] == pg.DRAW_SIMPLIFY_EPS
+        assert execution["max_points"] == pg.DRAW_MAX_POINTS
+
 
 class TestDrawStats:
     """draw_stats feeds the experiment record's stroke/point-count columns, so

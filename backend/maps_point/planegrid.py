@@ -361,7 +361,8 @@ def build_test_report_payload(grid_points, rows: int, cols: int, grid_marked: bo
             # grid-mapping information to measure.
             "draw_end_check": stats.get("draw_end_check"),
             "execution": {k: stats.get(k) for k in
-                          ("motion_mode", "cp_ratio", "lift_mm", "lift_transitions")},
+                          ("motion_mode", "cp_ratio", "lift_mm", "lift_transitions",
+                           "simplify_enabled", "simplify_eps", "max_points")},
             "result": stats.get("result"),
         },
     }
