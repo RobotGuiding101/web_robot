@@ -874,7 +874,9 @@ const [testReportBusy, setTestReportBusy] = useState(false)
       }
       payload.actual = parts
     }
-    if (!teachStatus || !teachStatus.connected) return
+    // Only the robot's own reading needs the link; a value the operator
+    // measured is already here and must be recordable either way.
+    if (!payload.actual && (!teachStatus || !teachStatus.connected)) return
     try {
       const res = await apiFetch('/api/map/grid/test-point', {
         method: 'POST',
@@ -1993,8 +1995,8 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                                 <button
                                   type="button"
                                   className="dm-teach-action-btn"
-                                  disabled={!teachConnected || !gridComplete || robotBusy}
-                                  title={!teachConnected ? 'Connect and initialize the robot first' : !gridComplete ? `Mark all ${gRows * gCols} grid cells first (${markedCount}/${gRows * gCols})` : robotBusy ? 'Wait until robot motion finishes' : `Record u=${p.u}, v=${p.v}`}
+                                  disabled={!gridComplete || robotBusy || (!teachConnected && !String(measured[`${p.u},${p.v}`] || '').trim())}
+                                  title={!gridComplete ? `Mark all ${gRows * gCols} grid cells first (${markedCount}/${gRows * gCols})` : robotBusy ? 'Wait until robot motion finishes' : teachConnected ? `Record u=${p.u}, v=${p.v}` : 'Type the position you measured to record without the robot'}
                                   onClick={() => handleRecordTestPoint(p.u, p.v, measured[`${p.u},${p.v}`])}
                                 >
                                   {reportGate?.coverage?.matched?.[i] ? '✓ ' : ''}{p.label}
