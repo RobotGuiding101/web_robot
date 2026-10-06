@@ -895,6 +895,45 @@ const [testReportBusy, setTestReportBusy] = useState(false)
     refreshReportGate()
   }, [showTeachMsg, refreshReportGate])
 
+  const [verifyBusy, setVerifyBusy] = useState(false)
+  const verifySawBusy = useRef(false)
+
+  const handleVerifyGrid = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/map/grid/verify', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok || !data.ok) {
+        showTeachMsg((data && data.error) || 'เริ่มวัดความแม่นยำไม่สำเร็จ', 'error')
+        return
+      }
+      setVerifyBusy(true)
+      showTeachMsg('กำลังวัด 5 จุด — อย่าขยับแขน กด E-Stop ได้ทันที')
+    } catch {
+      showTeachMsg('เริ่มวัดความแม่นยำไม่สำเร็จ', 'error')
+    }
+  }, [showTeachMsg])
+
+  useEffect(() => {
+    if (!verifyBusy) {
+      verifySawBusy.current = false
+      return
+    }
+    if (teachStatus && teachStatus.draw_running) {
+      verifySawBusy.current = true
+      return
+    }
+    // Wait for busy=true first: the next status poll can land before the
+    // worker thread has set the flag, and treating that as "finished" would
+    // report a result for a run that never started.
+    if (!verifySawBusy.current) return
+    verifySawBusy.current = false
+    setVerifyBusy(false)
+    setTestPoints([])
+    setTestAggregates(null)
+    refreshReportGate()
+    showTeachMsg('วัดความแม่นยำเสร็จแล้ว')
+  }, [verifyBusy, teachStatus, refreshReportGate, showTeachMsg])
+
   const handleDownloadReport = useCallback(async () => {
     setTestReportBusy(true)
     try {
@@ -1985,6 +2024,21 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                             )}
 
                             <div className="dm-teach-grid-actions">
+                              <button
+                                type="button"
+                                className="dm-teach-autofill-btn"
+                                disabled={verifyBusy || robotBusy || !teachConnected || markedCount !== gRows * gCols}
+                                title={
+                                  markedCount !== gRows * gCols
+                                    ? 'Mark every grid cell first'
+                                    : robotBusy
+                                      ? 'Wait until robot motion finishes'
+                                      : 'Move the arm to all five test positions and record each one'
+                                }
+                                onClick={handleVerifyGrid}
+                              >
+                                {verifyBusy ? 'กำลังวัด 5 จุด…' : 'วัดความแม่นยำ 5 จุด'}
+                              </button>
                               <button
                                 type="button"
                                 className="dm-teach-action-btn dm-teach-action-btn--danger"

@@ -39,11 +39,12 @@ from maps_point.camera import Camera
 from maps_point.align import AppState, do_align, start_tracking_thread
 from maps_point.motion import do_goto, pixel_to_world_xy
 from maps_point import floorcalib
-from maps_point.planegrid import (do_draw, validate_grid, project_grid_2d,
-                                  bilinear_cell, grid_pose, draw_stats,
-                                  grid_fingerprint, pose_read_is_plausible,
-                                  test_aggregates, build_test_report_payload,
-                                  TEST_POINTS_EXPECTED)
+from maps_point.planegrid import (do_draw, do_verify_grid, validate_grid,
+                                  project_grid_2d, bilinear_cell, grid_pose,
+                                  draw_stats, grid_fingerprint,
+                                  pose_read_is_plausible, test_aggregates,
+                                  build_test_report_payload, TEST_POINTS_EXPECTED,
+                                  GRID_TEST_POSITIONS)
 from maps_point.render import draw_overlay
 
 router = APIRouter(prefix="/api/map", tags=["MapControl"])
@@ -1631,6 +1632,30 @@ def api_grid_test_reset(request: Request):
     state.test_points = []
     _log_user_event(request, "draw", "test_reset", "")
     return {"ok": True, "count": 0}
+
+
+@router.post("/grid/verify")
+def api_grid_verify(request: Request):
+    """Walk the arm through all five Grid Mapping test positions and record
+    each one, so the form's error table fills from a single press.
+
+    Moves the arm — it approaches every point from above with a
+    DRAW_LIFT_MM clearance, the same sequence do_draw() uses, and returns to
+    where it started. Runs under draw_running/draw_stop, so E-Stop, the jog
+    rejection and /draw/stop all apply without any extra wiring. Replaces
+    whatever was recorded before: this is the canonical full run, and mixing
+    hand-jogged rows into it would make the aggregates meaningless."""
+    if not _grid_fully_marked():
+        return {"ok": False, "error": "grid not fully marked"}
+    if not robot.connected:
+        return {"ok": False, "error": "robot not connected"}
+    if state.align_running or state.draw_running:
+        return {"ok": False, "error": "already running"}
+    state.status = "verify: starting…"
+    _log_user_event(request, "draw", "verify_start", f"{len(GRID_TEST_POSITIONS)} points")
+    threading.Thread(target=_run_locked, args=(do_verify_grid, robot, state),
+                     daemon=True).start()
+    return {"ok": True, "positions": GRID_TEST_POSITIONS}
 
 
 @router.get("/test-report")

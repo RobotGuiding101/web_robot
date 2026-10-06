@@ -44,7 +44,13 @@ export function evaluateReportGate({ report, positions } = {}) {
   const sheet05 = report?.sheet_05_grid_mapping ?? {}
   const serverCodes = Array.isArray(report?.missing) ? report.missing : []
   const serverComplete = report?.complete === true && serverCodes.length === 0
-  const coverage = matchRecordedPositions(positions, sheet05.test_points)
+  // The report ships the very list do_verify_grid() walks, so prefer it over
+  // any caller-side copy: two lists would let the gate demand a position the
+  // verifier never visits, and the run would be unfinishable.
+  const list = Array.isArray(sheet05.test_positions) && sheet05.test_positions.length
+    ? sheet05.test_positions
+    : positions
+  const coverage = matchRecordedPositions(list, sheet05.test_points)
 
   const reasons = []
   if (!serverComplete) {

@@ -72,6 +72,27 @@ describe('matchRecordedPositions', () => {
 })
 
 describe('evaluateReportGate', () => {
+  it('prefers the position list shipped in the report over the caller copy', () => {
+    // The verifier walks the server's list. If the gate used a caller-side
+    // copy the two could diverge and the run would be unfinishable.
+    const report = {
+      complete: true,
+      missing: [],
+      sheet_05_grid_mapping: {
+        test_points: POSITIONS.map(point),
+        test_positions: [{ u: 0.1, v: 0.1, label: 'only-this-one' }],
+      },
+    }
+    const out = evaluateReportGate({ report, positions: POSITIONS })
+    expect(out.coverage.matchedCount).toBe(0)
+    expect(out.canDownload).toBe(false)
+  })
+
+  it('falls back to the caller list when the server ships none', () => {
+    const out = evaluateReportGate({ report: completeReport(), positions: POSITIONS })
+    expect(out.canDownload).toBe(true)
+  })
+
   it('allows the download when the server and the coverage both pass', () => {
     const out = evaluateReportGate({ report: completeReport(), positions: POSITIONS })
     expect(out.canDownload).toBe(true)
