@@ -189,6 +189,7 @@ describe('backendToolFor', () => {
 
   it('maps the canvas shape tools onto the backend names', () => {
     expect(backendToolFor({ type: 'polyline', intendedTool: 'rectangle' })).toBe('rect')
+    expect(backendToolFor({ type: 'polyline', intendedTool: 'triangle' })).toBe('triangle')
     expect(backendToolFor({ type: 'polyline', intendedTool: 'circle' })).toBe('circle')
   })
 

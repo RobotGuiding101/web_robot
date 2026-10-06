@@ -18,6 +18,7 @@ const TOOLS = {
   PEN: 'pen',
   LINE: 'line',
   RECTANGLE: 'rectangle',
+  TRIANGLE: 'triangle',
   CIRCLE: 'circle',
 }
 
@@ -26,6 +27,7 @@ const TOOL_META = [
   { id: TOOLS.PEN, label: 'Pen', icon: '✎' },
   { id: TOOLS.LINE, label: 'Line', icon: '╱' },
   { id: TOOLS.RECTANGLE, label: 'Rectangle', icon: '□' },
+  { id: TOOLS.TRIANGLE, label: 'Triangle', icon: '△' },
   { id: TOOLS.CIRCLE, label: 'Circle', icon: '○' },
 ]
 
@@ -177,6 +179,24 @@ function shapePoints(tool, start, end) {
       new Point(right, bottom),
       new Point(left, bottom),
       new Point(left, top),
+    ]
+  }
+
+  if (tool === TOOLS.TRIANGLE) {
+    // Same drag-to-a-box gesture as the rectangle; apex at the top centre.
+    // Closes the loop by repeating the first vertex, exactly as the rectangle
+    // does, so the report's `closed` flag marks it as a deliberate shape
+    // instead of a stroke whose ends merely coincide.
+    const left = Math.min(start.x, end.x)
+    const right = Math.max(start.x, end.x)
+    const top = Math.min(start.y, end.y)
+    const bottom = Math.max(start.y, end.y)
+    const apexX = (left + right) / 2
+    return [
+      new Point(apexX, top),
+      new Point(right, bottom),
+      new Point(left, bottom),
+      new Point(apexX, top),
     ]
   }
 
