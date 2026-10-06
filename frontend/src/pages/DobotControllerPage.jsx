@@ -566,14 +566,16 @@ const DobotControllerPage = () => {
 
   // ── Move to Gizmo target pose ──────────────────────────────────────────────
   const handleMoveTo = useCallback(async (poseOverride = null) => {
-    const poseToMove = poseOverride || targetPose
+    const isEvent = poseOverride && (poseOverride.nativeEvent || poseOverride._reactName || poseOverride.target || typeof poseOverride.preventDefault === 'function')
+    const actualOverride = isEvent ? null : poseOverride
+    const poseToMove = actualOverride || targetPose
     if (!poseToMove || !connected) return
     setMoveToLoading(true)
     setMoveToStatus(null)
     setMoveToError(null)
     try {
       const body = {
-        mode: poseOverride?.mode || moveMode,
+        mode: actualOverride?.mode || moveMode,
         speed: Math.max(1, Math.min(100, speed || 20)),
       }
       if (body.mode === 'joint' && poseToMove.joints) {
@@ -590,8 +592,8 @@ const DobotControllerPage = () => {
       const data = await res.json()
       if (data.ok) {
         setMoveToStatus('ok')
-        setLastMoved(poseOverride ? 'Save & Move' : 'Move to Target')
-        if (poseOverride) {
+        setLastMoved(actualOverride ? 'Save & Move' : 'Move to Target')
+        if (actualOverride) {
           setIsCoordEditing(false)
           setManualTargetDraft(null)
           setManualTargetOriginal(null)
@@ -651,7 +653,7 @@ const DobotControllerPage = () => {
 
     let pose
     if (moveMode === 'joint' && !tipEdited) {
-      pose = { joints: values }
+      pose = { joints: values, mode: 'joint' }
     } else {
       const cartValues = moveMode === 'joint' ? ['X', 'Y', 'Z', 'RX', 'RY', 'RZ'].map((key) => Number(manualTargetDraft[key])) : values.slice(0, 6)
       let [x, y, z] = cartValues
@@ -1260,7 +1262,7 @@ const DobotControllerPage = () => {
                         : moveToStatus === 'ok' ? ' move-to-btn--ok'
                         : moveToStatus === 'error' ? ' move-to-btn--error' : ''
                       }`}
-                      onClick={handleMoveTo}
+                      onClick={() => handleMoveTo()}
                       disabled={!targetPose || !connected || moveToLoading}
                     >
                       {moveToLoading ? <><span className="init-btn-spinner" /> Executing…</>
