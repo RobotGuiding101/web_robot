@@ -219,6 +219,38 @@ class TestDrawStats:
         out = pg.draw_stats([{"tool": "rect", "points": square}], GRID2, 2, 2, 5.0)
         assert out["points_after"] == 4
 
+    def test_counts_points_that_fall_outside_the_taught_grid(self):
+        ring = [(0.5 + 0.6 * math.cos(t / 8.0), 0.5 + 0.6 * math.sin(t / 8.0))
+                for t in range(49)]
+        out = pg.draw_stats([{"tool": "circle", "points": ring}], GRID2, 2, 2, 5.0)
+        outside = [(u, v) for u, v in ring if not (0 <= u <= 1 and 0 <= v <= 1)]
+        assert outside
+        assert out["points_outside_grid"] == len(outside)
+        assert out["per_stroke"][0]["points_outside_grid"] == len(outside)
+
+    def test_a_stroke_inside_the_grid_reports_nothing_outside(self):
+        ring = [(0.5 + 0.2 * math.cos(t / 8.0), 0.5 + 0.2 * math.sin(t / 8.0))
+                for t in range(49)]
+        out = pg.draw_stats([{"tool": "circle", "points": ring}], GRID2, 2, 2, 5.0)
+        assert out["points_outside_grid"] == 0
+        assert "uv_outside_range" not in out["per_stroke"][0]
+
+    def test_reports_how_far_outside_the_grid_the_points_reach(self):
+        stroke = [{"tool": "pen", "points": [(0.1, 0.1), (-0.3, 0.5), (0.9, 1.4)]}]
+        entry = pg.draw_stats(stroke, GRID2, 2, 2, 5.0)["per_stroke"][0]
+        assert entry["points_outside_grid"] == 2
+        assert entry["uv_outside_range"]["u"] == [-0.3, 0.9]
+        assert entry["uv_outside_range"]["v"] == [0.5, 1.4]
+
+    def test_the_download_payload_carries_the_out_of_grid_count(self):
+        ring = [(0.5 + 0.4 * math.cos(t / 8.0), 0.5 + 0.4 * math.sin(t / 8.0))
+                for t in range(49)]
+        stats = pg.draw_stats([{"tool": "circle", "points": ring}], GRID2, 2, 2, 5.0)
+        payload = pg.build_test_report_payload(GRID2, 2, 2, True, [], stats,
+                                               "admin", "now")
+        assert payload["sheet_09_drawing"]["points_outside_grid"] \
+            == stats["points_outside_grid"]
+
     def test_totals_sum_across_strokes(self):
         a = [(i / 60.0, 0.0) for i in range(61)]
         b = [(0.0, i / 60.0) for i in range(61)]

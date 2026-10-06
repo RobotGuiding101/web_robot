@@ -152,17 +152,27 @@ export function shapePoints(tool, start, end, canvasSize) {
   }
 
   // ── Circle ──────────────────────────────────────────────────────────────────
-  // radius_px is the drag distance in canvas pixel-space (what the user sees).
+  // The canvas IS the grid: u,v span [0,1] corner to corner. A radius running
+  // past an edge gets silently clamped by grid_pose() into a flattened shape,
+  // and the report's own numbers still look correct while it happens. Line,
+  // rect and triangle are built from min/max of the two drag points so they
+  // cannot leave the canvas; the circle is the only shape that can.
   const radius_px = Math.hypot(end.x - start.x, end.y - start.y)
-
-  // If canvas dimensions are provided, compensate for aspect ratio so the
-  // normalised u/v radii are equal (true circle on physical surface).
-  // rx stays as-is (pixel radius in X → u = x/cw keeps the same ratio).
-  // ry is scaled by ch/cw so that v = y/ch maps the same normalised radius.
   const cw = canvasSize?.width  || 1
   const ch = canvasSize?.height || 1
-  const rx = radius_px              // canvas pixels in X direction
-  const ry = radius_px * (ch / cw)  // scaled so ry/ch == rx/cw
+
+  // Clamped in NORMALISED space so the limit matches on both axes. cw/ch only
+  // default to 1 as a stand-in for the aspect RATIO, so without a real
+  // canvasSize there are no pixel bounds to clamp against.
+  let r_norm = radius_px / cw
+  if (canvasSize) {
+    const cu = start.x / cw
+    const cv = start.y / ch
+    r_norm = Math.min(r_norm, cu, 1 - cu, cv, 1 - cv)
+  }
+
+  const rx = r_norm * cw
+  const ry = r_norm * ch
 
   return Array.from({ length: 49 }, (_, index) => {
     const angle = (index / 48) * Math.PI * 2

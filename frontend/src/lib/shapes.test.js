@@ -180,20 +180,21 @@ describe('circle', () => {
 
   it('with a square canvas, canvasSize has no effect (rx == ry)', () => {
     const cs = { width: 500, height: 500 }
-    const pts = shapePoints(SHAPE_TOOLS.CIRCLE, { x: 50, y: 50 }, { x: 150, y: 50 }, cs)
+    const pts = shapePoints(SHAPE_TOOLS.CIRCLE, { x: 250, y: 250 }, { x: 350, y: 250 }, cs)
     for (const p of pts) {
-      expect(Math.hypot(p.x - 50, p.y - 50)).toBeCloseTo(100, 6)
+      expect(Math.hypot(p.x - 250, p.y - 250)).toBeCloseTo(100, 6)
     }
   })
 
   it('with a 2:1 canvas, normalised u/v radii are equal (true circle on physical surface)', () => {
     const cs = { width: 1000, height: 500 }
     const r  = 100
-    const pts = shapePoints(SHAPE_TOOLS.CIRCLE, { x: 0, y: 0 }, { x: r, y: 0 }, cs)
+    const cx = 500, cy = 250
+    const pts = shapePoints(SHAPE_TOOLS.CIRCLE, { x: cx, y: cy }, { x: cx + r, y: cy }, cs)
     const r_norm = r / cs.width
     for (const p of pts) {
-      const du = p.x / cs.width
-      const dv = p.y / cs.height
+      const du = p.x / cs.width - cx / cs.width
+      const dv = p.y / cs.height - cy / cs.height
       expect(Math.hypot(du, dv)).toBeCloseTo(r_norm, 6)
     }
   })
@@ -213,6 +214,37 @@ describe('circle', () => {
   it('collapses to the start point on a zero-size drag', () => {
     const pts = shapePoints(SHAPE_TOOLS.CIRCLE, { x: 7, y: 7 }, { x: 7, y: 7 })
     expect(pts.every((p) => p.x === 7 && p.y === 7)).toBe(true)
+  })
+
+  it('never lets the radius run past the canvas edge', () => {
+    const cs = { width: 1000, height: 1000 }
+    const pts = shapePoints(SHAPE_TOOLS.CIRCLE, { x: 100, y: 100 }, { x: 900, y: 900 }, cs)
+    expect(pts.every((p) => p.x >= 0 && p.x <= 1000)).toBe(true)
+    expect(pts.every((p) => p.y >= 0 && p.y <= 1000)).toBe(true)
+  })
+
+  it('leaves a circle that already fits untouched', () => {
+    const cs = { width: 1000, height: 1000 }
+    const pts = shapePoints(SHAPE_TOOLS.CIRCLE, { x: 500, y: 500 }, { x: 700, y: 500 }, cs)
+    for (const p of pts) {
+      expect(Math.hypot(p.x - 500, p.y - 500)).toBeCloseTo(200, 6)
+    }
+  })
+
+  it('clamps to the nearest edge, not the furthest', () => {
+    const cs = { width: 1000, height: 1000 }
+    const near = shapePoints(SHAPE_TOOLS.CIRCLE, { x: 200, y: 500 }, { x: 200, y: 900 }, cs)
+    for (const p of near) {
+      expect(Math.hypot(p.x - 200, p.y - 500)).toBeCloseTo(200, 6)
+    }
+  })
+
+  it('clamps equally on both axes of a non-square canvas', () => {
+    const cs = { width: 1000, height: 500 }
+    const pts = shapePoints(SHAPE_TOOLS.CIRCLE, { x: 100, y: 250 }, { x: 900, y: 250 }, cs)
+    const rs = pts.map((p) => Math.hypot(p.x / cs.width - 0.1, p.y / cs.height - 0.5))
+    const expected = 0.1
+    for (const r of rs) expect(r).toBeCloseTo(expected, 6)
   })
 })
 

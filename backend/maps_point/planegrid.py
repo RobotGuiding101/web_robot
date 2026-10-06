@@ -365,6 +365,7 @@ def build_test_report_payload(grid_points, rows: int, cols: int, grid_marked: bo
             "stroke_count": stats.get("strokes"),
             "points_before_reduction": stats.get("points_before"),
             "points_after_reduction": stats.get("points_after"),
+            "points_outside_grid": stats.get("points_outside_grid"),
             "waypoints_3d_path": stats.get("waypoints"),
             "path_length_mm": stats.get("path_length_mm"),
             "total_travel_mm": stats.get("total_travel_mm"),
@@ -489,6 +490,14 @@ def _final_stroke_uv(strokes: list, grid_points, rows: int, cols: int):
     return None
 
 
+def _off_grid_samples(points_uv) -> list:
+    """uv samples outside [0,1] — grid_pose() silently clamps these onto the
+    grid edge, which is what flattens a drawn shape into something else while
+    every number in the report still looks correct. Returns (index, u, v)."""
+    return [(i, float(u), float(v)) for i, (u, v) in enumerate(points_uv)
+            if not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0)]
+
+
 def draw_stats(strokes: list, grid_points, rows: int, cols: int,
                lift_mm: float) -> dict:
     """Non-moving summary of one draw request: raw canvas samples in,
@@ -499,6 +508,7 @@ def draw_stats(strokes: list, grid_points, rows: int, cols: int,
     from the real code path rather than a re-implementation that could drift
     from it. `api_draw` calls this before handing the work to the thread."""
     per_stroke, before, after = [], 0, 0
+    outside_total = 0
     drawn_mm = 0.0
     for s in strokes:
         pts = s.get("points") or []
@@ -507,6 +517,15 @@ def draw_stats(strokes: list, grid_points, rows: int, cols: int,
         after += len(path)
         entry = {"tool": s.get("tool", "pen"), "points_before": len(pts),
                  "points_after": len(path)}
+        off = _off_grid_samples(path)
+        entry["points_outside_grid"] = len(off)
+        outside_total += len(off)
+        if off:
+            entry["uv_outside_range"] = {
+                "u": [round(min(x[1] for x in off), 4),
+                      round(max(x[1] for x in off), 4)],
+                "v": [round(min(x[2] for x in off), 4),
+                      round(max(x[2] for x in off), 4)]}
         if path:
             ends = [grid_pose(u, v, grid_points, rows, cols)
                     for u, v in (path[0], path[-1])]
@@ -533,6 +552,7 @@ def draw_stats(strokes: list, grid_points, rows: int, cols: int,
     travel_mm = sum(math.dist(a[:3], b[:3]) for a, b in zip(poses, poses[1:]))
     return {"strokes": len(strokes), "points_before": before, "points_after": after,
             "per_stroke": per_stroke, "waypoints": len(poses),
+            "points_outside_grid": outside_total,
             # Travel includes the pen-lift hops between strokes, drawn does not.
             "path_length_mm": round(travel_mm, 2),
             "total_travel_mm": round(travel_mm, 2),
