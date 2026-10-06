@@ -287,11 +287,6 @@ def test_aggregates(points: list) -> dict:
         "mean_error_z": sum(e[2] for e in errs) / n,
         "mean_error": sum(dist) / n,
         "rmse": math.sqrt(sum(d * d for d in dist) / (3 * n)),
-        "definitions": {
-            "error": "computed (bilinear over the taught grid) minus actual robot pose",
-            "mean_error": "mean of sqrt(Ex^2+Ey^2+Ez^2) across test points",
-            "rmse": "sqrt(sum(Ex^2+Ey^2+Ez^2) / (3n))",
-        },
     }
 
 

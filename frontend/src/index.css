@@ -1712,6 +1712,25 @@ body {
   background: #f0f3f8;
 }
 
+/* A controller error has to be impossible to miss when scrolling back
+   through a few hundred lines looking for the move that caused it. */
+.log-line--error {
+  background: #fef2f2;
+}
+
+.log-line--error .log-msg {
+  color: #b91c1c;
+  font-weight: 700;
+}
+
+.log-line--error:hover {
+  background: #fee2e2;
+}
+
+.log-line--ok .log-msg {
+  color: #15803d;
+}
+
 .log-time {
   font-size: 10px;
   font-weight: 600;
