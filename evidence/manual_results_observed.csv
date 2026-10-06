@@ -1,0 +1,31 @@
+﻿test_id,result,observed,evidence
+AUTH-01,Pass,HTTP 200 · token 203 chars · username=qa_manual_2026,POST /api/auth/login
+AUTH-02,Pass,HTTP 401 · Invalid credentials,รหัสผิด
+AUTH-03,Pass,HTTP 401 · Invalid credentials,user ไม่มีในระบบ
+AUTH-04,Pass,HTTP 401,GET /api/auth/me ไม่มี token
+AUTH-05,Pass,HTTP 401,JWT exp=1500000001 หมดอายุ
+AUTH-06,Pass,HTTP 401,token ไม่ใช่ JWT
+AUTH-07,Pass,HTTP 401,ไม่มี Authorization header
+AUTH-08,Pass,HTTP 200 · username=qa_manual_2026,token ที่ถูกต้อง
+AUTH-09,Pass,HTTP 401,POST /api/auth/register ไม่มี token
+AUTH-10,Pass,HTTP 400 · Username must be at least 2 characters,ชื่อ 'a'
+AUTH-11,Pass,HTTP 400 · Password must be at least 4 characters,รหัส 'ab'
+AUTH-12,Pass,HTTP 409 · Username already exists,ชื่อซ้ำ
+AUTH-13,Pass,HTTP 200 · สร้าง qa_manual_created_1 สำเร็จ,register ด้วย token
+AUTH-14,Pass,HTTP 401,GET /api/settings ด้วย token เสีย
+SEC-01,Pass,ไม่มี token→401 · token เสีย→401 · token ถูกต้อง→200 · สแกน 8 GET endpoint ไม่มีตัวไหนตอบ 200 โดยไม่มี token,evidence/HTTP_sec_transcript.json
+SEC-02,Pass,ACAO ตรงกับ origin ที่อนุญาต 3 ตัว · evil.example.com ไม่ได้ ACAO,"ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1,http://192.168.10.104"
+SEC-03,Pass,HTTP 200 (ไม่ใช่ 401),OPTIONS /api/map/status
+SEC-04,Pass,HTTP 200 · Robot Arm API is running,GET /
+API-01,Pass,Authorization: Bearer ติดไปกับ request ของแอปเอง,ดู header จริงตอนเปิด /dashboard
+API-05,Pass,เด้งจาก /dobot ไป /login เมื่อ token เสีย,evidence/API-05_invalid_token_redirects_login.png
+API-06,Pass,401 จาก /api/auth/login · ยังอยู่ /dashboard ไม่เด้ง,ทดสอบขณะล็อกอินอยู่แล้ว
+DASH-01,Pass,connected=true · robot_mode_label=RUNNING · camera_running=true · IP 192.168.10.110,evidence/DASH-01_dashboard.png
+LOG-01,Pass,100 รายการ ครบ 5 คอลัมน์ (เวลา/ผู้ใช้/อุปกรณ์/การกระทำ/รายละเอียด),evidence/LOG-01_activity_log.png
+LOG-02,Pass,filter robot→เหลือ ROBOT · filter estop→TESTOP · ค้น 'strokes'→เจอ 4 รายการ DRAW · รีเซ็ตกลับได้ครบ,evidence/LOG-02_filter_estop.png
+TP-01,Pass,แท็บ Align/Jog/Grid/Draw มีครบ · สลับแต่ละแท็บแล้ว class active ถูกต้อง,evidence/TP-01_tab_*.png
+TP-03,Pass,pill: Connected · Camera 1 — offline · 4/4 marked · grid 2x2 Z=148.6mm span=202.6mm rmse=0.2447mm · 0/5 recorded,evidence/TP-05_grid_tab.png
+TP-04,Pass,quick actions: Clear Error / Init / Home / Set Grid / Reset Grid / Reset test points,evidence/TP-05_grid_tab.png
+TP-05,Pass (observed),"GRID SETUP (2×2) · ช่อง ROWS/COLS = 2, min=2 max=7 · ไม่ได้เปลี่ยนค่าเพราะการเปลี่ยนขนาดจะล้าง mark เดิม",evidence/TP-05_grid_tab.png
+TP-06,Pass,"cells matrix = R1C1, R1C2, R2C1, R2C2 ตรงกับ grid 2×2",evidence/TP-05_grid_tab.png
+TP-10,Pass,COORDINATE FRAME: Tool / User / Apply อยู่ในแท็บ Align,evidence/TP-01_tab_Align.png
