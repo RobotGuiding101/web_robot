@@ -12,14 +12,93 @@ export const SHAPE_TOOLS = {
   CIRCLE: 'circle',
 }
 
-// How many times each corner vertex is repeated for rect/triangle shapes.
-// The robot (servo mode) has inertia — it needs to dwell at each 90° corner
-// so the servo catches up before it starts the next segment, otherwise the
-// arm cuts the corner and the shape looks rounded. Repeating the same target
-// coordinate forces extra ServoP calls at the same destination, acting as a
-// brief dwell without an explicit sleep. 3 repeats ≈ 60ms at 50Hz — enough
-// to let the dynamic-follow filter settle on a sharp vertex.
-const CORNER_DWELL = 3
+// ── Corner handling ──────────────────────────────────────────────────────────
+//
+// The arm chases a moving ServoP target through the CR5's following filter,
+// which has a finite response time. A target whose direction changes 90°
+// inside one 1 mm step therefore cannot be tracked exactly — the corner comes
+// out rounded on the table no matter how sharp the point list is.
+//
+// Repeating the corner vertex (an earlier "dwell" approach here) made it
+// worse, not better: commanding the same position three times in a row means
+// the arm decelerates to a stop on the corner and eases out of it, which is
+// exactly the rounded corner we were trying to avoid. Removing the dwell
+// alone is not enough either — the follower then simply cuts the corner,
+// undershooting it.
+//
+// A small fillet beats both. The turn becomes gradual enough for the
+// follower to track with small error, so the corner the arm draws is the
+// corner that was commanded, instead of an undefined blend of overshoot and
+// lag. The radius is a fraction of the shape's smaller side so it stays a
+// hairline at any size — 1.5% of a 200 mm edge is ~3 mm, which reads as a
+// sharp rectangle while staying followable.
+//
+// Fillet arcs are computed in NORMALISED (u,v) space, not canvas pixels,
+// because that is the space the robot mapping treats as physically square —
+// a fillet built in pixels on a non-square canvas would come out elliptical on
+// the table.
+export const CORNER_FILLET_RATIO = 0.015
+const CORNER_ARC_POINTS = 4
+
+function filletCorner(prev, corner, next, radius, arcPoints) {
+  const len1 = Math.hypot(corner.x - prev.x, corner.y - prev.y)
+  const len2 = Math.hypot(next.x - corner.x, next.y - corner.y)
+  if (len1 < 1e-9 || len2 < 1e-9) return [corner]
+
+  const u1 = { x: (corner.x - prev.x) / len1, y: (corner.y - prev.y) / len1 }
+  const u2 = { x: (next.x - corner.x) / len2, y: (next.y - corner.y) / len2 }
+  const cosTheta = -(u1.x * u2.x + u1.y * u2.y)
+  const theta = Math.acos(Math.min(1, Math.max(-1, cosTheta)))
+
+  // A straight-through vertex has nothing to round.
+  if (theta > Math.PI - 1e-3) return [corner]
+
+  const tangent = radius / Math.tan(theta / 2)
+  if (tangent > len1 * 0.5 || tangent > len2 * 0.5) return [corner]
+
+  const bis = { x: u2.x - u1.x, y: u2.y - u1.y }
+  const bisLen = Math.hypot(bis.x, bis.y)
+  if (bisLen < 1e-9) return [corner]
+
+  const centreDist = radius / Math.sin(theta / 2)
+  const centre = {
+    x: corner.x + (bis.x / bisLen) * centreDist,
+    y: corner.y + (bis.y / bisLen) * centreDist,
+  }
+  const start = { x: corner.x - u1.x * tangent, y: corner.y - u1.y * tangent }
+  const end = { x: corner.x + u2.x * tangent, y: corner.y + u2.y * tangent }
+
+  const a0 = Math.atan2(start.y - centre.y, start.x - centre.x)
+  const a1 = Math.atan2(end.y - centre.y, end.x - centre.x)
+  let sweep = a1 - a0
+  while (sweep > Math.PI) sweep -= 2 * Math.PI
+  while (sweep < -Math.PI) sweep += 2 * Math.PI
+
+  const arc = []
+  for (let i = 0; i <= arcPoints; i++) {
+    const a = a0 + (sweep * i) / arcPoints
+    arc.push(new Point(centre.x + Math.cos(a) * radius, centre.y + Math.sin(a) * radius))
+  }
+  return arc
+}
+
+function filletRing(corners, radius) {
+  const groups = corners.map((corner, i) => {
+    const prev = corners[(i - 1 + corners.length) % corners.length]
+    const next = corners[(i + 1) % corners.length]
+    return filletCorner(prev, corner, next, radius, CORNER_ARC_POINTS)
+  })
+  const flat = groups.flat()
+  flat.push(new Point(flat[0].x, flat[0].y))
+  return flat
+}
+
+const toU = (pt, canvasSize) => ({
+  x: pt.x / (canvasSize?.width || 1),
+  y: pt.y / (canvasSize?.height || 1),
+})
+const fromU = (pt, canvasSize) =>
+  new Point(pt.x * (canvasSize?.width || 1), pt.y * (canvasSize?.height || 1))
 
 // Every closed shape repeats its first vertex as the last one. That is what
 // makes the report's `closed` flag distinguish a deliberate shape from a
@@ -27,11 +106,11 @@ const CORNER_DWELL = 3
 // silently change what gets recorded.
 //
 // canvasSize — optional { width, height } of the Fabric canvas element.
-// Required only for CIRCLE: the canvas coordinate space has aspect ratio
-// width:height, but the backend normalises x→u=x/width and y→v=y/height
-// independently.  If width≠height a pixel-equal radius would become
-// radius/width in u-space and radius/height in v-space — different values —
-// so the circle is stretched into an ellipse on the physical surface.
+// Required for CORNER_FILLET_RATIO and CIRCLE: the canvas coordinate space has
+// aspect ratio width:height, but the backend normalises x→u=x/width and
+// y→v=y/height independently.  If width≠height a pixel-equal radius would
+// become radius/width in u-space and radius/height in v-space — different
+// values — so the circle is stretched into an ellipse on the physical surface.
 // The fix: use the *normalised* radius (r_u = radius/width) as the canonical
 // one and back-project into canvas pixels as rx=r_u*width (unchanged),
 // ry=r_u*height — so after normalisation both axes share the same r_u.
@@ -41,19 +120,17 @@ export function shapePoints(tool, start, end, canvasSize) {
     const right  = Math.max(start.x, end.x)
     const top    = Math.min(start.y, end.y)
     const bottom = Math.max(start.y, end.y)
-    // Dwell at every corner so servo mode settles before turning 90°.
-    const TL = new Point(left,  top)
-    const TR = new Point(right, top)
-    const BR = new Point(right, bottom)
-    const BL = new Point(left,  bottom)
-    const dwell = (pt) => Array(CORNER_DWELL).fill(pt)
-    return [
-      ...dwell(TL),
-      ...dwell(TR),
-      ...dwell(BR),
-      ...dwell(BL),
-      TL,  // close the ring
+    const cw = canvasSize?.width  || 1
+    const ch = canvasSize?.height || 1
+    const corners = [
+      toU(new Point(left,  top),    canvasSize),
+      toU(new Point(right, top),    canvasSize),
+      toU(new Point(right, bottom), canvasSize),
+      toU(new Point(left,  bottom), canvasSize),
     ]
+    const radius = Math.min((right - left) / cw, (bottom - top) / ch)
+      * CORNER_FILLET_RATIO
+    return filletRing(corners, radius).map((p) => fromU(p, canvasSize))
   }
 
   if (tool === SHAPE_TOOLS.TRIANGLE) {
@@ -61,17 +138,17 @@ export function shapePoints(tool, start, end, canvasSize) {
     const right  = Math.max(start.x, end.x)
     const top    = Math.min(start.y, end.y)
     const bottom = Math.max(start.y, end.y)
+    const cw = canvasSize?.width  || 1
+    const ch = canvasSize?.height || 1
     const apexX  = (left + right) / 2
-    const apex   = new Point(apexX, top)
-    const TR     = new Point(right, bottom)
-    const TL     = new Point(left,  bottom)
-    const dwell  = (pt) => Array(CORNER_DWELL).fill(pt)
-    return [
-      ...dwell(apex),
-      ...dwell(TR),
-      ...dwell(TL),
-      apex,  // close the ring
+    const corners = [
+      toU(new Point(apexX, top),    canvasSize),
+      toU(new Point(right, bottom), canvasSize),
+      toU(new Point(left,  bottom), canvasSize),
     ]
+    const radius = Math.min((right - left) / cw, (bottom - top) / ch)
+      * CORNER_FILLET_RATIO
+    return filletRing(corners, radius).map((p) => fromU(p, canvasSize))
   }
 
   // ── Circle ──────────────────────────────────────────────────────────────────
