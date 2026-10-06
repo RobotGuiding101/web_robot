@@ -306,6 +306,83 @@ const DrawingModePage = () => {
   const viewerKey = useRef(Date.now())
   const [is3DMinimized, setIs3DMinimized] = useState(false)
   const [is3DExpanded, setIs3DExpanded] = useState(false)
+  const [floating3DPos, setFloating3DPos] = useState(null)
+  const [isDragging3D, setIsDragging3D] = useState(false)
+  const floating3DRef = useRef(null)
+  const dragRef = useRef({ startX: 0, startY: 0, startLeft: 0, startTop: 0, hasMoved: false })
+
+  const handle3DDragStart = (e) => {
+    if (e.target.closest('button.dm-3d-btn')) return
+    e.preventDefault()
+
+    const floatingEl = floating3DRef.current
+    const viewportEl = dmViewportRef.current
+    if (!floatingEl || !viewportEl) return
+
+    const fRect = floatingEl.getBoundingClientRect()
+    const vRect = viewportEl.getBoundingClientRect()
+
+    const currentLeft = fRect.left - vRect.left
+    const currentTop = fRect.top - vRect.top
+
+    dragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      startLeft: currentLeft,
+      startTop: currentTop,
+      hasMoved: false,
+    }
+    setIsDragging3D(true)
+
+    const onPointerMove = (moveEvent) => {
+      const dx = moveEvent.clientX - dragRef.current.startX
+      const dy = moveEvent.clientY - dragRef.current.startY
+      if (!dragRef.current.hasMoved && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) {
+        dragRef.current.hasMoved = true
+      }
+
+      const curViewportEl = dmViewportRef.current
+      const curFloatingEl = floating3DRef.current
+      if (!curViewportEl || !curFloatingEl) return
+
+      const vpW = curViewportEl.clientWidth
+      const vpH = curViewportEl.clientHeight
+      const boxW = curFloatingEl.offsetWidth
+      const boxH = curFloatingEl.offsetHeight
+
+      const nextX = Math.max(0, Math.min(vpW - boxW, dragRef.current.startLeft + dx))
+      const nextY = Math.max(0, Math.min(vpH - boxH, dragRef.current.startTop + dy))
+
+      setFloating3DPos({ x: nextX, y: nextY })
+    }
+
+    const onPointerUp = () => {
+      setIsDragging3D(false)
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onPointerUp)
+      window.removeEventListener('pointercancel', onPointerUp)
+    }
+
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp)
+    window.addEventListener('pointercancel', onPointerUp)
+  }
+
+  // Keep floating 3D viewer in bounds when expanding
+  useEffect(() => {
+    if (!floating3DPos || !dmViewportRef.current || !floating3DRef.current) return
+    const vpW = dmViewportRef.current.clientWidth
+    const vpH = dmViewportRef.current.clientHeight
+    const boxW = is3DExpanded ? 340 : 220
+    const boxH = is3DExpanded ? 280 : 180
+    setFloating3DPos((prev) => {
+      if (!prev) return prev
+      const clampedX = Math.max(0, Math.min(vpW - boxW, prev.x))
+      const clampedY = Math.max(0, Math.min(vpH - boxH, prev.y))
+      if (clampedX === prev.x && clampedY === prev.y) return prev
+      return { x: clampedX, y: clampedY }
+    })
+  }, [is3DExpanded])
 
   // Camera mode switcher
   const [cameraMode,  setCameraMode]  = useState('rgb')
@@ -1426,15 +1503,26 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                   ))}
                 </div>
 
-                {/* ── Floating 3D Robot Arm Model (Bottom-Left) ── */}
+                {/* ── Floating 3D Robot Arm Model (Draggable) ── */}
                 <div
-                  className={`dm-3d-floating${is3DMinimized ? ' dm-3d-floating--minimized' : ''}${is3DExpanded ? ' dm-3d-floating--expanded' : ''}`}
+                  ref={floating3DRef}
+                  className={`dm-3d-floating${is3DMinimized ? ' dm-3d-floating--minimized' : ''}${is3DExpanded ? ' dm-3d-floating--expanded' : ''}${isDragging3D ? ' dm-3d-floating--dragging' : ''}`}
+                  style={floating3DPos ? {
+                    left: `${floating3DPos.x}px`,
+                    top: `${floating3DPos.y}px`,
+                    bottom: 'auto',
+                    right: 'auto',
+                  } : undefined}
                 >
                   {is3DMinimized ? (
                     <button
                       className="dm-3d-minimized-btn"
-                      onClick={() => setIs3DMinimized(false)}
-                      title="Show 3D Robot Model"
+                      onPointerDown={handle3DDragStart}
+                      onClick={() => {
+                        if (dragRef.current?.hasMoved) return
+                        setIs3DMinimized(false)
+                      }}
+                      title="Show 3D Robot Model (ลากย้ายตำแหน่งได้)"
                     >
                       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
@@ -1444,9 +1532,15 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                     </button>
                   ) : (
                     <>
-                      {/* Header bar */}
-                      <div className="dm-3d-header">
+                      {/* Header bar (Drag Handle) */}
+                      <div
+                        className="dm-3d-header"
+                        onPointerDown={handle3DDragStart}
+                        onDoubleClick={() => setFloating3DPos(null)}
+                        title="คลิกค้างเพื่อลากย้ายตำแหน่ง (ดับเบิลคลิกเพื่อรีเซ็ตกลับมุมเดิม)"
+                      >
                         <div className="dm-3d-title-wrap">
+                          <span className="dm-3d-drag-handle">⋮⋮</span>
                           <span className="dm-3d-title-dot" />
                           <span className="dm-3d-title-text">3D Robot Arm</span>
                         </div>
@@ -1478,8 +1572,8 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                             title="Minimize"
                           >
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                              <line x1="18" y1="6" x2="6" y2="18" />
-                              <line x1="6" y1="6" x2="18" y2="18" />
+                                <line x1="18" y1="6" x2="6" y2="18" />
+                                <line x1="6" y1="6" x2="18" y2="18" />
                             </svg>
                           </button>
                         </div>
@@ -1487,6 +1581,7 @@ const [testReportBusy, setTestReportBusy] = useState(false)
 
                       {/* 3D Model iframe */}
                       <div className="dm-3d-frame-wrap">
+                        {isDragging3D && <div className="dm-3d-drag-overlay" />}
                         <iframe
                           src={`/robot-viewer.html?v=${viewerKey.current}_all`}
                           title="Robot Arm 3D Viewer"
