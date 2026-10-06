@@ -729,7 +729,7 @@
 
 ---
 
-## ค้างอยู่ — ต้องรอเงื่อนไข (22 เคส)
+## ค้างอยู่ — ต้องรอเงื่อนไข (16 เคส)
 
 เหล่านี้ไม่ต้องขยับแขน แต่ต้องรอสิ่งที่ยังไม่มีตอนนี้ (กล้อง offline / ต้อง mock 5xx / ต้องมี grid สอนแล้ว)
 
@@ -747,14 +747,8 @@
 | DRAW-05 | 🔵 Reset grid | Reset grid — ทำได้ในเบราว์เซอร์ |
 | DRAW-06 | 🔵 Restore grid | Restore grid — ต้องมี grid ที่สอนแล้ว |
 | DRAW-12 | 🔵 Frame control | Frame control (Tool/User) |
-| TP-01 | 🔵 สลับแท็บ panel | สลับแท็บ panel |
 | TP-02 | 🔵 พับ/กาง panel | พับ/กาง panel |
-| TP-03 | 🔵 Status pills | Status pills |
-| TP-04 | 🔵 Quick actions | Quick actions |
-| TP-05 | 🔵 Grid Setup (rows×cols) | Grid Setup (rows×cols) |
-| TP-06 | 🔵 Cells Matrix & Shape | Cells Matrix & Shape |
-| TP-08 | 🔵 Motion / Step controls | Motion / Step controls |
-| TP-10 | 🔵 Coordinate Frame (panel) | Coordinate Frame |
+| TP-08 | 🔵 Motion / Step controls | ยืนยัน step control ต้องกด jog จริง — จะขยับแขน |
 | TP-11 | 🔵 3D viewer มุมล่างซ้าย | 3D viewer มุมล่างซ้าย |
 | LOG-03 | Align/scan progress log | ต้องรัน align/scan จริงแล้วเช็คว่าบันทึกลง /logs |
 
@@ -764,9 +758,9 @@
 
 | หมวด | จำนวน |
 | --- | --- |
-| ทำแล้ว บันทึกค่าจริงในชีต | 24 |
+| ทำแล้ว บันทึกค่าจริงแล้ว | 30 |
 | ต้องทำเองหน้าเครื่อง (คู่มือข้างบน) | 68 |
-| ค้าง รอเงื่อนไข | 22 |
+| ค้าง รอเงื่อนไข | 16 |
 | **รวม** | **114** |
 
 ทุกเคสใน 114 มีที่อยู่ชัดเจนแล้ว ไม่มีเคสไหนถูกลบทิ้งเงียบ ๆ
