@@ -208,6 +208,20 @@ _POSE_SANITY_SLACK_MM = 1000.0
 # list, so it is what gates the download on actually covering all of them.
 TEST_POINTS_EXPECTED = 5
 
+# The canonical web positions those rows are measured at. Single source of
+# truth: do_verify_grid() walks exactly this list and /test-report hands the
+# same list to the UI, so the gate can never demand a position the verifier
+# does not visit. The four taught corners are deliberately absent — the grid
+# predicts those exactly, so their error is zero by construction and testing
+# them proves nothing.
+GRID_TEST_POSITIONS = [
+    {"u": 0.25, "v": 0.5, "label": "ซ้ายกลาง"},
+    {"u": 0.5, "v": 0.25, "label": "บนกลาง"},
+    {"u": 0.5, "v": 0.5, "label": "กลาง"},
+    {"u": 0.5, "v": 0.75, "label": "ล่างกลาง"},
+    {"u": 0.75, "v": 0.5, "label": "ขวากลาง"},
+]
+
 
 def _stroke_path(stroke: dict) -> list:
     """The (u,v) points actually replayed for one canvas stroke.
@@ -322,6 +336,9 @@ def build_test_report_payload(grid_points, rows: int, cols: int, grid_marked: bo
             "test_points_status": ("not_recorded" if not recorded else
                                    "complete" if recorded >= TEST_POINTS_EXPECTED
                                    else "partial"),
+            # Shipped so the download gate checks coverage against the same
+            # list do_verify_grid() walks, not a second copy that can drift.
+            "test_positions": GRID_TEST_POSITIONS,
         },
         "sheet_09_drawing": {
             "grid_size": f"{rows}x{cols}",
@@ -565,6 +582,98 @@ def _return_to_start(robot: Robot, state, start_pose) -> None:
     except RobotMoveError as e:
         state.status = f"draw done — return to start failed: {e}"
         log(f"  [Draw] {state.status}")
+
+
+def do_verify_grid(robot: Robot, state) -> None:
+    """Walk the arm to every GRID_TEST_POSITIONS entry and record what the
+    taught grid predicts there against where the arm actually ended up —
+    the five rows the Grid Mapping sheet needs for its error table.
+
+    Deliberately borrows draw_running/draw_stop instead of a flag of its own:
+    that way E-Stop, the jog rejection and the draw-stop button all cover
+    this run with no new state to keep in sync. Each point is approached the
+    same way do_draw() approaches its first waypoint — lift straight up,
+    travel above the target, descend — because that sequence is the one
+    already exercised on hardware.
+
+    Each record is independent: a rejected pose read leaves that row empty
+    rather than writing a wrong number into the experiment form.
+    """
+    if state.align_running or state.draw_running:
+        state.status = "verify: robot busy"
+        return
+    if not robot.connected:
+        state.status = "verify: robot not connected"
+        return
+    rows, cols = state.grid_rows, state.grid_cols
+    if any(state.grid_points[i][j] is None for i in range(rows) for j in range(cols)):
+        state.status = "verify: grid not fully marked"
+        return
+
+    state.draw_running = True
+    state.draw_stop.clear()
+    state.test_points = []
+    fingerprint = grid_fingerprint(state.grid_points)
+    try:
+        robot.ensure_frame()
+        start_pose = robot.get_pose()
+        if not pose_read_is_plausible(start_pose, state.grid_points):
+            state.status = "verify: current pose unreadable — aborted"
+            return
+
+        for i, pos in enumerate(GRID_TEST_POSITIONS, start=1):
+            if state.draw_stop.is_set():
+                state.status = f"verify aborted at {i - 1}/{len(GRID_TEST_POSITIONS)}"
+                log(f"  [Verify] {state.status}")
+                return
+            target = grid_pose(pos["u"], pos["v"], state.grid_points, rows, cols)
+            rot = list(target[3:])
+            above = list(target[:3])
+            above[2] += DRAW_LIFT_MM
+            cur = robot.get_pose()
+            lifted = list(cur[:3])
+            lifted[2] += DRAW_LIFT_MM
+            state.status = f"verify {i}/{len(GRID_TEST_POSITIONS)} — {pos['label']}…"
+            log(f"  [Verify] {state.status}")
+            # Same shape as do_draw()'s approach: straight up, across above
+            # the target, then down onto it.
+            for move in (lifted + list(cur[3:]), above + rot, list(target)):
+                if state.draw_stop.is_set():
+                    state.status = f"verify aborted at {i - 1}/{len(GRID_TEST_POSITIONS)}"
+                    log(f"  [Verify] {state.status}")
+                    return
+                robot.movl(*move)
+
+            actual = robot.get_pose()
+            if not pose_read_is_plausible(actual, state.grid_points):
+                log(f"  [Verify] {pos['label']}: implausible pose read, row left empty")
+                continue
+            actual = [float(c) for c in actual[:3]]
+            err = [target[axis] - actual[axis] for axis in range(3)]
+            state.test_points.append({
+                "index": len(state.test_points) + 1,
+                "label": pos["label"],
+                "u": pos["u"], "v": pos["v"],
+                "computed": [round(c, 2) for c in target[:3]],
+                "actual": [round(a, 2) for a in actual],
+                "error": [round(e, 3) for e in err],
+                "deviation_mm": round(math.sqrt(sum(e * e for e in err)), 3),
+                "recorded_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "source": "verify",
+                "grid_fingerprint": fingerprint,
+            })
+            log(f"  [Verify] {pos['label']}: dev="
+                f"{state.test_points[-1]['deviation_mm']}mm")
+
+        state.status = (f"verify done — {len(state.test_points)}/"
+                        f"{len(GRID_TEST_POSITIONS)} points recorded")
+        log(f"  [Verify] {state.status}")
+        _return_to_start(robot, state, start_pose)
+    except RobotMoveError as e:
+        state.status = f"verify: robot rejected a move — {e} — aborted"
+        log(f"  [Verify] {state.status}")
+    finally:
+        state.draw_running = False
 
 
 def _abort_before_stroke(state, phase: str) -> bool:

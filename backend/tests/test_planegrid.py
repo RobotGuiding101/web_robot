@@ -1,7 +1,7 @@
-"""Unit tests for maps_point.planegrid — pure geometry / interpolation math.
+﻿"""Unit tests for maps_point.planegrid â€” pure geometry / interpolation math.
 
 These functions are the safest, highest-value things to unit test: no camera,
-no robot, no sockets — just arithmetic on taught poses.
+no robot, no sockets â€” just arithmetic on taught poses.
 """
 import math
 import threading
@@ -80,7 +80,7 @@ class TestValidateGrid:
         assert any("no size" in w for w in res["warnings"])
 
     def test_non_coplanar_warns_on_rmse(self):
-        # a 100mm square with one corner lifted 100mm — a plane can't absorb it
+        # a 100mm square with one corner lifted 100mm â€” a plane can't absorb it
         warped = [[[0.0, 0.0, 0.0, 0, 0, 0], [100.0, 0.0, 0.0, 0, 0, 0]],
                   [[0.0, 100.0, 0.0, 0, 0, 0], [100.0, 100.0, 100.0, 0, 0, 0]]]
         res = pg.validate_grid(warped, 2, 2)
@@ -329,7 +329,7 @@ class TestPoseReadIsPlausible:
         assert pg.pose_read_is_plausible([5.0, 5.0, 0.0, 0, 0, 0], GRID2)
 
     def test_accepts_a_large_but_real_error(self):
-        # Guards against garbage only — a 3mm deviation must never be dropped.
+        # Guards against garbage only â€” a 3mm deviation must never be dropped.
         assert pg.pose_read_is_plausible([8.0, 5.0, 0.0, 0, 0, 0], GRID2)
 
     def test_rejects_the_get_pose_failure_sentinel(self):
@@ -389,7 +389,7 @@ class TestBuildTestReportPayload:
     """The download contract, asserted on the assembled payload.
 
     This is the only place the whole 13-field contract can be checked at
-    once — the endpoint itself is unreachable from tests because mapcontrol
+    once â€” the endpoint itself is unreachable from tests because mapcontrol
     imports sqlalchemy at module scope.
     """
 
@@ -445,7 +445,7 @@ class TestBuildTestReportPayload:
         payload = pg.build_test_report_payload(GRID2, 2, 2, True, two,
                                               self._stats(), "admin", "now")
         # Two measured points satisfy "some exist", so the server reports no
-        # gap — the UI is what blocks on the 5-position coverage.
+        # gap â€” the UI is what blocks on the 5-position coverage.
         assert payload["complete"] is True
         assert payload["sheet_05_grid_mapping"]["test_points_status"] == "partial"
 
@@ -523,7 +523,7 @@ class _FixedPoseRobot(_FakeRobot):
 
 
 class _RaiseOnceOnReplayRobot(_FakeRobot):
-    """Plausible pose until the path is replayed, then raises once — the shape
+    """Plausible pose until the path is replayed, then raises once â€” the shape
     of a dashboard that drops off right after the last waypoint."""
 
     def __init__(self):
@@ -571,6 +571,143 @@ class _FakeState:
         self.last_draw_stats = {}
 
 
+class _VerifyRobot(_FakeRobot):
+    """Reports the pose it was last commanded to, so a successful verify run
+    produces zero error at every point."""
+
+    def __init__(self):
+        super().__init__()
+        self.commanded = None
+
+    def movl(self, *pose):
+        self.moves.append(pose)
+        self.commanded = list(pose)
+
+    def get_pose(self):
+        return list(self.commanded or self.pose)
+
+
+class _ReachingVerifyRobot(_VerifyRobot):
+    """Stops short of the target by a fixed amount, so error is non-zero."""
+
+    def __init__(self, gap_mm):
+        super().__init__()
+        self.gap = gap_mm
+
+    def get_pose(self):
+        pose = list(self.commanded or self.pose)
+        pose[0] -= self.gap
+        return pose
+
+
+class TestDoVerifyGrid:
+    """The five-row error table the Grid Mapping sheet needs, filled by one
+    press instead of five hand-jogged ones."""
+
+    def test_records_one_row_per_canonical_position(self):
+        state, robot = _FakeState(), _VerifyRobot()
+        pg.do_verify_grid(robot, state)
+        assert len(state.test_points) == len(pg.GRID_TEST_POSITIONS) == 5
+        assert [p["label"] for p in state.test_points] == [
+            pos["label"] for pos in pg.GRID_TEST_POSITIONS]
+
+    def test_rows_land_on_the_canonical_web_positions(self):
+        state, robot = _FakeState(), _VerifyRobot()
+        pg.do_verify_grid(robot, state)
+        for got, want in zip(state.test_points, pg.GRID_TEST_POSITIONS):
+            assert (got["u"], got["v"]) == (want["u"], want["v"])
+
+    def test_a_perfectly_placed_arm_records_zero_error(self):
+        state, robot = _FakeState(), _VerifyRobot()
+        pg.do_verify_grid(robot, state)
+        assert all(p["deviation_mm"] == 0.0 for p in state.test_points)
+        assert all(p["error"] == [0.0, 0.0, 0.0] for p in state.test_points)
+
+    def test_a_misplaced_arm_records_the_offset(self):
+        state, robot = _FakeState(), _ReachingVerifyRobot(2.0)
+        pg.do_verify_grid(robot, state)
+        assert all(p["error"][0] == 2.0 for p in state.test_points)
+        assert all(p["deviation_mm"] == 2.0 for p in state.test_points)
+
+    def test_approaches_every_point_from_above(self):
+        state, robot = _FakeState(), _VerifyRobot()
+        pg.do_verify_grid(robot, state)
+        # Each point contributes lift, travel-above, descend â€” so a run of N
+        # points must move 3N times plus the return home.
+        assert len(robot.moves) >= 3 * len(pg.GRID_TEST_POSITIONS)
+
+    def test_returns_home_at_the_end(self):
+        state, robot = _FakeState(), _VerifyRobot()
+        start = list(robot.pose)
+        pg.do_verify_grid(robot, state)
+        assert list(robot.moves[-1][:3]) == pytest.approx(start[:3], abs=0.01)
+
+    def test_reuses_draw_running_so_estop_and_jog_blocking_cover_it(self):
+        state, robot = _FakeState(), _VerifyRobot()
+        pg.do_verify_grid(robot, state)
+        # The run must not leave draw_running latched, and draw_stop is the
+        # flag /draw/stop and E-Stop set â€” it has to be cleared on entry so a
+        # Stop left over from an earlier draw cannot abort this run.
+        assert state.draw_running is False
+        assert state.draw_stop.is_set() is False
+
+    def test_stop_during_the_walk_keeps_only_the_rows_already_done(self):
+        class _StopAfterFirst(_VerifyRobot):
+            def movl(self, *pose):
+                super().movl(*pose)
+                if len(state.test_points) == 0 and self.commanded is not None:
+                    state.draw_stop.set()
+
+        state, robot = _FakeState(), _StopAfterFirst()
+        pg.do_verify_grid(robot, state)
+        assert state.test_points == []
+        assert "aborted" in state.status
+
+    def test_a_rejected_pose_read_leaves_that_row_empty(self):
+        class _Flaky(_VerifyRobot):
+            def __init__(self):
+                super().__init__()
+                self.calls = 0
+
+            def get_pose(self):
+                # Read #1 is the entry plausibility check, #2 is the "where am
+                # I now" read before lifting, #3 is the one taken right after
+                # the first descend — the one this test corrupts.
+                self.calls += 1
+                if self.calls == 3:
+                    return [0.0] * 6
+                return list(self.commanded or self.pose)
+
+        state, robot = _FakeState(), _Flaky()
+        pg.do_verify_grid(robot, state)
+        assert len(state.test_points) == 4
+        assert state.test_points[0]["label"] == pg.GRID_TEST_POSITIONS[1]["label"]
+
+    def test_a_previous_manual_run_is_replaced_not_merged(self):
+        state, robot = _FakeState(), _VerifyRobot()
+        state.test_points = [{"index": 1, "u": 0.1, "v": 0.1,
+                              "error": [9.0, 9.0, 9.0], "source": "manual"}]
+        pg.do_verify_grid(robot, state)
+        assert len(state.test_points) == 5
+        assert all(p["source"] == "verify" for p in state.test_points)
+
+    def test_requires_a_fully_marked_grid(self):
+        state, robot = _FakeState(), _VerifyRobot()
+        state.grid_points = [[P00, None], [None, P11]]
+        pg.do_verify_grid(robot, state)
+        assert state.test_points == []
+        assert "not fully marked" in state.status
+        assert robot.moves == []
+
+    def test_refuses_to_start_when_another_motion_is_running(self):
+        state, robot = _FakeState(), _VerifyRobot()
+        state.draw_running = True
+        pg.do_verify_grid(robot, state)
+        assert robot.moves == []
+        assert "busy" in state.status
+
+
+
 class TestDrawEndCheck:
     """One free real measurement per draw: the arm is parked on the last
     waypoint before it is sent home, which is the only moment achievable
@@ -586,7 +723,7 @@ class TestDrawEndCheck:
         assert check["deviation_mm"] > 0
 
     def test_never_touches_test_points(self):
-        # ServoP lags its target, so this is tracking error — sheet 05's
+        # ServoP lags its target, so this is tracking error â€” sheet 05's
         # Max/RMSE must stay a pure deliberate 5-point test.
         state, robot = _FakeState(), _FakeRobot([9.0, 5.0, 0.0, 0, 0, 0])
         pg.do_draw(robot, state, [{"tool": "rect", "points": CLOSED_RECT}])
@@ -615,7 +752,7 @@ class TestDrawEndCheck:
 
     def test_stop_pressed_during_replay_records_nothing(self):
         # do_draw() clears draw_stop on entry, so Stop has to arrive from the
-        # replay itself — setting the flag beforehand proves nothing.
+        # replay itself â€” setting the flag beforehand proves nothing.
         state, _ = _run(_StopOnReplayRobot())
         assert "draw_end_check" not in state.last_draw_stats
 
