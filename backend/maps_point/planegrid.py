@@ -32,7 +32,8 @@ import cv2
 import numpy as np
 
 from .config import (
-    DRAW_SIMPLIFY_EPS, DRAW_MAX_POINTS, DRAW_MAX_RMSE_MM, DRAW_MIN_GRID_SPAN_MM,
+    DRAW_SIMPLIFY_ENABLED, DRAW_SIMPLIFY_EPS,
+    DRAW_MAX_POINTS, DRAW_MAX_RMSE_MM, DRAW_MIN_GRID_SPAN_MM,
     DRAW_CP_RATIO, DRAW_PATH_TIMEOUT_PER_POINT_S, STABLE_TIMEOUT,
     DRAW_MOTION_MODE, DRAW_SERVOP_RATE_HZ, DRAW_SERVOP_STEP_MM,
     DRAW_SERVOP_MAX_STREAM_POINTS, DRAW_SERVOP_ERROR_CHECK_S,
@@ -181,10 +182,15 @@ def simplify_stroke(points_uv, eps: float = DRAW_SIMPLIFY_EPS) -> list:
     samples) is already under it, and running DP anyway collapses it to a
     2-point straight line, which is how a drawn shape silently became "the
     arm just went down and didn't trace anything" on hardware. The <3
-    fallback guards the over-cap case against the same total collapse."""
+    fallback guards the over-cap case against the same total collapse.
+
+    DRAW_SIMPLIFY_ENABLED=0 skips Douglas-Peucker entirely and leaves only the
+    uniform cap, which is the knob for A/B-testing whether DP is flattening a
+    hand-drawn shape: uniform downsampling keeps the traced outline, DP replaces
+    it with its vertices. DRAW_SIMPLIFY_EPS has no effect while it is off."""
     if len(points_uv) <= 2:
         return list(points_uv)
-    if len(points_uv) <= DRAW_MAX_POINTS:
+    if len(points_uv) <= DRAW_MAX_POINTS or not DRAW_SIMPLIFY_ENABLED:
         return _cap_points(points_uv, DRAW_MAX_POINTS)
     arr = np.array(points_uv, dtype=np.float32).reshape(-1, 1, 2)
     simplified = cv2.approxPolyDP(arr, eps, closed=False).reshape(-1, 2).tolist()
@@ -517,7 +523,9 @@ def draw_stats(strokes: list, grid_points, rows: int, cols: int,
             "total_travel_mm": round(travel_mm, 2),
             "drawn_path_length_mm": round(drawn_mm, 2),
             "lift_transitions": max(0, len(strokes) - 1), "lift_mm": lift_mm,
-            "motion_mode": DRAW_MOTION_MODE, "cp_ratio": DRAW_CP_RATIO}
+            "motion_mode": DRAW_MOTION_MODE, "cp_ratio": DRAW_CP_RATIO,
+            "simplify_enabled": DRAW_SIMPLIFY_ENABLED,
+            "simplify_eps": DRAW_SIMPLIFY_EPS, "max_points": DRAW_MAX_POINTS}
 
 
 def densify_path(poses: list, step_mm: float, max_points: int) -> list:
