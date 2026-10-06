@@ -6,12 +6,14 @@ import {
   Line,
   Point,
   Polyline,
+  Path,
 } from 'fabric'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
 import { setStreamMode } from '../components/CameraStream'
 import { backendToolFor, evaluateReportGate } from './reportGate'
 import { shapePoints } from '../lib/shapes'
+import { simplifyByPercentage } from '../lib/simplify'
 
 // ─── Tool constants ────────────────────────────────────────────────────────────
 const TOOLS = {
@@ -295,6 +297,8 @@ const DrawingModePage = () => {
   const [activeTool, setActiveTool] = useState(TOOLS.PEN)
   const [strokeColor, setStrokeColor] = useState('#1a2f45')
   const [strokeWidth, setStrokeWidth] = useState(2)
+  const [simplifyPct, setSimplifyPct] = useState(0) // Douglas-Peucker point reduction percentage (0-100%)
+  const [strokePointStats, setStrokePointStats] = useState({ raw: 0, simplified: 0 })
   const [canUndo, setCanUndo] = useState(false)
   const [canRedo, setCanRedo] = useState(false)
   const [hasSelection, setHasSelection] = useState(false)
@@ -424,8 +428,10 @@ const [testReportBusy, setTestReportBusy] = useState(false)
   // Refs for latest state values (avoid stale closures)
   const strokeColorRef = useRef(strokeColor)
   const strokeWidthRef = useRef(strokeWidth)
+  const simplifyPctRef = useRef(simplifyPct)
   useEffect(() => { strokeColorRef.current = strokeColor }, [strokeColor])
   useEffect(() => { strokeWidthRef.current = strokeWidth }, [strokeWidth])
+  useEffect(() => { simplifyPctRef.current = simplifyPct }, [simplifyPct])
 
   // History stacks
   const historyRef = useRef([])
@@ -448,6 +454,78 @@ const [testReportBusy, setTestReportBusy] = useState(false)
     const fc = fabricRef.current
     if (fc) setObjectCount(fc.getObjects().length)
   }, [])
+
+  // ── Calculate stroke points stats for Douglas-Peucker ───────────────────────
+  useEffect(() => {
+    const fc = fabricRef.current
+    if (!fc) {
+      setStrokePointStats({ raw: 0, simplified: 0 })
+      return
+    }
+    const pathData = getCanvasPathData(fc)
+    let raw = 0
+    let simplified = 0
+    const cw = fc.getWidth() || 800
+    const ch = fc.getHeight() || 600
+
+    pathData.forEach((obj) => {
+      if (obj.type === 'path' && obj.points) {
+        raw += obj.points.length
+        if (simplifyPct > 0) {
+          simplified += simplifyByPercentage(obj.points, simplifyPct, { width: cw, height: ch }).length
+        } else {
+          simplified += obj.points.length
+        }
+      } else if (obj.type === 'line') {
+        raw += 2
+        simplified += 2
+      } else if (obj.type === 'polyline' && obj.points) {
+        raw += obj.points.length
+        simplified += obj.points.length
+      }
+    })
+    setStrokePointStats({ raw, simplified })
+  }, [objectCount, simplifyPct])
+
+  // ── Apply Douglas-Peucker directly to canvas paths ─────────────────────────
+  const applySimplifyToCanvas = useCallback(() => {
+    const fc = fabricRef.current
+    if (!fc || simplifyPctRef.current <= 0) return
+    const objects = fc.getObjects()
+    const cw = fc.getWidth() || 800
+    const ch = fc.getHeight() || 600
+    let modified = false
+
+    for (let i = objects.length - 1; i >= 0; i--) {
+      const obj = objects[i]
+      if (obj.type === 'path') {
+        const rawPts = pathObjectPoints(obj)
+        if (rawPts.length > 2) {
+          const simplified = simplifyByPercentage(rawPts, simplifyPctRef.current, { width: cw, height: ch })
+          if (simplified.length < rawPts.length) {
+            const svgPath = `M ${simplified[0].x} ${simplified[0].y} ` +
+              simplified.slice(1).map((p) => `L ${p.x} ${p.y}`).join(' ')
+            const newPath = new Path(svgPath, {
+              stroke: obj.stroke || '#1a2f45',
+              strokeWidth: obj.strokeWidth || 2,
+              fill: null,
+              selectable: true,
+              evented: true,
+            })
+            fc.remove(obj)
+            fc.insertAt(i, newPath)
+            modified = true
+          }
+        }
+      }
+    }
+
+    if (modified) {
+      fc.renderAll()
+      saveHistory()
+      setStatus(`✓ Simplified canvas paths with ${simplifyPctRef.current}% reduction`)
+    }
+  }, [saveHistory])
 
   // ── Initialize Fabric canvas ───────────────────────────────────────────────
   useEffect(() => {
@@ -685,7 +763,12 @@ const [testReportBusy, setTestReportBusy] = useState(false)
       const strokes = pathData.map((obj) => {
         const points = []
         if (obj.type === 'path' && obj.points) {
-          obj.points.forEach((point) => points.push([point.x / cw, point.y / ch]))
+          const rawPts = obj.points
+          const curPct = simplifyPctRef.current
+          const finalPts = curPct > 0
+            ? simplifyByPercentage(rawPts, curPct, { width: cw, height: ch })
+            : rawPts
+          finalPts.forEach((point) => points.push([point.x / cw, point.y / ch]))
         } else if (obj.type === 'line') {
           points.push([obj.x1 / cw, obj.y1 / ch], [obj.x2 / cw, obj.y2 / ch])
         } else if (obj.type === 'polyline' && obj.points) {
@@ -706,7 +789,8 @@ const [testReportBusy, setTestReportBusy] = useState(false)
       })
       const data = await res.json()
       if (data.ok) {
-        setStatus(`✓ Sent ${strokes.length} stroke(s)`)
+        const totalPts = strokes.reduce((sum, s) => sum + s.points.length, 0)
+        setStatus(`✓ Sent ${strokes.length} stroke(s) (${totalPts} pts)`)
       } else {
         setStatus(`✗ ${data.error || 'Draw failed'}`)
       }
@@ -2370,6 +2454,130 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                                   onClick={() => setStrokeWidth(width)}
                                 >{width}</button>
                               ))}
+                            </div>
+
+                            {/* Douglas-Peucker Point Reduction */}
+                            <div className="dm-simplify-box" style={{
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '6px',
+                              padding: '8px 10px',
+                              background: '#f8fafc',
+                              borderRadius: '8px',
+                              border: '1px solid #e2e8f0',
+                            }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <label
+                                  htmlFor="simplify-pct-slider"
+                                  style={{
+                                    fontSize: '11px',
+                                    fontWeight: 700,
+                                    color: '#334155',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  <span>✂ ลดจุดวาด (Douglas-Peucker)</span>
+                                </label>
+                                <span style={{
+                                  fontSize: '12px',
+                                  fontWeight: 800,
+                                  color: simplifyPct > 0 ? '#2563eb' : '#64748b',
+                                  background: simplifyPct > 0 ? 'rgba(37,99,235,0.1)' : '#f1f5f9',
+                                  padding: '1px 8px',
+                                  borderRadius: '10px',
+                                  border: `1px solid ${simplifyPct > 0 ? 'rgba(37,99,235,0.3)' : '#cbd5e1'}`,
+                                }}>
+                                  {simplifyPct}%
+                                </span>
+                              </div>
+
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <input
+                                  id="simplify-pct-slider"
+                                  type="range"
+                                  min="0"
+                                  max="100"
+                                  step="1"
+                                  value={simplifyPct}
+                                  onChange={(e) => setSimplifyPct(Number(e.target.value))}
+                                  style={{ flex: 1, accentColor: '#2563eb', cursor: 'pointer' }}
+                                  title={`ลดจุดในการวาดด้วย Douglas-Peucker: ${simplifyPct}%`}
+                                />
+                              </div>
+
+                              {/* Quick Presets */}
+                              <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                                {[0, 15, 30, 50, 75].map((preset) => (
+                                  <button
+                                    key={preset}
+                                    type="button"
+                                    onClick={() => setSimplifyPct(preset)}
+                                    style={{
+                                      flex: 1,
+                                      fontSize: '10px',
+                                      fontWeight: simplifyPct === preset ? 700 : 500,
+                                      padding: '3px 0',
+                                      borderRadius: '4px',
+                                      border: simplifyPct === preset ? '1px solid #2563eb' : '1px solid #cbd5e1',
+                                      background: simplifyPct === preset ? '#2563eb' : '#ffffff',
+                                      color: simplifyPct === preset ? '#ffffff' : '#475569',
+                                      cursor: 'pointer',
+                                    }}
+                                  >
+                                    {preset}%
+                                  </button>
+                                ))}
+                              </div>
+
+                              {/* Points Stats Badge & Canvas bake action */}
+                              {strokePointStats.raw > 0 && (
+                                <div style={{
+                                  fontSize: '10px',
+                                  color: simplifyPct > 0 ? '#1e40af' : '#64748b',
+                                  background: simplifyPct > 0 ? '#eff6ff' : 'transparent',
+                                  padding: simplifyPct > 0 ? '4px 8px' : '0',
+                                  borderRadius: '5px',
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  alignItems: 'center',
+                                  gap: '6px',
+                                }}>
+                                  <span>
+                                    จุดเดิม: <strong>{strokePointStats.raw}</strong>
+                                    {simplifyPct > 0 ? ` → ส่งหุ่น: ` : ''}
+                                    {simplifyPct > 0 && <strong>{strokePointStats.simplified}</strong>}
+                                    {simplifyPct > 0 && strokePointStats.raw > strokePointStats.simplified && (
+                                      <span style={{ fontWeight: 700, color: '#16a34a', marginLeft: '4px' }}>
+                                        (-{Math.round((1 - strokePointStats.simplified / strokePointStats.raw) * 100)}%)
+                                      </span>
+                                    )}
+                                  </span>
+
+                                  {simplifyPct > 0 && strokePointStats.raw > strokePointStats.simplified && (
+                                    <button
+                                      type="button"
+                                      onClick={applySimplifyToCanvas}
+                                      title="ปรับแต่งเส้นบน Canvas ให้มีจำนวนจุดตามเปอร์เซ็นต์นี้ทันที (สามารถ Ctrl+Z เพื่อย้อนกลับได้)"
+                                      style={{
+                                        fontSize: '9px',
+                                        fontWeight: 600,
+                                        padding: '2px 6px',
+                                        background: '#3b82f6',
+                                        color: '#ffffff',
+                                        border: 'none',
+                                        borderRadius: '3px',
+                                        cursor: 'pointer',
+                                        whiteSpace: 'nowrap',
+                                      }}
+                                    >
+                                      ⚡ ปรับบน Canvas
+                                    </button>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           </div>
 
