@@ -1587,6 +1587,7 @@ def api_grid_reset(request: Request):
 class GridTestPointBody(BaseModel):
     u: float
     v: float
+    actual: Optional[list] = None
 
 
 @router.post("/grid/test-point")
@@ -1595,21 +1596,42 @@ def api_grid_test_point(request: Request, body: GridTestPointBody):
     for canvas position (u,v), against the pose the robot is actually at now.
 
     Read-only — the operator jogs to the spot by hand first; nothing here
-    moves the arm."""
+    moves the arm.
+
+    `actual` lets the operator supply the measured pose instead. On this
+    controller GetPose() has been observed returning exactly the last
+    commanded Cartesian target, which made a hand-verified run report 0.000mm
+    error at all five positions; a value read from a gauge, a rule, or the
+    controller's own screen is a real measurement and must win over the
+    echoed command. The grid prediction, the errors and the aggregates are
+    computed the same way either way."""
     if not _grid_fully_marked():
         return {"ok": False, "error": "grid not fully marked"}
-    if not robot.connected:
-        return {"ok": False, "error": "robot not connected"}
     u, v = float(body.u), float(body.v)
     if not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0):
         return {"ok": False, "error": "u and v must be within [0,1]"}
     computed = grid_pose(u, v, state.grid_points, state.grid_rows, state.grid_cols)
-    actual = robot.get_pose()
-    # get_pose() never raises — it returns [0.0]*6 on ANY dashboard failure
-    # (robot.py:160-168), which this endpoint used to record as a real
-    # ~400mm deviation and feed straight into sheet 05's Max/RMSE.
-    if not pose_read_is_plausible(actual, state.grid_points):
-        return {"ok": False, "error": "pose read unavailable — nothing recorded"}
+    if body.actual is not None:
+        supplied = body.actual
+        if not isinstance(supplied, list) or len(supplied) < 3:
+            return {"ok": False, "error": "actual must be [x, y, z]"}
+        try:
+            actual = [float(c) for c in supplied[:3]]
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "actual must be three numbers"}
+        if any(math.isnan(c) or math.isinf(c) for c in actual):
+            return {"ok": False, "error": "actual must be finite numbers"}
+        source = "measured"
+    else:
+        if not robot.connected:
+            return {"ok": False, "error": "robot not connected"}
+        actual = robot.get_pose()
+        # get_pose() never raises — it returns [0.0]*6 on ANY dashboard failure
+        # (robot.py:160-168), which this endpoint used to record as a real
+        # ~400mm deviation and feed straight into sheet 05's Max/RMSE.
+        if not pose_read_is_plausible(actual, state.grid_points):
+            return {"ok": False, "error": "pose read unavailable — nothing recorded"}
+        source = "manual"
     err = [computed[i] - actual[i] for i in range(3)]
     rec = {"index": len(state.test_points) + 1, "u": u, "v": v,
            "computed": [round(c, 2) for c in computed],
@@ -1617,7 +1639,7 @@ def api_grid_test_point(request: Request, body: GridTestPointBody):
            "error": [round(e, 3) for e in err],
            "deviation_mm": round(math.sqrt(sum(e * e for e in err)), 3),
            "recorded_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-           "source": "manual",
+           "source": source,
            "grid_fingerprint": grid_fingerprint(state.grid_points)}
     state.test_points.append(rec)
     _log_user_event(request, "draw", "test_point",

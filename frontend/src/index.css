@@ -3181,6 +3181,28 @@ body {
   box-shadow: none;
 }
 
+.dm-teach-measured-input {
+  width: 108px;
+  flex: 0 0 auto;
+  padding: 4px 6px;
+  border-radius: 7px;
+  border: 1.5px solid #cdd6e3;
+  background: #ffffff;
+  color: #1a2f45;
+  font-size: 10px;
+  font-family: inherit;
+}
+
+.dm-teach-measured-input::placeholder {
+  color: #94a3b8;
+}
+
+.dm-teach-measured-input:focus {
+  outline: none;
+  border-color: #1478c8;
+  box-shadow: 0 0 0 2px rgba(20, 120, 200, 0.15);
+}
+
 .dm-teach-autofill-btn {
   width: 100%;
   padding: 6px 8px;

@@ -863,13 +863,23 @@ const [testReportBusy, setTestReportBusy] = useState(false)
   }, [panelTab, teachConnected, testPoints.length, refreshReportGate])
 
   // ── Grid Mapping test points + experiment-record download ────────────────
-  const handleRecordTestPoint = useCallback(async (u, v) => {
+  const handleRecordTestPoint = useCallback(async (u, v, measuredText) => {
+    const payload = { u, v }
+    const typed = String(measuredText || '').trim()
+    if (typed) {
+      const parts = typed.split(',').map((n) => Number(n.trim()))
+      if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) {
+        showTeachMsg('ค่าที่วัดเองต้องเป็นตัวเลข 3 ตัวคั่นด้วยจุลภาค เช่น -142.4, -436.5, 145.6', 'error')
+        return
+      }
+      payload.actual = parts
+    }
     if (!teachStatus || !teachStatus.connected) return
     try {
       const res = await apiFetch('/api/map/grid/test-point', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ u, v }),
+        body: JSON.stringify(payload),
       })
       const data = await res.json().catch(() => null)
       if (res.ok && data && data.ok) {
@@ -895,6 +905,7 @@ const [testReportBusy, setTestReportBusy] = useState(false)
     refreshReportGate()
   }, [showTeachMsg, refreshReportGate])
 
+  const [measured, setMeasured] = useState({})
   const [verifyBusy, setVerifyBusy] = useState(false)
   const verifySawBusy = useRef(false)
 
@@ -1974,23 +1985,34 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                             </div>
 
                             <div className="dm-teach-hint">
-                              Prerequisite: mark all {gRows * gCols} grid cells and connect the robot. Jog to each test location before recording so predicted and actual poses can be compared.
+                              Prerequisite: mark all {gRows * gCols} grid cells. Jog to each test location, then either record the robot's own reading or type the position you measured yourself — leave the box empty to use the robot reading.
                             </div>
 
-                            <div className="dm-teach-grid-actions">
-                              {TEST_POINT_POSITIONS.map((p, i) => (
+                            {TEST_POINT_POSITIONS.map((p, i) => (
+                              <div key={`row-${p.u}-${p.v}`} className="dm-teach-grid-actions">
                                 <button
-                                  key={`${p.u}-${p.v}`}
                                   type="button"
                                   className="dm-teach-action-btn"
                                   disabled={!teachConnected || !gridComplete || robotBusy}
-                                  title={!teachConnected ? 'Connect and initialize the robot first' : !gridComplete ? `Mark all ${gRows * gCols} grid cells first (${markedCount}/${gRows * gCols})` : robotBusy ? 'Wait until robot motion finishes' : `Jog robot to the test location, then record predicted vs actual pose at u=${p.u}, v=${p.v}`}
-                                  onClick={() => handleRecordTestPoint(p.u, p.v)}
+                                  title={!teachConnected ? 'Connect and initialize the robot first' : !gridComplete ? `Mark all ${gRows * gCols} grid cells first (${markedCount}/${gRows * gCols})` : robotBusy ? 'Wait until robot motion finishes' : `Record u=${p.u}, v=${p.v}`}
+                                  onClick={() => handleRecordTestPoint(p.u, p.v, measured[`${p.u},${p.v}`])}
                                 >
                                   {reportGate?.coverage?.matched?.[i] ? '✓ ' : ''}{p.label}
                                 </button>
-                              ))}
-                            </div>
+                                <input
+                                  className="dm-teach-measured-input"
+                                  type="text"
+                                  inputMode="decimal"
+                                  placeholder="X, Y, Z"
+                                  aria-label={`Measured position for ${p.label}`}
+                                  value={measured[`${p.u},${p.v}`] || ''}
+                                  onChange={(e) => setMeasured((prev) => ({
+                                    ...prev,
+                                    [`${p.u},${p.v}`]: e.target.value,
+                                  }))}
+                                />
+                              </div>
+                            ))}
 
                             {reportGate && (
                               <div className="dm-teach-grid-status">
