@@ -2440,19 +2440,32 @@ body {
   border-color: #cbd5e1;
 }
 
+.dm-3d-floating--dragging {
+  user-select: none;
+  cursor: grabbing !important;
+  box-shadow:
+    0 18px 40px -4px rgba(15, 23, 42, 0.3),
+    0 8px 18px -3px rgba(15, 23, 42, 0.16) !important;
+  transition: none !important;
+}
+
 .dm-3d-minimized-btn {
   width: 100%;
   height: 100%;
   background: #ffffff;
   border: none;
   color: #1a8fe3;
-  cursor: pointer;
+  cursor: grab;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 0;
   border-radius: 50%;
   transition: all 0.18s ease;
+}
+
+.dm-3d-minimized-btn:active {
+  cursor: grabbing;
 }
 
 .dm-3d-minimized-btn:hover {
@@ -2471,6 +2484,37 @@ body {
   align-items: center;
   justify-content: space-between;
   user-select: none;
+  cursor: grab;
+}
+
+.dm-3d-header:active {
+  cursor: grabbing;
+}
+
+.dm-3d-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  font-size: 13px;
+  line-height: 1;
+  color: #94a3b8;
+  letter-spacing: -2px;
+  margin-right: 2px;
+  cursor: grab;
+  opacity: 0.7;
+  transition: opacity 0.15s ease;
+}
+
+.dm-3d-header:hover .dm-3d-drag-handle {
+  opacity: 1;
+  color: #64748b;
+}
+
+.dm-3d-drag-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  background: transparent;
+  cursor: grabbing;
 }
 
 .dm-3d-title-wrap {
