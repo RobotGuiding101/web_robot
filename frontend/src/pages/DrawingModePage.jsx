@@ -1527,7 +1527,7 @@ const [testReportBusy, setTestReportBusy] = useState(false)
                       {/* 3D Model iframe */}
                       <div className="dm-3d-frame-wrap">
                         <iframe
-                          src={`/robot-viewer.html?v=${viewerKey.current}_c2&mode=display`}
+                          src={`/robot-viewer.html?v=${viewerKey.current}_all`}
                           title="Robot Arm 3D Viewer"
                           className="dm-3d-frame"
                           allow="accelerometer"
