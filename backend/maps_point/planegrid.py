@@ -384,6 +384,32 @@ def report_missing_codes(grid_marked: bool, grid_points, test_points,
     return codes
 
 
+def parse_measured_pose(raw):
+    """Validate an operator-supplied measured pose. Returns (values, error).
+
+    On this controller GetPose() has been observed echoing the last commanded
+    Cartesian target, so the Grid Mapping form's "actual robot pose" column
+    can only be filled from a measurement the operator makes themselves. That
+    makes this the one place untrusted free-text numbers enter an experiment
+    form, so it refuses anything it cannot turn into exactly three finite
+    numbers rather than coercing it.
+
+    `raw is None` means "no measurement supplied" and is not an error — the
+    caller then falls back to reading the robot.
+    """
+    if raw is None:
+        return None, None
+    if not isinstance(raw, list) or len(raw) < 3:
+        return None, "actual must be [x, y, z]"
+    try:
+        values = [float(c) for c in raw[:3]]
+    except (TypeError, ValueError):
+        return None, "actual must be three numbers"
+    if any(math.isnan(c) or math.isinf(c) for c in values):
+        return None, "actual must be finite numbers"
+    return values, None
+
+
 def pose_read_is_plausible(actual, grid_points) -> bool:
     """Whether a pose read back from the controller may be trusted AS A
     MEASUREMENT.

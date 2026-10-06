@@ -11,6 +11,7 @@ import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
 import { setStreamMode } from '../components/CameraStream'
 import { backendToolFor, evaluateReportGate } from './reportGate'
+import { shapePoints } from '../lib/shapes'
 
 // ─── Tool constants ────────────────────────────────────────────────────────────
 const TOOLS = {
@@ -164,46 +165,6 @@ function getCanvasPathData(fc) {
       }
     }
     return base
-  })
-}
-
-function shapePoints(tool, start, end) {
-  if (tool === TOOLS.RECTANGLE) {
-    const left = Math.min(start.x, end.x)
-    const right = Math.max(start.x, end.x)
-    const top = Math.min(start.y, end.y)
-    const bottom = Math.max(start.y, end.y)
-    return [
-      new Point(left, top),
-      new Point(right, top),
-      new Point(right, bottom),
-      new Point(left, bottom),
-      new Point(left, top),
-    ]
-  }
-
-  if (tool === TOOLS.TRIANGLE) {
-    // Same drag-to-a-box gesture as the rectangle; apex at the top centre.
-    // Closes the loop by repeating the first vertex, exactly as the rectangle
-    // does, so the report's `closed` flag marks it as a deliberate shape
-    // instead of a stroke whose ends merely coincide.
-    const left = Math.min(start.x, end.x)
-    const right = Math.max(start.x, end.x)
-    const top = Math.min(start.y, end.y)
-    const bottom = Math.max(start.y, end.y)
-    const apexX = (left + right) / 2
-    return [
-      new Point(apexX, top),
-      new Point(right, bottom),
-      new Point(left, bottom),
-      new Point(apexX, top),
-    ]
-  }
-
-  const radius = Math.hypot(end.x - start.x, end.y - start.y)
-  return Array.from({ length: 49 }, (_, index) => {
-    const angle = (index / 48) * Math.PI * 2
-    return new Point(start.x + Math.cos(angle) * radius, start.y + Math.sin(angle) * radius)
   })
 }
 

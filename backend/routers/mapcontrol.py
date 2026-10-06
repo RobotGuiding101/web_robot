@@ -43,8 +43,8 @@ from maps_point.planegrid import (do_draw, do_verify_grid, validate_grid,
                                   project_grid_2d, bilinear_cell, grid_pose,
                                   draw_stats, grid_fingerprint,
                                   pose_read_is_plausible, test_aggregates,
-                                  build_test_report_payload, TEST_POINTS_EXPECTED,
-                                  GRID_TEST_POSITIONS)
+                                  build_test_report_payload, parse_measured_pose,
+                                  TEST_POINTS_EXPECTED, GRID_TEST_POSITIONS)
 from maps_point.render import draw_overlay
 
 router = APIRouter(prefix="/api/map", tags=["MapControl"])
@@ -1611,18 +1611,10 @@ def api_grid_test_point(request: Request, body: GridTestPointBody):
     if not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0):
         return {"ok": False, "error": "u and v must be within [0,1]"}
     computed = grid_pose(u, v, state.grid_points, state.grid_rows, state.grid_cols)
-    if body.actual is not None:
-        supplied = body.actual
-        if not isinstance(supplied, list) or len(supplied) < 3:
-            return {"ok": False, "error": "actual must be [x, y, z]"}
-        try:
-            actual = [float(c) for c in supplied[:3]]
-        except (TypeError, ValueError):
-            return {"ok": False, "error": "actual must be three numbers"}
-        if any(math.isnan(c) or math.isinf(c) for c in actual):
-            return {"ok": False, "error": "actual must be finite numbers"}
-        source = "measured"
-    else:
+    actual, measured_error = parse_measured_pose(body.actual)
+    if measured_error:
+        return {"ok": False, "error": measured_error}
+    if actual is None:
         if not robot.connected:
             return {"ok": False, "error": "robot not connected"}
         actual = robot.get_pose()
@@ -1632,6 +1624,8 @@ def api_grid_test_point(request: Request, body: GridTestPointBody):
         if not pose_read_is_plausible(actual, state.grid_points):
             return {"ok": False, "error": "pose read unavailable — nothing recorded"}
         source = "manual"
+    else:
+        source = "measured"
     err = [computed[i] - actual[i] for i in range(3)]
     rec = {"index": len(state.test_points) + 1, "u": u, "v": v,
            "computed": [round(c, 2) for c in computed],
