@@ -561,7 +561,7 @@ const [testReportBusy, setTestReportBusy] = useState(false)
         tempObjRef.current.set({ x2: ptr.x, y2: ptr.y })
       } else {
         if (tempObjRef.current) fc.remove(tempObjRef.current)
-        const polyline = new Polyline(shapePoints(activeTool, startPtRef.current, ptr), {
+        const polyline = new Polyline(shapePoints(activeTool, startPtRef.current, ptr, { width: fc.getWidth(), height: fc.getHeight() }), {
           fill: 'rgba(0,0,0,0)',
           stroke: strokeColorRef.current,
           strokeWidth: strokeWidthRef.current,
