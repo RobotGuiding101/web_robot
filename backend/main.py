@@ -30,25 +30,6 @@ async def lifespan(app: FastAPI):
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-
-    try:
-        from database import async_session
-        from models import User
-        from routers.auth import pwd_ctx
-        from sqlalchemy import select
-
-        async with async_session() as session:
-            result = await session.execute(select(User).where(User.username == "admin"))
-            if not result.scalar_one_or_none():
-                admin_user = User(
-                    username="admin",
-                    password_hash=pwd_ctx.hash("admin"),
-                )
-                session.add(admin_user)
-                await session.commit()
-                print("[Database] Default user 'admin' created with password 'admin'", flush=True)
-    except Exception as e:
-        print(f"[Database] Error checking/creating default user: {e}", flush=True)
     
     def _auto_start_camera():
         from routers.mapcontrol import cam, robot, state
