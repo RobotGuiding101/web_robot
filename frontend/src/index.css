@@ -1993,9 +1993,9 @@ body {
   position: relative;
   inset: auto;
   z-index: auto;
-  flex: 0 0 720px;
-  width: 720px;
-  height: 720px;
+  flex: 0 0 480px;
+  width: 480px;
+  height: 480px;
   background: #ffffff;
   border-radius: 10px;
   border: 1.5px solid #dbe3ed;
