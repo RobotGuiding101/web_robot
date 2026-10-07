@@ -1550,78 +1550,27 @@ def api_grid_surfacez(request: Request):
     the grid onto it — no jogging. Valid while the tool is squared to the
     surface (run Align first) so the camera looks straight down at it:
     surface_Z = pose_Z - depth + tip offset + safety gap. The robot does not
-    move here; the next Send is what descends.
-
-    Depth is read at EACH of the 4 marked corners and bilinearly
-    interpolated across the grid, exactly like /grid/autofill does — NOT from
-    the single centre reading (state.last_center_depth) applied to every
-    cell. One depth value cannot describe a tilted plane: on a workpiece
-    raked ~10 degrees the corners are tens of mm from the centre, so
-    flattening the whole grid onto the centre reading left it visibly off
-    the surface at the edges. Falls back to the centre reading only when the
-    4 corners have no usable depth."""
+    move here; the next Send is what descends."""
     if not robot.connected or not cam._running:
         return {"ok": False, "error": "robot/camera not ready"}
     if not _grid_fully_marked():
         return {"ok": False, "error": "grid not fully marked"}
-    robot.ensure_frame()
-    X, Y, pose_z, Rx, Ry, Rz = robot.get_pose()
-
-    rows, cols = state.grid_rows, state.grid_cols
-    pts = list(state.points)
-    corner_z = None
-    if len(pts) >= 4:
-        tl, tr, br, bl = _sort_corners(pts[:4])
-        corners = {}
-        for name, (px, py) in (("top-left", tl), ("top-right", tr),
-                               ("bottom-right", br), ("bottom-left", bl)):
-            d = cam.sample_depth(int(px), int(py))
-            if d > 0:
-                corners[name] = pose_z - d + CAM_TIP_OFFSET_MM + DRAW_SURFACE_GAP_MM
-        if len(corners) == 4:
-            corner_z = {}
-            for i in range(rows):
-                for j in range(cols):
-                    lv = i / (rows - 1) if rows > 1 else 0.0
-                    lu = j / (cols - 1) if cols > 1 else 0.0
-                    corner_z[i][j] = bilinear_cell(
-                        lu, lv,
-                        [0, 0, corners["top-left"]],
-                        [0, 0, corners["top-right"]],
-                        [0, 0, corners["bottom-left"]],
-                        [0, 0, corners["bottom-right"]])[2]
-
     depth = state.last_center_depth
-    if corner_z is None:
-        if not depth or depth <= 0:
-            return {"ok": False,
-                    "error": "no depth reading yet — mark the object on the image first"}
-        flat_z = pose_z - depth + CAM_TIP_OFFSET_MM + DRAW_SURFACE_GAP_MM
-        for i in range(rows):
-            for j in range(cols):
-                p = state.grid_points[i][j]
-                p[2], p[3], p[4], p[5] = flat_z, Rx, Ry, Rz
-        surface_z = flat_z
-        basis = f"centre depth {depth:.1f}"
-    else:
-        for i in range(rows):
-            for j in range(cols):
-                p = state.grid_points[i][j]
-                p[2], p[3], p[4], p[5] = corner_z[i][j], Rx, Ry, Rz
-        zs = [corner_z[i][j] for i in range(rows) for j in range(cols)]
-        surface_z = sum(zs) / len(zs)
-        basis = "4 corner depths"
-
+    if not depth or depth <= 0:
+        return {"ok": False,
+                "error": "no depth reading yet — mark the object on the image first"}
+    robot.ensure_frame()
+    _, _, pose_z, Rx, Ry, Rz = robot.get_pose()
+    surface_z = pose_z - depth + CAM_TIP_OFFSET_MM + DRAW_SURFACE_GAP_MM
+    for i in range(state.grid_rows):
+        for j in range(state.grid_cols):
+            p = state.grid_points[i][j]
+            p[2], p[3], p[4], p[5] = surface_z, Rx, Ry, Rz
     state.status = (f"grid Z -> measured surface {surface_z:.1f}mm "
-                     f"(pose {pose_z:.1f}, {basis} + "
+                     f"(pose {pose_z:.1f} - depth {depth:.1f} + "
                      f"{CAM_TIP_OFFSET_MM:.1f} + {DRAW_SURFACE_GAP_MM:.1f})")
-    _log_user_event(request, "draw", "grid_surfacez", f"z={surface_z:.1f} depth={depth}")
+    _log_user_event(request, "draw", "grid_surfacez", f"z={surface_z:.1f} depth={depth:.1f}")
     return {"ok": True, "z": surface_z, "pose_z": pose_z, "depth": depth,
-            "basis": basis,
-            "z_min": min(corner_z[i][j] for i in range(rows) for j in range(cols))
-                     if corner_z else surface_z,
-            "z_max": max(corner_z[i][j] for i in range(rows) for j in range(cols))
-                     if corner_z else surface_z,
             "tip_offset": CAM_TIP_OFFSET_MM, "gap": DRAW_SURFACE_GAP_MM,
             "grid_points": state.grid_points}
 
