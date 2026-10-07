@@ -436,7 +436,9 @@ loader.load('models/Link6_S.dae', (c) => {
                 }
             }
         });
-        if (best) {
+        if (TOOL_TIP_MEASURED) {
+            gizmoTip.position.fromArray(TOOL_TIP_MEASURED);
+        } else if (best) {
             gizmoTip.position.copy(best);
         }
     } catch (e) { /* ignore */ }
