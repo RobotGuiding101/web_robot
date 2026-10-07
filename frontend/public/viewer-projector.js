@@ -9,8 +9,13 @@ link6.add(endEffector);
 // robot's TCP reference (endEffector) must stay at link6's origin:
 // shifting endEffector also moves the reported Dobot X/Y/Z, the
 // MODEL_TO_ROBOT calibration and cam1's mount (projectorMount child).
+// Tool tip offset in link6's local frame (metres), measured from tool 2.
+// viewer-boot.js derives the tip from model geometry only when this is
+// null. Reported robot-frame tip = Rz(180) of this value.
+const TOOL_TIP_MEASURED = [0.098626, 0.010095, 0.070022];
 const gizmoTip = new THREE.Group();
 gizmoTip.position.set(0.0899, 0.0077, 0.0686);
+if (TOOL_TIP_MEASURED) gizmoTip.position.fromArray(TOOL_TIP_MEASURED);
 endEffector.add(gizmoTip);
 
 const CAM_MOUNT_POS = new THREE.Vector3(0.061, 0.05, -0.017);
