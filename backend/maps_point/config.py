@@ -248,10 +248,12 @@ _z_surface_env = os.environ.get("Z_SURFACE", "").strip()
 # workpiece. The touch-off datum in control_robot's z_cam_calib JSON is NOT
 # this value (it was measured on a calibration tag, not the drawing surface).
 Z_SURFACE = float(_z_surface_env) if _z_surface_env else None
-# Live surface estimate (grid/surfacez): surface_Z = pose_Z - depth + these.
-# CAM_TIP_OFFSET_MM is how far the D455 sits beyond the pen tip along the tool
-# axis (~1.5mm from the 2026-06-30 z_cam_calib intercept). DRAW_SURFACE_GAP_MM
-# keeps the pen a hair ABOVE the measured surface - safer than nicking it.
+# Grid Z from live depth: Z = pose_Z - depth + CAM_TIP_OFFSET_MM + gap. depth
+# comes from the D455, which is NOT at the pen tip, so this must be the tip's
+# drop BELOW the camera along the tool axis — positive when the pen reaches
+# further down. The 1.5mm default came from the z_cam_calib intercept and only
+# holds if the camera sits level with the tip. Measure: (pose_Z while hovering
+# minus depth) minus (pose_Z with the pen touching).
 CAM_TIP_OFFSET_MM = float(os.environ.get("CAM_TIP_OFFSET_MM", "1.5"))
 DRAW_SURFACE_GAP_MM = float(os.environ.get("DRAW_SURFACE_GAP_MM", "2.0"))
 
