@@ -31,7 +31,7 @@ import state_store
 from maps_point.config import (ROBOT_IP, ROBOT_MODE_LABELS,
                                DRAW_GRID_MAX_ROWS, DRAW_GRID_MAX_COLS,
                                DRAW_MIN_GRID_SPAN_MM, Z_SURFACE,
-                               CAM_TIP_OFFSET_MM, DRAW_SURFACE_GAP_MM, CAM_TO_TIP_MM,
+                               CAM_TIP_OFFSET_MM, DRAW_SURFACE_GAP_MM,
                                DRAW_LIFT_MM, MIN_DEPTH_MM)
 from maps_point.logs import log, server_ring, robot_ring
 from maps_point.robot import Robot, RobotMoveError
@@ -1492,7 +1492,7 @@ def api_grid_autofill(request: Request):
             return {"ok": False,
                     "error": f"no depth reading at the {name} point ({px},{py}) — "
                              f"re-mark it on the object surface"}
-        surface_z = Z - CAM_TO_TIP_MM - depth + CAM_TIP_OFFSET_MM + DRAW_SURFACE_GAP_MM
+        surface_z = Z - depth + CAM_TIP_OFFSET_MM + DRAW_SURFACE_GAP_MM
         corners[name] = [xy[0], xy[1], surface_z, Rx, Ry, Rz]
 
     rows, cols = state.grid_rows, state.grid_cols
@@ -1561,18 +1561,16 @@ def api_grid_surfacez(request: Request):
                 "error": "no depth reading yet — mark the object on the image first"}
     robot.ensure_frame()
     _, _, pose_z, Rx, Ry, Rz = robot.get_pose()
-    surface_z = pose_z - CAM_TO_TIP_MM - depth + CAM_TIP_OFFSET_MM + DRAW_SURFACE_GAP_MM
+    surface_z = pose_z - depth + CAM_TIP_OFFSET_MM + DRAW_SURFACE_GAP_MM
     for i in range(state.grid_rows):
         for j in range(state.grid_cols):
             p = state.grid_points[i][j]
             p[2], p[3], p[4], p[5] = surface_z, Rx, Ry, Rz
     state.status = (f"grid Z -> measured surface {surface_z:.1f}mm "
-                     f"(pose {pose_z:.1f} - tip {CAM_TO_TIP_MM:.1f} "
-                     f"- depth {depth:.1f} + "
+                     f"(pose {pose_z:.1f} - depth {depth:.1f} + "
                      f"{CAM_TIP_OFFSET_MM:.1f} + {DRAW_SURFACE_GAP_MM:.1f})")
     _log_user_event(request, "draw", "grid_surfacez", f"z={surface_z:.1f} depth={depth:.1f}")
     return {"ok": True, "z": surface_z, "pose_z": pose_z, "depth": depth,
-            "cam_to_tip_mm": CAM_TO_TIP_MM,
             "tip_offset": CAM_TIP_OFFSET_MM, "gap": DRAW_SURFACE_GAP_MM,
             "grid_points": state.grid_points}
 

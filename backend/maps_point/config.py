@@ -254,13 +254,7 @@ Z_SURFACE = float(_z_surface_env) if _z_surface_env else None
 # keeps the pen a hair ABOVE the measured surface - safer than nicking it.
 CAM_TIP_OFFSET_MM = float(os.environ.get("CAM_TIP_OFFSET_MM", "1.5"))
 DRAW_SURFACE_GAP_MM = float(os.environ.get("DRAW_SURFACE_GAP_MM", "2.0"))
-# Flange (what GetPose reports) to pen tip along the tool axis, squared to the
-# surface. "pose_Z - depth" lands on the surface only if the D455 sat at the
-# flange; it rides in front of the pen, so the grid came out ~one tool length
-# too high. Positive when the tip sits below the flange. To measure: take the
-# pose Z difference between hovering square to the surface and pen-on-surface.
-# Unmeasured (0.0) keeps the previous behaviour.
-CAM_TO_TIP_MM = float(os.environ.get("CAM_TO_TIP_MM", "0.0"))
+
 HOME_RX = float(os.environ.get("HOME_RX", "0.0"))
 HOME_RY = float(os.environ.get("HOME_RY", "0.0"))
 HOME_RZ = float(os.environ.get("HOME_RZ", "0.0"))
