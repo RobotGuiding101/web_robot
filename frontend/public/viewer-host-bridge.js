@@ -41,6 +41,23 @@ function createGhostTarget() {
 
         // Clone only the visible robot meshes. Do NOT clone the
         // robot hierarchy, gizmos, cameras, projector or hit helpers.
+        let p = child;
+        let isCameraOrHelper = false;
+        while (p && p !== robotBase) {
+            if ((typeof endEffector !== 'undefined' && p === endEffector) ||
+                (typeof projectorMount !== 'undefined' && p === projectorMount) ||
+                (typeof cam1Marker !== 'undefined' && p === cam1Marker)) {
+                isCameraOrHelper = true;
+                break;
+            }
+            if (/cam|projector|gizmo|helper/i.test(p.name || '')) {
+                isCameraOrHelper = true;
+                break;
+            }
+            p = p.parent;
+        }
+        if (isCameraOrHelper) return;
+
         const ghostMesh = child.clone(false);
         ghostMesh.name = 'Ghost_' + (child.name || 'Mesh');
 
