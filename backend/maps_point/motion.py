@@ -21,11 +21,16 @@ def cam_xy_to_robot(du: float, dv: float, depth: float, fx: float, fy: float) ->
     return dx, dy
 
 
-def pixel_to_world_xy(cam: Camera, x_px: float, y_px: float, origin_xy: tuple):
+def pixel_to_world_xy(cam: Camera, x_px: float, y_px: float, origin_xy: tuple,
+                      depth: float = None):
     """Pixel → robot-frame XY using the depth at that pixel, relative to
     `origin_xy` (the robot's X,Y when the frame was captured). No motion —
-    returns (tX, tY), or None if depth/intrinsics aren't available."""
-    depth = cam.sample_depth(int(x_px), int(y_px))
+    returns (tX, tY), or None if depth/intrinsics aren't available.
+
+    `depth` overrides the reading for this call. Callers mapping a whole set
+    of pixels pass one shared value so every point is scaled identically."""
+    if depth is None:
+        depth = cam.sample_depth(int(x_px), int(y_px))
     if depth <= 0:
         return None
     intr = cam.intrinsics
