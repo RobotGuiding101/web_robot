@@ -82,6 +82,17 @@ let tipMinZ = null;
       const v = parseFloat(el.value);
       tipMinZ = Number.isFinite(v) ? v / 1000 : null;
     });
+    const snap = document.getElementById('tip-min-z-from-cam2');
+    if (snap) {
+      snap.addEventListener('click', () => {
+        const p = new THREE.Vector3();
+        gizmoTip.getWorldPosition(p);
+        const z = sampleCam2SurfaceZ(p.x, p.y);
+        if (z === null) { el.value = ''; tipMinZ = null; return; }
+        el.value = Math.round(z * 1000);
+        tipMinZ = z;
+      });
+    }
   }
 })();
 
