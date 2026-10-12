@@ -21,13 +21,7 @@ MOVE_SPEED = int(os.environ.get("Z_CALIB_SPEED", "10"))
 CAM_SERIAL     = os.environ.get("DEPTH_CAM_SERIAL", "")
 CAM_X_SIGN     = int(os.environ.get("CAM_X_SIGN", "1"))
 CAM_Y_SIGN     = int(os.environ.get("CAM_Y_SIGN", "1"))
-# Depth gate for a valid reading; sample_depth and region-grow reject anything
-# below 0.8x this, so it MUST sit under the closest surface the camera sees.
-# At 330 the gate was 264mm while the workpiece sits ~186mm, so every
-# workpiece pixel was discarded and only background survived — auto-fill then
-# read ~684mm and returned a grid 3.7x too large (2026-10-12: span 691.9 vs
-# 188.0 by hand).
-MIN_DEPTH_MM   = float(os.environ.get("MIN_DEPTH_MM", "200.0"))
+MIN_DEPTH_MM   = float(os.environ.get("MIN_DEPTH_MM", "330.0"))
 DEPTH_N_FRAMES = int(os.environ.get("DEPTH_N_FRAMES", "30"))
 DEPTH_ROI      = int(os.environ.get("DEPTH_ROI", "15"))
 # D455 inter-camera hardware sync (needs the physical sync cable): 0 off,
