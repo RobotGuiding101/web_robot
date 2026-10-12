@@ -71,6 +71,20 @@ envTex.dispose();
 pmrem.dispose();
 
 // Grid + soft shadow catcher
+// Floor the tool tip may not go below, in metres (robot Z). null = no limit.
+// Keep the tip on/above the workpiece so IK cannot drive it through the table.
+let tipMinZ = null;
+(function initTipMinZ() {
+  const el = document.getElementById('tip-min-z');
+  if (el) {
+    tipMinZ = parseFloat(el.value) / 1000;
+    el.addEventListener('input', () => {
+      const v = parseFloat(el.value);
+      tipMinZ = Number.isFinite(v) ? v / 1000 : null;
+    });
+  }
+})();
+
 const gridHelper = new THREE.GridHelper(3, 15, 0xbbbbbb, 0xdddddd);
 scene.add(gridHelper);
 const axesHelper = new THREE.AxesHelper(0.4);
