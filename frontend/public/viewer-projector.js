@@ -18,7 +18,7 @@ gizmoTip.position.set(0.0899, 0.0077, 0.0686);
 if (TOOL_TIP_MEASURED) gizmoTip.position.fromArray(TOOL_TIP_MEASURED);
 endEffector.add(gizmoTip);
 
-const CAM_MOUNT_POS = new THREE.Vector3(0.061, 0.05, -0.017);
+const CAM_MOUNT_POS = new THREE.Vector3(0.085, 0.049, -0.011);
 const CAM_MOUNT_ROT = new THREE.Euler(-178 * Math.PI / 180, 0, 180 * Math.PI / 180);
 const PROJ_ROLL = Math.PI / 2;
 const projRollMat = new THREE.Matrix4().makeRotationZ(PROJ_ROLL);
