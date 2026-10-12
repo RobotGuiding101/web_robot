@@ -63,6 +63,9 @@ function _ccdStep(seg, axis, min, max, weight, target, TOLERANCE, DAMPING) {
 function solveIK(targetPos, iterations = 35) {
     // Solve using J1..J4. J5 and J6 remain fixed during IK Move XYZ.
     // J4 and J5 are rotated separately in 'Wrist J4/J5' mode (shortcut E).
+    // Clamp first: the tip must not be asked to go below the working floor,
+    // or CCD happily drives it through the workpiece and the robot follows.
+    if (tipMinZ !== null) targetPos.z = Math.max(targetPos.z, tipMinZ);
     const IK_ARM_JOINTS = 4; // J1 (0) through J4 (3)
     const ITERATIONS = iterations;
     const TOLERANCE = 0.0015;
