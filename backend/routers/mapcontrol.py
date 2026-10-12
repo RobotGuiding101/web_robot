@@ -1493,18 +1493,28 @@ def api_grid_autofill(request: Request):
     robot.ensure_frame()
     X, Y, Z, Rx, Ry, Rz = robot.get_pose()
     tl, tr, br, bl = _sort_corners(pts[:4])
+    ordered = (("top-left", tl), ("top-right", tr),
+               ("bottom-right", br), ("bottom-left", bl))
+    samples = []
+    for name, (px, py) in ordered:
+        d = cam.sample_depth(int(px), int(py))
+        if d <= 0:
+            return {"ok": False,
+                    "error": f"no depth reading at the {name} point ({px},{py}) — "
+                             f"re-mark it on the object surface"}
+        samples.append(d)
+    # One depth for all four corners: pixel_to_world_xy scales XY by depth, so
+    # a per-corner value scales each corner differently and turns a square into
+    # a trapezoid whenever the reading wobbles or leaks onto the background.
+    # The median keeps the shape faithful; absolute size is still whatever the
+    # depth says it is.
+    depth = sorted(samples)[len(samples) // 2]
     corners = {}
-    for name, (px, py) in (("top-left", tl), ("top-right", tr),
-                           ("bottom-right", br), ("bottom-left", bl)):
-        xy = pixel_to_world_xy(cam, px, py, (X, Y))
+    for name, (px, py) in ordered:
+        xy = pixel_to_world_xy(cam, px, py, (X, Y), depth)
         if xy is None:
             return {"ok": False,
                     "error": f"no depth at the {name} point ({px},{py}) — "
-                             f"re-mark it on the object surface"}
-        depth = cam.sample_depth(int(px), int(py))
-        if depth <= 0:
-            return {"ok": False,
-                    "error": f"no depth reading at the {name} point ({px},{py}) — "
                              f"re-mark it on the object surface"}
         surface_z = Z - _vertical_depth(depth, Rx, Ry) \
                     + CAM_TIP_OFFSET_MM + DRAW_SURFACE_GAP_MM
