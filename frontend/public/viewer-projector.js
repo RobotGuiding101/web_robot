@@ -509,6 +509,28 @@ function readDepthGrid2() {
         .catch(() => { })
         .finally(() => { setTimeout(readDepthGrid2, 100); });
 }
+
+/**
+ * Surface Z (metres, robot frame) under the tool tip, from cam2's depth
+ * grid. Median, not mean, so stray readings at the workpiece edge cannot
+ * drag the floor down. null = cam2 has no usable data here; callers must
+ * then leave any existing floor alone.
+ */
+function sampleCam2SurfaceZ(tipX, tipY, radius = 0.09) {
+    cam2Mount.updateWorldMatrix(true, false);
+    const zs = [];
+    const p = new THREE.Vector3();
+    for (let k = 0; k < mesh2Valid.length; k++) {
+        if (!mesh2Valid[k]) continue;
+        p.set(mesh2Pos[k * 3], mesh2Pos[k * 3 + 1], mesh2Pos[k * 3 + 2])
+         .applyMatrix4(cam2Mount.matrixWorld);
+        if (Math.hypot(p.x - tipX, p.y - tipY) > radius) continue;
+        zs.push(p.z);
+    }
+    if (zs.length < 30) return null;
+    zs.sort((a, b) => a - b);
+    return zs[Math.floor(zs.length / 2)];
+}
 readDepthGrid2();
 
 const cam2MarkerMat = new THREE.MeshStandardMaterial({
