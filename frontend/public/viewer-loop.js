@@ -57,6 +57,15 @@ function animate() {
         solveIK(_ikTarget, 8);
     }
 
+    // Hide the camera helpers and depth clouds while the arm is being
+    // dragged. They are fixed in world space, so the moving model looks like
+    // it drives straight through them and the arm is hard to read.
+    const _helpersHidden = isDragging || !!activeDragJoint;
+    for (const o of [depthPoints, depthMesh, cam1Marker,
+                     cam2Points, depthMesh2, cam2Marker]) {
+        if (o) o.visible = !_helpersHidden;
+    }
+
     // While dragging (get-pos OFF) the real robot has not moved, so pin
     // cam1's mount to its current world transform — otherwise the camera
     // marker/mesh swing around with the dragged model.
