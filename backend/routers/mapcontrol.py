@@ -1456,6 +1456,20 @@ def api_grid_mark(request: Request, body: GridMarkBody):
     return {"ok": True, "message": msg, "grid_points": state.grid_points}
 
 
+def _vertical_depth(depth: float, Rx: float, Ry: float) -> float:
+    """Depth as measured along the camera's optical axis, converted to the
+    drop in robot Z.
+
+    RealSense reports distance along its own viewing axis. Once align() has
+    squared the tool to the workpiece that axis is the surface normal, which
+    is only parallel to robot Z when the workpiece is level with the table —
+    on a raked workpiece the two differ, and subtracting the raw depth
+    would place the grid that much too high. The tool axis' Z component for
+    Dobot's ZYX Euler order is cos(Rx)*cos(Ry)."""
+    tilt = math.cos(math.radians(Rx)) * math.cos(math.radians(Ry))
+    return depth * abs(tilt)
+
+
 @router.post("/grid/autofill")
 def api_grid_autofill(request: Request):
     """Fill the whole grid from the 4 image points already marked on the
@@ -1492,7 +1506,8 @@ def api_grid_autofill(request: Request):
             return {"ok": False,
                     "error": f"no depth reading at the {name} point ({px},{py}) — "
                              f"re-mark it on the object surface"}
-        surface_z = Z - depth + CAM_TIP_OFFSET_MM + DRAW_SURFACE_GAP_MM
+        surface_z = Z - _vertical_depth(depth, Rx, Ry) \
+                    + CAM_TIP_OFFSET_MM + DRAW_SURFACE_GAP_MM
         corners[name] = [xy[0], xy[1], surface_z, Rx, Ry, Rz]
 
     rows, cols = state.grid_rows, state.grid_cols
@@ -1561,7 +1576,8 @@ def api_grid_surfacez(request: Request):
                 "error": "no depth reading yet — mark the object on the image first"}
     robot.ensure_frame()
     _, _, pose_z, Rx, Ry, Rz = robot.get_pose()
-    surface_z = pose_z - depth + CAM_TIP_OFFSET_MM + DRAW_SURFACE_GAP_MM
+    vert_depth = _vertical_depth(depth, Rx, Ry)
+    surface_z = pose_z - vert_depth + CAM_TIP_OFFSET_MM + DRAW_SURFACE_GAP_MM
     for i in range(state.grid_rows):
         for j in range(state.grid_cols):
             p = state.grid_points[i][j]
