@@ -605,7 +605,7 @@ async def ws_align(websocket: WebSocket, token: str = ""):
 
 # ── REST ──────────────────────────────────────────────────────────────────────
 class CaptureBody(BaseModel):
-    cam: int = 0
+    cam: int = 2
     label: str = ""
 
 
@@ -620,35 +620,24 @@ class SaveBody(BaseModel):
 
 @router.post("/capture", dependencies=_AUTH)
 def capture(request: Request, body: CaptureBody):
-    idxs = [body.cam] if body.cam in (1, 2) else [1, 2]
-    results = [_capture_one(idx, body.label) for idx in idxs]
-    ok = next((r for r in results if r["ok"]), None)
-    if ok is not None:
-        return {**ok, "captures": results}
-    return {"ok": False, "error": results[0].get("error", "capture failed"),
-            "captures": results}
-
-
-def _capture_one(idx: int, label: str):
+    idx = 2 if body.cam == 2 else 1
     pos, col = _grab_cloud(idx, VIEW_POINT_CAP)
     if pos is None:
-        return {"ok": False, "cam": idx, "error": f"camera {idx} cloud not ready"}
+        return {"ok": False, "error": f"camera {idx} cloud not ready"}
     pose = _pose_for(idx)
     T = _view_transform(idx, pose)
     xyz = _transform_cloud(T, pos)
     _map_upsert(xyz, col)
     with _lock:
         if len(_views) >= MAX_VIEWS:
-            return {"ok": False, "cam": idx,
-                    "error": f"view limit ({MAX_VIEWS}) reached"}
+            return {"ok": False, "error": f"view limit ({MAX_VIEWS}) reached"}
         vid = len(_views) + 1
         _views.append({
-            "id": vid, "cam": idx, "label": label or f"cam{idx}-{vid}",
+            "id": vid, "cam": idx, "label": body.label or f"cam{idx}-{vid}",
             "ts": time.time(), "pose": pose, "n": int(xyz.shape[0]),
             "xyz": xyz.astype(np.float32), "rgb": col,
         })
-    return {"ok": True, "cam": idx, "id": vid, "n": int(xyz.shape[0]),
-            "views": len(_views)}
+    return {"ok": True, "id": vid, "n": int(xyz.shape[0]), "views": len(_views)}
 
 
 @router.get("/views", dependencies=_AUTH)
