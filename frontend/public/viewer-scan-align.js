@@ -81,15 +81,23 @@ document.getElementById('chk-scanlive')?.addEventListener('change', (e) => {
 
 async function scanCapture(cam) {
     try {
-        await fetch('/api/scan/capture', {
+        const r = await fetch('/api/scan/capture', {
             method: 'POST', headers: { ...scanAuth(), 'Content-Type': 'application/json' },
             body: JSON.stringify({ cam }),
         });
+        if (cam) { scanRefreshCount(); return; }
+        const d = await r.json().catch(() => null);
+        const failed = (d?.captures || []).filter((c) => !c.ok);
+        if (failed.length) {
+            const el = document.getElementById('scan-count');
+            if (el) {
+                el.textContent = `snap: cam${failed.map((c) => c.cam).join(', ')} ไม่ได้`;
+            }
+        }
         scanRefreshCount();
     } catch { /* ignore */ }
 }
-document.getElementById('btn-cap1')?.addEventListener('click', () => scanCapture(1));
-document.getElementById('btn-cap2')?.addEventListener('click', () => scanCapture(2));
+document.getElementById('btn-cap')?.addEventListener('click', () => scanCapture(0));
 
 document.getElementById('btn-fuse')?.addEventListener('click', async () => {
     try {
