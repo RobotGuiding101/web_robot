@@ -6,6 +6,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
+from maps_point.config import HOME_X, HOME_Y, HOME_Z, HOME_RX, HOME_RY, HOME_RZ
 from models import User, UserSetting
 from routers.auth import get_current_user
 
@@ -31,12 +32,12 @@ class SettingUpdate(BaseModel):
 DEFAULTS: dict[str, str] = {
     "robot_ip": "192.168.10.110",
     "move_speed": "10",
-    "home_x": "0.0",
-    "home_y": "0.0",
-    "home_z": "0.0",
-    "home_rx": "0.0",
-    "home_ry": "0.0",
-    "home_rz": "0.0",
+    "home_x": str(HOME_X),
+    "home_y": str(HOME_Y),
+    "home_z": str(HOME_Z),
+    "home_rx": str(HOME_RX),
+    "home_ry": str(HOME_RY),
+    "home_rz": str(HOME_RZ),
     "cam_serial": "",
     "cam_serial2": "",
     "cam_devices": "[]",
