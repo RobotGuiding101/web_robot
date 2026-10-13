@@ -12,6 +12,7 @@ import numpy as np
 
 from routers.mapcontrol import cam, state, _mjpeg_generator, _STREAM_HEADERS, _colorize_depth, _log_user_event
 from maps_point.camera import list_devices, Camera
+from maps_point.recording import set_cam2_resolver
 from maps_point.render import draw_overlay
 
 router = APIRouter()
@@ -66,6 +67,9 @@ def get_cam2() -> Camera:
         if cam2 is None:
             cam2 = Camera()
         return cam2
+
+
+set_cam2_resolver(get_cam2)
 
 
 def _cam2_pick_serial(target_serial: Optional[str] = None) -> Optional[str]:
