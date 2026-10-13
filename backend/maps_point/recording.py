@@ -20,29 +20,6 @@ from .logs import log as _global_log
 
 RECORDINGS_DIR = Path(__file__).parent / "recordings"
 
-_cam2_resolver = None
-
-
-def set_cam2_resolver(fn):
-    """Register a callable returning the secondary Camera, or None.
-
-    maps_point/ is the hardware layer and must not import routers/, so the
-    router that owns cam2 hands it in here instead. The resolver must only
-    observe - never start a camera - because recording should not bring up
-    hardware the operator never asked for."""
-    global _cam2_resolver
-    _cam2_resolver = fn
-
-
-def _cam2_for_step():
-    if _cam2_resolver is None:
-        return None
-    try:
-        cam = _cam2_resolver()
-    except Exception:
-        return None
-    return cam if cam is not None and cam._running else None
-
 
 class AlignRecorder:
     def __init__(self):
@@ -67,10 +44,6 @@ class AlignRecorder:
         numbers mattered at this step. label is a short tag, e.g.
         'phase0', 'probe_rx_before', 'step003_ry'.
 
-        When a secondary camera is running, its frame is written next to the
-        primary as <step>_<label>_cam2.jpg (no overlay - the overlay describes
-        the primary's marked points, not that view).
-
         Also records the robot's actual pose (X,Y,Z,Rx,Ry,Rz) and, if the
         D455's IMU is available, the raw accelerometer reading — added
         2026-07-27g because a diagnostic session tried to answer "which
@@ -86,12 +59,6 @@ class AlignRecorder:
         if frame is not None:
             img = draw_overlay(frame.copy(), state)
             cv2.imwrite(str(self.dir / f"{self.step:03d}_{label}.jpg"), img)
-        c2 = _cam2_for_step()
-        if c2 is not None:
-            cf2 = c2.get_latest_color()
-            if cf2 is not None:
-                cv2.imwrite(str(self.dir / f"{self.step:03d}_{label}_cam2.jpg"),
-                            cf2.copy())
         record = {
             "step": self.step,
             "label": label,
