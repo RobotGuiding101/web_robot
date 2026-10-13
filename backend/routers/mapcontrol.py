@@ -32,7 +32,9 @@ from maps_point.config import (ROBOT_IP, ROBOT_MODE_LABELS,
                                DRAW_GRID_MAX_ROWS, DRAW_GRID_MAX_COLS,
                                DRAW_MIN_GRID_SPAN_MM, Z_SURFACE,
                                CAM_TIP_OFFSET_MM, DRAW_SURFACE_GAP_MM,
-                               DRAW_LIFT_MM, MIN_DEPTH_MM)
+                               DRAW_LIFT_MM, MIN_DEPTH_MM,
+                               HOME_X, HOME_Y, HOME_Z,
+                               HOME_RX, HOME_RY, HOME_RZ)
 from maps_point.logs import log, server_ring, robot_ring
 from maps_point.robot import Robot, RobotMoveError
 from maps_point.camera import Camera
@@ -1105,6 +1107,8 @@ def api_emergency(request: Request):
 
 
 _HOME_KEYS = ("home_x", "home_y", "home_z", "home_rx", "home_ry", "home_rz")
+_HOME_ENV = {"home_x": HOME_X, "home_y": HOME_Y, "home_z": HOME_Z,
+             "home_rx": HOME_RX, "home_ry": HOME_RY, "home_rz": HOME_RZ}
 
 
 async def _user_home_pose(db: AsyncSession, user_id: str):
@@ -1116,10 +1120,11 @@ async def _user_home_pose(db: AsyncSession, user_id: str):
     )
     saved = {s.key: s.value for s in rows.scalars().all()}
     try:
-        pose = [float(saved.get(k, "0.0")) for k in _HOME_KEYS]
+        pose = tuple(float(saved[k]) if k in saved else _HOME_ENV[k]
+                     for k in _HOME_KEYS)
     except (TypeError, ValueError):
         return None
-    return tuple(pose) if any(pose[:3]) else None
+    return pose if any(pose[:3]) else None
 
 
 @router.post("/home")
