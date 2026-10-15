@@ -12,6 +12,7 @@ __pycache__/
 # Tooling / editor
 .omo/
 .vscode/
+.playwright-mcp/
 
 # Node
 node_modules/

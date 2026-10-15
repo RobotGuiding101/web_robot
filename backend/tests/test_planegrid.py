@@ -1,9 +1,11 @@
-"""Unit tests for maps_point.planegrid — pure geometry / interpolation math.
+﻿"""Unit tests for maps_point.planegrid â€” pure geometry / interpolation math.
 
 These functions are the safest, highest-value things to unit test: no camera,
-no robot, no sockets — just arithmetic on taught poses.
+no robot, no sockets â€” just arithmetic on taught poses.
 """
 import math
+import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -78,7 +80,7 @@ class TestValidateGrid:
         assert any("no size" in w for w in res["warnings"])
 
     def test_non_coplanar_warns_on_rmse(self):
-        # a 100mm square with one corner lifted 100mm — a plane can't absorb it
+        # a 100mm square with one corner lifted 100mm â€” a plane can't absorb it
         warped = [[[0.0, 0.0, 0.0, 0, 0, 0], [100.0, 0.0, 0.0, 0, 0, 0]],
                   [[0.0, 100.0, 0.0, 0, 0, 0], [100.0, 100.0, 100.0, 0, 0, 0]]]
         res = pg.validate_grid(warped, 2, 2)
@@ -158,3 +160,913 @@ class TestSimplifyStroke:
         pts = [(i / 500.0, 0.0) for i in range(501)]
         out = pg.simplify_stroke(pts)
         assert len(out) >= 2 and len(out) <= DRAW_MAX_POINTS
+
+    def test_disabling_simplify_replays_every_raw_sample(self, monkeypatch):
+        pts = [(math.cos(t / 40.0) * 0.4 + 0.5, math.sin(t / 40.0) * 0.4 + 0.5)
+               for t in range(400)]
+        with_dp = pg.simplify_stroke(pts)
+        monkeypatch.setattr(pg, "DRAW_SIMPLIFY_ENABLED", False)
+        raw = pg.simplify_stroke(pts)
+        assert raw == [(float(u), float(v)) for u, v in pts]
+        assert len(raw) > DRAW_MAX_POINTS > len(with_dp)
+
+    def test_disabling_simplify_uncaps_shapes_that_never_ran_douglas_peucker(self, monkeypatch):
+        pts = [(i / 900.0, (i % 11) / 60.0) for i in range(301)]
+        monkeypatch.setattr(pg, "DRAW_SIMPLIFY_ENABLED", False)
+        assert pg._stroke_path({"tool": "rect", "points": pts}) == \
+            [(float(u), float(v)) for u, v in pts]
+
+    def test_disabling_simplify_keeps_both_endpoints(self, monkeypatch):
+        pts = [(i / 300.0, math.sin(i / 30.0) * 0.3 + 0.5) for i in range(301)]
+        monkeypatch.setattr(pg, "DRAW_SIMPLIFY_ENABLED", False)
+        out = pg.simplify_stroke(pts)
+        assert out[0] == pts[0] and out[-1] == pts[-1]
+
+    def test_draw_stats_reports_which_reduction_ran(self, monkeypatch):
+        pts = [(i / 200.0, 0.0) for i in range(201)]
+        assert pg.draw_stats([{"tool": "pen", "points": pts}],
+                             GRID2, 2, 2, 5.0)["simplify_enabled"] is True
+        monkeypatch.setattr(pg, "DRAW_SIMPLIFY_ENABLED", False)
+        off = pg.draw_stats([{"tool": "pen", "points": pts}], GRID2, 2, 2, 5.0)
+        assert off["simplify_enabled"] is False
+        assert off["points_before"] == off["points_after"] == len(pts)
+
+    def test_download_payload_carries_the_reduction_settings(self, monkeypatch):
+        pts = [(i / 200.0, 0.0) for i in range(201)]
+        monkeypatch.setattr(pg, "DRAW_SIMPLIFY_ENABLED", False)
+        stats = pg.draw_stats([{"tool": "pen", "points": pts}], GRID2, 2, 2, 5.0)
+        payload = pg.build_test_report_payload(GRID2, 2, 2, True, [], stats,
+                                               "admin", "now")
+        execution = payload["sheet_09_drawing"]["execution"]
+        assert execution["simplify_enabled"] is False
+        assert execution["simplify_eps"] == pg.DRAW_SIMPLIFY_EPS
+        assert execution["max_points"] == pg.DRAW_MAX_POINTS
+
+
+class TestDrawStats:
+    """draw_stats feeds the experiment record's stroke/point-count columns, so
+    its totals must agree with the functions do_draw() actually replays."""
+
+    def test_counts_match_simplify_for_pen_stroke(self):
+        pts = [(i / 200.0, 0.0) for i in range(201)]
+        out = pg.draw_stats([{"tool": "pen", "points": pts}], GRID2, 2, 2, 5.0)
+        assert out["strokes"] == 1
+        assert out["points_before"] == 201
+        assert out["points_after"] == len(pg.simplify_stroke(pts))
+
+    def test_shape_stroke_is_not_simplified(self):
+        square = [(0.1, 0.1), (0.4, 0.1), (0.4, 0.4), (0.1, 0.4)]
+        out = pg.draw_stats([{"tool": "rect", "points": square}], GRID2, 2, 2, 5.0)
+        assert out["points_after"] == 4
+
+    def test_counts_points_that_fall_outside_the_taught_grid(self):
+        ring = [(0.5 + 0.6 * math.cos(t / 8.0), 0.5 + 0.6 * math.sin(t / 8.0))
+                for t in range(49)]
+        out = pg.draw_stats([{"tool": "circle", "points": ring}], GRID2, 2, 2, 5.0)
+        outside = [(u, v) for u, v in ring if not (0 <= u <= 1 and 0 <= v <= 1)]
+        assert outside
+        assert out["points_outside_grid"] == len(outside)
+        assert out["per_stroke"][0]["points_outside_grid"] == len(outside)
+
+    def test_a_stroke_inside_the_grid_reports_nothing_outside(self):
+        ring = [(0.5 + 0.2 * math.cos(t / 8.0), 0.5 + 0.2 * math.sin(t / 8.0))
+                for t in range(49)]
+        out = pg.draw_stats([{"tool": "circle", "points": ring}], GRID2, 2, 2, 5.0)
+        assert out["points_outside_grid"] == 0
+        assert "uv_outside_range" not in out["per_stroke"][0]
+
+    def test_reports_how_far_outside_the_grid_the_points_reach(self):
+        stroke = [{"tool": "pen", "points": [(0.1, 0.1), (-0.3, 0.5), (0.9, 1.4)]}]
+        entry = pg.draw_stats(stroke, GRID2, 2, 2, 5.0)["per_stroke"][0]
+        assert entry["points_outside_grid"] == 2
+        assert entry["uv_outside_range"]["u"] == [-0.3, 0.9]
+        assert entry["uv_outside_range"]["v"] == [0.5, 1.4]
+
+    def test_the_download_payload_carries_the_out_of_grid_count(self):
+        ring = [(0.5 + 0.4 * math.cos(t / 8.0), 0.5 + 0.4 * math.sin(t / 8.0))
+                for t in range(49)]
+        stats = pg.draw_stats([{"tool": "circle", "points": ring}], GRID2, 2, 2, 5.0)
+        payload = pg.build_test_report_payload(GRID2, 2, 2, True, [], stats,
+                                               "admin", "now")
+        assert payload["sheet_09_drawing"]["points_outside_grid"] \
+            == stats["points_outside_grid"]
+
+    def test_totals_sum_across_strokes(self):
+        a = [(i / 60.0, 0.0) for i in range(61)]
+        b = [(0.0, i / 60.0) for i in range(61)]
+        one_a = pg.draw_stats([{"tool": "pen", "points": a}], GRID2, 2, 2, 5.0)
+        one_b = pg.draw_stats([{"tool": "pen", "points": b}], GRID2, 2, 2, 5.0)
+        out = pg.draw_stats([{"tool": "pen", "points": a},
+                             {"tool": "pen", "points": b}], GRID2, 2, 2, 5.0)
+        assert out["strokes"] == 2
+        assert out["points_before"] == 122
+        assert out["points_after"] == one_a["points_after"] + one_b["points_after"]
+
+    def test_path_length_is_positive_for_a_real_stroke(self):
+        out = pg.draw_stats([{"tool": "line", "points": [(0.0, 0.0), (1.0, 1.0)]}],
+                            GRID2, 2, 2, 5.0)
+        assert out["path_length_mm"] > 0
+        assert out["waypoints"] >= 2
+
+    def test_single_stroke_has_no_lift_transition(self):
+        out = pg.draw_stats([{"tool": "line", "points": [(0.0, 0.0), (1.0, 0.0)]}],
+                            GRID2, 2, 2, 5.0)
+        assert out["lift_transitions"] == 0
+
+    def test_reports_execution_settings_from_config(self):
+        out = pg.draw_stats([{"tool": "line", "points": [(0.0, 0.0), (1.0, 0.0)]}],
+                            GRID2, 2, 2, 7.0)
+        assert out["motion_mode"] == pg.DRAW_MOTION_MODE
+        assert out["cp_ratio"] == pg.DRAW_CP_RATIO
+        assert out["lift_mm"] == 7.0
+
+
+CLOSED_RECT = [(0.1, 0.1), (0.4, 0.1), (0.4, 0.4), (0.1, 0.4), (0.1, 0.1)]
+
+
+class TestDrawStatsShapeDetail:
+    """The 2026-10-05 report showed five strokes with uv_start == uv_end and
+    nothing to say whether that meant five closed rectangles or five corrupt
+    records. These fields are what make the report self-verifying."""
+
+    def test_closed_rectangle_is_flagged_closed(self):
+        out = pg.draw_stats([{"tool": "rect", "points": CLOSED_RECT}], GRID2, 2, 2, 5.0)
+        assert out["per_stroke"][0]["closed"] is True
+
+    def test_open_stroke_is_not_flagged_closed(self):
+        out = pg.draw_stats([{"tool": "line", "points": [(0.0, 0.0), (1.0, 1.0)]}],
+                            GRID2, 2, 2, 5.0)
+        assert out["per_stroke"][0]["closed"] is False
+
+    def test_points_uv_lists_every_replayed_point(self):
+        out = pg.draw_stats([{"tool": "rect", "points": CLOSED_RECT}], GRID2, 2, 2, 5.0)
+        assert out["per_stroke"][0]["points_uv"] == [
+            [round(u, 4), round(v, 4)] for u, v in CLOSED_RECT]
+
+    def test_length_mm_is_the_closed_perimeter_not_the_diagonal(self):
+        out = pg.draw_stats([{"tool": "rect", "points": CLOSED_RECT}], GRID2, 2, 2, 5.0)
+        entry = out["per_stroke"][0]
+        # 3x3mm corners on a 10mm grid: four 3mm sides, and the duplicated
+        # closing vertex adds nothing because it coincides with the first.
+        assert entry["length_mm"] == pytest.approx(12.0, abs=0.01)
+        assert entry["span_mm"] == {"x": 3.0, "y": 3.0, "z": 0.0}
+
+    def test_drawn_length_excludes_the_lift_hops_that_travel_includes(self):
+        strokes = [{"tool": "rect", "points": CLOSED_RECT},
+                   {"tool": "rect", "points": [(0.6, 0.6), (0.9, 0.6),
+                                               (0.9, 0.9), (0.6, 0.9), (0.6, 0.6)]}]
+        out = pg.draw_stats(strokes, GRID2, 2, 2, 5.0)
+        assert out["drawn_path_length_mm"] < out["total_travel_mm"]
+        assert out["path_length_mm"] == out["total_travel_mm"]
+
+    def test_drawn_length_sums_the_per_stroke_lengths(self):
+        strokes = [{"tool": "rect", "points": CLOSED_RECT},
+                   {"tool": "rect", "points": [(0.6, 0.6), (0.9, 0.6),
+                                               (0.9, 0.9), (0.6, 0.9), (0.6, 0.6)]}]
+        out = pg.draw_stats(strokes, GRID2, 2, 2, 5.0)
+        assert out["drawn_path_length_mm"] == pytest.approx(
+            sum(s["length_mm"] for s in out["per_stroke"]), abs=0.02)
+
+    def test_tool_is_reported_as_sent_not_assumed(self):
+        out = pg.draw_stats([{"tool": "circle", "points": CLOSED_RECT}],
+                            GRID2, 2, 2, 5.0)
+        assert out["per_stroke"][0]["tool"] == "circle"
+
+    def test_empty_stroke_gets_no_geometry_keys(self):
+        out = pg.draw_stats([{"tool": "rect", "points": []}], GRID2, 2, 2, 5.0)
+        entry = out["per_stroke"][0]
+        assert entry["points_before"] == 0
+        assert "closed" not in entry and "length_mm" not in entry
+
+
+class TestStrokePath:
+    def test_rect_is_not_douglas_peuckered(self):
+        # The Draw page hardcoded tool:"pen" for every shape, which made
+        # this branch unreachable and let a 49-point circle reach the DP
+        # simplifier that _stroke_path() exists to route around.
+        circle = [(0.5 + 0.4 * math.cos(i * 2 * math.pi / 48),
+                   0.5 + 0.4 * math.sin(i * 2 * math.pi / 48)) for i in range(49)]
+        assert len(pg._stroke_path({"tool": "circle", "points": circle})) == 49
+
+    def test_pen_still_goes_through_simplify(self):
+        pts = [(i / 500.0, 0.0) for i in range(501)]
+        assert len(pg._stroke_path({"tool": "pen", "points": pts})) <= DRAW_MAX_POINTS
+
+
+class TestFinalStrokeUv:
+    def test_matches_the_stroke_that_produced_the_last_pose(self):
+        strokes = [{"tool": "rect", "points": CLOSED_RECT}]
+        poses = pg._assemble_strokes(strokes, GRID2, 2, 2, 5.0)
+        assert pg._final_stroke_uv(strokes, GRID2, 2, 2) == CLOSED_RECT[-1]
+        assert pg.grid_pose(*pg._final_stroke_uv(strokes, GRID2, 2, 2),
+                            GRID2, 2, 2)[:3] == poses[-1][:3]
+
+    def test_skips_a_trailing_stroke_with_no_points(self):
+        # _assemble_strokes() `continue`s past an empty stroke, so
+        # strokes[-1] is not necessarily the last contributor to poses.
+        strokes = [{"tool": "rect", "points": CLOSED_RECT},
+                   {"tool": "rect", "points": []}]
+        poses = pg._assemble_strokes(strokes, GRID2, 2, 2, 5.0)
+        assert pg._final_stroke_uv(strokes, GRID2, 2, 2) == CLOSED_RECT[-1]
+        assert pg.grid_pose(*pg._final_stroke_uv(strokes, GRID2, 2, 2),
+                            GRID2, 2, 2)[:3] == poses[-1][:3]
+
+    def test_returns_none_when_nothing_is_drawable(self):
+        assert pg._final_stroke_uv([{"tool": "rect", "points": []}], GRID2, 2, 2) is None
+
+
+class TestGridFingerprint:
+    def test_is_stable_for_the_same_grid(self):
+        assert pg.grid_fingerprint(GRID2) == pg.grid_fingerprint([list(r) for r in GRID2])
+
+    def test_survives_a_json_round_trip(self):
+        import json
+        revived = json.loads(json.dumps(GRID2))
+        assert pg.grid_fingerprint(revived) == pg.grid_fingerprint(GRID2)
+
+    def test_changes_when_the_grid_is_re_taught(self):
+        moved = [[list(P00), list(P10)], [list(P01), [11.0, 10.0, 0.0, 0, 0, 0]]]
+        assert pg.grid_fingerprint(moved) != pg.grid_fingerprint(GRID2)
+
+    def test_tolerates_sub_micron_float_noise(self):
+        nudged = [[list(P00), [10.0 + 1e-9, 0.0, 0.0, 0, 0, 0]],
+                  [list(P01), list(P11)]]
+        assert pg.grid_fingerprint(nudged) == pg.grid_fingerprint(GRID2)
+
+    def test_handles_unmarked_corners(self):
+        assert pg.grid_fingerprint([[P00, None], [None, P11]])
+
+
+class TestPoseReadIsPlausible:
+    def test_accepts_a_pose_on_the_grid(self):
+        assert pg.pose_read_is_plausible([5.0, 5.0, 0.0, 0, 0, 0], GRID2)
+
+    def test_accepts_a_large_but_real_error(self):
+        # Guards against garbage only â€” a 3mm deviation must never be dropped.
+        assert pg.pose_read_is_plausible([8.0, 5.0, 0.0, 0, 0, 0], GRID2)
+
+    def test_rejects_the_get_pose_failure_sentinel(self):
+        # robot.py:167 returns [0.0]*6 on ANY dashboard failure.
+        assert not pg.pose_read_is_plausible([0.0] * 6, GRID2)
+
+    def test_rejects_non_finite(self):
+        assert not pg.pose_read_is_plausible([float("nan"), 5.0, 0.0], GRID2)
+        assert not pg.pose_read_is_plausible([float("inf"), 5.0, 0.0], GRID2)
+
+    def test_rejects_a_pose_far_outside_the_taught_grid(self):
+        assert not pg.pose_read_is_plausible([1e6, 1e6, 1e6, 0, 0, 0], GRID2)
+
+    def test_rejects_empty_or_short_reads(self):
+        assert not pg.pose_read_is_plausible([], GRID2)
+        assert not pg.pose_read_is_plausible([1.0, 2.0], GRID2)
+
+    def test_rejects_when_nothing_has_been_taught(self):
+        assert not pg.pose_read_is_plausible([1.0, 1.0, 1.0], [[None, None], [None, None]])
+
+
+class TestReportMissingCodes:
+    def test_nothing_missing_is_empty(self):
+        fp = pg.grid_fingerprint(GRID2)
+        points = [{"grid_fingerprint": fp}]
+        assert pg.report_missing_codes(True, GRID2, points, {"strokes": 1}) == []
+
+    def test_flags_an_unmarked_grid(self):
+        assert "grid_not_marked" in pg.report_missing_codes(
+            False, GRID2, [{"grid_fingerprint": pg.grid_fingerprint(GRID2)}], {"s": 1})
+
+    def test_flags_no_test_points(self):
+        assert "no_test_points" in pg.report_missing_codes(True, GRID2, [], {"s": 1})
+
+    def test_flags_no_draw_stats(self):
+        fp = pg.grid_fingerprint(GRID2)
+        codes = pg.report_missing_codes(True, GRID2, [{"grid_fingerprint": fp}], {})
+        assert codes == ["no_draw_stats"]
+
+    def test_flags_a_grid_re_taught_after_measuring(self):
+        stale = {"grid_fingerprint": "deadbeef"}
+        codes = pg.report_missing_codes(True, GRID2, [stale], {"strokes": 1})
+        assert codes == ["grid_changed_since_test"]
+
+    def test_reports_every_gap_at_once(self):
+        codes = pg.report_missing_codes(False, GRID2, [], {})
+        assert set(codes) == {"grid_not_marked", "no_test_points", "no_draw_stats"}
+
+    def test_staleness_is_not_reported_when_draw_is_missing(self):
+        # Otherwise a fresh, untouched session would look like it had
+        # measured against a stale grid.
+        stale = {"grid_fingerprint": "deadbeef"}
+        assert pg.report_missing_codes(True, GRID2, [stale], {}) == ["no_draw_stats"]
+
+
+class TestTestAggregates:
+    """These four numbers are rows 40-44 of the Grid Mapping sheet, so a bug
+    here lands on the experiment form and nothing else would catch it."""
+
+    @staticmethod
+    def _point(ex, ey, ez):
+        return {"error": [ex, ey, ez]}
+
+    def test_no_points_reports_absence_rather_than_zero(self):
+        # The form must be able to tell "not measured" from "measured as
+        # perfect"; zeros here would read as a flawless result.
+        agg = pg.test_aggregates([])
+        assert agg["count"] == 0
+        for key in ("max_error_x", "max_error_y", "max_error_z",
+                    "mean_error_x", "mean_error_y", "mean_error_z",
+                    "mean_error", "rmse"):
+            assert agg[key] is None, key
+
+    def test_skips_rows_without_an_error_instead_of_counting_them_as_zero(self):
+        agg = pg.test_aggregates([{"u": 0.5, "v": 0.5}, self._point(1, 2, 3)])
+        assert agg["count"] == 1
+        assert agg["max_error_x"] == 1.0
+
+    def test_counting_a_partial_run_never_reports_zero(self):
+        empty = [{}, {"note": "aborted"}]
+        assert pg.test_aggregates(empty)["count"] == 0
+        assert pg.test_aggregates(empty)["rmse"] is None
+
+    def test_single_point(self):
+        agg = pg.test_aggregates([self._point(1, 2, 2)])
+        assert agg["count"] == 1
+        assert agg["max_error_x"] == 1.0
+        assert agg["max_error_y"] == 2.0
+        assert agg["max_error_z"] == 2.0
+        # magnitude of (1,2,2) is 3
+        assert agg["mean_error"] == pytest.approx(3.0)
+
+    def test_rmse_is_the_standard_root_mean_square_of_the_magnitudes(self):
+        # sqrt(mean(d^2)) — the same convention validate_grid()'s rmse_mm
+        # uses. This used to divide by 3n, which reported a value 1/sqrt(3)
+        # too small under the same name.
+        agg = pg.test_aggregates([self._point(1, 2, 2)])
+        assert agg["mean_error"] == pytest.approx(3.0)
+        assert agg["rmse"] == pytest.approx(3.0)
+
+    def test_rmse_matches_mean_when_every_magnitude_is_equal(self):
+        agg = pg.test_aggregates([self._point(1, 1, 0), self._point(-1, -1, 0)])
+        assert agg["mean_error"] == pytest.approx(math.sqrt(2))
+        assert agg["rmse"] == pytest.approx(math.sqrt(2))
+
+    def test_rmse_is_at_least_the_mean(self):
+        # RMS >= arithmetic mean for a non-negative series, which catches a
+        # divisor that is too large.
+        agg = pg.test_aggregates([self._point(0.1, 0, 0), self._point(9, 0, 0)])
+        assert agg["rmse"] >= agg["mean_error"]
+
+    def test_max_error_is_the_largest_magnitude_not_the_largest_value(self):
+        agg = pg.test_aggregates([self._point(-5, 2, 1), self._point(3, -1, 0.5)])
+        assert agg["max_error_x"] == 5.0
+        assert agg["max_error_y"] == 2.0
+        assert agg["max_error_z"] == 1.0
+
+    def test_mean_error_keeps_the_sign_so_direction_stays_readable(self):
+        # computed-minus-actual: a positive mean means the grid predicts the
+        # tool further out than it really was. Taking abs() here would throw
+        # that information away, which is the whole point of the sign.
+        agg = pg.test_aggregates([self._point(2, 0, 0), self._point(4, 0, 0)])
+        assert agg["mean_error_x"] == pytest.approx(3.0)
+        assert agg["mean_error_x"] > 0
+
+    def test_mean_error_is_the_mean_magnitude_not_the_mean_of_components(self):
+        # (3,4,0) is magnitude 5. Mean of components would be 7/3.
+        agg = pg.test_aggregates([self._point(3, 4, 0), self._point(0, 0, 0)])
+        assert agg["mean_error"] == pytest.approx(5 / 2)
+        assert agg["mean_error_x"] == pytest.approx(1.5)
+
+    def test_rmse_uses_the_point_count_not_the_component_count(self):
+        # Two points of magnitude 3 and 5 -> sqrt((9+25)/2). Dividing by 3n
+        # instead would give sqrt(34/6), a third of the real figure.
+        agg = pg.test_aggregates([self._point(3, 0, 0), self._point(5, 0, 0)])
+        assert agg["rmse"] == pytest.approx(math.sqrt(34 / 2))
+
+    def test_rmse_is_never_larger_than_the_worst_magnitude(self):
+        agg = pg.test_aggregates([self._point(0.1, 0, 0), self._point(9, 0, 0)])
+        assert agg["rmse"] <= agg["max_error_x"]
+
+    def test_all_zero_errors_report_zero_not_none(self):
+        agg = pg.test_aggregates([self._point(0, 0, 0), self._point(0, 0, 0)])
+        assert agg["count"] == 2
+        assert agg["max_error_x"] == 0.0
+        assert agg["mean_error"] == 0.0
+        assert agg["rmse"] == 0.0
+
+    def test_carries_no_metadata_beyond_the_numbers(self):
+        # An English-language "definitions" block once shipped inside the
+        # download; the form has no such column and the docstring explains
+        # the maths instead.
+        assert set(pg.test_aggregates([self._point(1, 1, 1)])) == {
+            "count", "max_error_x", "max_error_y", "max_error_z",
+            "mean_error_x", "mean_error_y", "mean_error_z",
+            "mean_error", "rmse"}
+
+    def test_reads_the_error_key_the_endpoints_actually_write(self):
+        rec = {"index": 1, "u": 0.25, "v": 0.5, "computed": [1, 2, 3],
+               "actual": [1.0, 1.5, 3.0], "error": [0.0, 0.5, 0.0],
+               "deviation_mm": 0.5, "source": "measured"}
+        agg = pg.test_aggregates([rec])
+        assert agg["max_error_y"] == 0.5
+        assert agg["mean_error"] == pytest.approx(0.5)
+
+
+class TestParseMeasuredPose:
+    """Operator-typed numbers are the only path left to a real measurement
+    now that GetPose() echoes commands, so they get validated hard."""
+
+    def test_absent_means_fall_back_to_the_robot_not_an_error(self):
+        assert pg.parse_measured_pose(None) == (None, None)
+
+    def test_accepts_three_numbers(self):
+        assert pg.parse_measured_pose([-142.4, -436.5, 145.6]) == (
+            [-142.4, -436.5, 145.6], None)
+
+    def test_accepts_numeric_strings_from_a_text_field(self):
+        # The UI parses before sending, but a hand-typed string must not be
+        # able to slip a non-number past the form.
+        assert pg.parse_measured_pose(["-142.4", "-436.5", "145.6"])[0] == [-142.4, -436.5, 145.6]
+
+    def test_ignores_extra_trailing_values(self):
+        # Rotations may be appended by a caller that has them; only XYZ is
+        # wanted, and the rest must not cause a rejection.
+        assert pg.parse_measured_pose([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])[0] == [1.0, 2.0, 3.0]
+
+    def test_rejects_a_short_list(self):
+        values, err = pg.parse_measured_pose([1.0, 2.0])
+        assert values is None and "x, y, z" in err
+
+    def test_rejects_a_non_list(self):
+        assert pg.parse_measured_pose("1,2,3")[0] is None
+        assert pg.parse_measured_pose({"x": 1})[0] is None
+
+    def test_rejects_words(self):
+        values, err = pg.parse_measured_pose(["left", "middle", "far"])
+        assert values is None and "three numbers" in err
+
+    def test_rejects_nan_and_infinity(self):
+        # NaN would propagate into every aggregate as a silently wrong cell.
+        assert pg.parse_measured_pose([float("nan"), 2, 3])[0] is None
+        assert pg.parse_measured_pose([1, float("inf"), 3])[0] is None
+
+    def test_rejects_none_inside_the_list(self):
+        assert pg.parse_measured_pose([1, None, 3])[0] is None
+
+    def test_accepts_an_all_zero_measurement(self):
+        # Unlike a robot read, a typed zero is a legitimate coordinate — the
+        # sentinel rejection applies to GetPose()'s failure value only.
+        assert pg.parse_measured_pose([0, 0, 0])[0] == [0.0, 0.0, 0.0]
+
+
+class TestBuildTestReportPayload:
+    """The download contract, asserted on the assembled payload.
+
+    This is the only place the whole 13-field contract can be checked at
+    once â€” the endpoint itself is unreachable from tests because mapcontrol
+    imports sqlalchemy at module scope.
+    """
+
+    @staticmethod
+    def _stats(**extra):
+        base = pg.draw_stats([{"tool": "rect", "points": CLOSED_RECT}],
+                             GRID2, 2, 2, 15.0)
+        base.update(extra)
+        return base
+
+    @staticmethod
+    def _complete_session(**extra):
+        fp = pg.grid_fingerprint(GRID2)
+        points = [{"index": i + 1, "u": 0.5, "v": 0.5,
+                   "error": [0.1 * (i + 1), 0.05, -0.02],
+                   "grid_fingerprint": fp} for i in range(pg.TEST_POINTS_EXPECTED)]
+        return pg.build_test_report_payload(
+            GRID2, 2, 2, True, points, TestBuildTestReportPayload._stats(**extra),
+            "admin", "2026-10-05 23:21:42")
+
+    def test_all_thirteen_completeness_fields_are_present(self):
+        payload = self._complete_session(draw_end_check={"deviation_mm": 0.4})
+        sheet05, sheet09 = payload["sheet_05_grid_mapping"], payload["sheet_09_drawing"]
+        stroke = sheet09["per_stroke"][0]
+        for key in ("complete", "missing"):
+            assert key in payload, key
+        for key in ("grid_fingerprint", "test_points_expected",
+                    "test_points_recorded", "test_points_status"):
+            assert key in sheet05, key
+        for key in ("total_travel_mm", "drawn_path_length_mm", "draw_end_check"):
+            assert key in sheet09, key
+        for key in ("closed", "points_uv", "length_mm", "span_mm"):
+            assert key in stroke, key
+
+    def test_a_finished_session_is_complete(self):
+        payload = self._complete_session(draw_end_check={"deviation_mm": 0.4})
+        assert payload["complete"] is True
+        assert payload["missing"] == []
+        assert payload["sheet_05_grid_mapping"]["test_points_status"] == "complete"
+        assert payload["sheet_05_grid_mapping"]["test_points_recorded"] == 5
+        assert payload["sheet_05_grid_mapping"]["aggregates"]["count"] == 5
+
+    def test_an_untouched_session_names_what_is_missing(self):
+        payload = pg.build_test_report_payload(GRID2, 2, 2, True, [], {}, "admin", "now")
+        assert payload["complete"] is False
+        assert payload["missing"] == ["no_test_points", "no_draw_stats"]
+        assert payload["sheet_05_grid_mapping"]["test_points_status"] == "not_recorded"
+
+    def test_partial_coverage_is_reported_as_partial(self):
+        fp = pg.grid_fingerprint(GRID2)
+        two = [{"index": i, "u": 0.5, "v": 0.5, "error": [0.1, 0.1, 0.1],
+                "grid_fingerprint": fp} for i in (1, 2)]
+        payload = pg.build_test_report_payload(GRID2, 2, 2, True, two,
+                                              self._stats(), "admin", "now")
+        # Two measured points satisfy "some exist", so the server reports no
+        # gap â€” the UI is what blocks on the 5-position coverage.
+        assert payload["complete"] is True
+        assert payload["sheet_05_grid_mapping"]["test_points_status"] == "partial"
+
+    def test_unmarked_grid_hides_the_corners(self):
+        partial = [[P00, None], [None, P11]]
+        payload = pg.build_test_report_payload(partial, 2, 2, False, [], {},
+                                              "admin", "now")
+        assert "grid_not_marked" in payload["missing"]
+        assert payload["sheet_05_grid_mapping"]["grid_points"] is None
+        assert payload["sheet_05_grid_mapping"]["reference_point_count"] == 2
+
+    def test_aggregates_stay_empty_rather_than_zero(self):
+        payload = pg.build_test_report_payload(GRID2, 2, 2, True, [], {}, "admin", "now")
+        agg = payload["sheet_05_grid_mapping"]["aggregates"]
+        assert agg["count"] == 0 and agg["rmse"] is None and agg["max_error_x"] is None
+
+    def test_drawn_and_travel_are_reported_separately(self):
+        two = [{"tool": "rect", "points": CLOSED_RECT},
+               {"tool": "rect", "points": [(0.6, 0.6), (0.9, 0.6),
+                                           (0.9, 0.9), (0.6, 0.9), (0.6, 0.6)]}]
+        stats = pg.draw_stats(two, GRID2, 2, 2, 15.0)
+        payload = pg.build_test_report_payload(GRID2, 2, 2, True, [], stats,
+                                              "admin", "now")
+        s09 = payload["sheet_09_drawing"]
+        assert s09["drawn_path_length_mm"] < s09["total_travel_mm"]
+        assert s09["path_length_mm"] == s09["total_travel_mm"]
+
+    def test_draw_end_check_is_not_folded_into_the_sheet_05_aggregates(self):
+        # ServoP lags its target, so that deviation is tracking error and must
+        # never reach the grid-accuracy rows.
+        stats = self._stats(draw_end_check={"deviation_mm": 99.0})
+        payload = pg.build_test_report_payload(GRID2, 2, 2, True, [], stats,
+                                              "admin", "now")
+        assert payload["sheet_09_drawing"]["draw_end_check"]["deviation_mm"] == 99.0
+        assert payload["sheet_05_grid_mapping"]["test_points"] == []
+        assert payload["sheet_05_grid_mapping"]["aggregates"]["count"] == 0
+
+
+class _FakeRobot:
+    """Enough Robot surface for do_draw(); no sockets, no hardware."""
+
+    connected = True
+
+    def __init__(self, pose=None):
+        self.pose = list(pose or [5.0, 5.0, 0.0, 0.0, 0.0, 0.0])
+        self.state = None
+        self.replayed = 0
+        self.moves = []
+
+    def get_pose(self):
+        return list(self.pose)
+
+    def ensure_frame(self):
+        pass
+
+    def movl(self, *pose):
+        self.moves.append(pose)
+
+    def servo_stream(self, poses, **kwargs):
+        self.replayed += 1
+
+    def movl_path(self, poses, **kwargs):
+        self.replayed += 1
+
+
+class _FixedPoseRobot(_FakeRobot):
+    """Same reading every time, so a run always sees the failure under test."""
+
+    def __init__(self, reading):
+        super().__init__()
+        self.reading = list(reading)
+
+    def get_pose(self):
+        return list(self.reading)
+
+
+class _RaiseOnceOnReplayRobot(_FakeRobot):
+    """Plausible pose until the path is replayed, then raises once â€” the shape
+    of a dashboard that drops off right after the last waypoint."""
+
+    def __init__(self):
+        super().__init__()
+        self.failed = False
+
+    def get_pose(self):
+        if self.replayed and not self.failed:
+            self.failed = True
+            raise RuntimeError("socket closed after replay")
+        return list(self.pose)
+
+
+class _StopOnReplayRobot(_FakeRobot):
+    """Raises Stop from inside the replay, the only way it can actually happen
+    mid-run given do_draw() clears the flag on entry."""
+
+    def servo_stream(self, poses, **kwargs):
+        super().servo_stream(poses, **kwargs)
+        self.state.draw_stop.set()
+
+    def movl_path(self, poses, **kwargs):
+        super().movl_path(poses, **kwargs)
+        self.state.draw_stop.set()
+
+
+def _run(robot, strokes=None):
+    state = _FakeState()
+    robot.state = state
+    pg.do_draw(robot, state, strokes or [{"tool": "rect", "points": CLOSED_RECT}])
+    return state, robot
+
+
+class _FakeState:
+    def __init__(self):
+        import threading
+        self.align_running = False
+        self.draw_running = False
+        self.draw_stop = threading.Event()
+        self.status = ""
+        self.grid_rows = 2
+        self.grid_cols = 2
+        self.grid_points = [list(r) for r in GRID2]
+        self.test_points = []
+        self.last_draw_stats = {}
+
+
+class _VerifyRobot(_FakeRobot):
+    """Reports the pose it was last commanded to, so a successful verify run
+    produces zero error at every point."""
+
+    def __init__(self):
+        super().__init__()
+        self.commanded = None
+
+    def movl(self, *pose):
+        self.moves.append(pose)
+        self.commanded = list(pose)
+
+    def get_pose(self):
+        return list(self.commanded or self.pose)
+
+
+class _ReachingVerifyRobot(_VerifyRobot):
+    """Stops short of the target by a fixed amount, so error is non-zero."""
+
+    def __init__(self, gap_mm):
+        super().__init__()
+        self.gap = gap_mm
+
+    def get_pose(self):
+        pose = list(self.commanded or self.pose)
+        pose[0] -= self.gap
+        return pose
+
+
+class TestDoVerifyGrid:
+    """The five-row error table the Grid Mapping sheet needs, filled by one
+    press instead of five hand-jogged ones."""
+
+    def test_records_one_row_per_canonical_position(self):
+        state, robot = _FakeState(), _VerifyRobot()
+        pg.do_verify_grid(robot, state)
+        assert len(state.test_points) == len(pg.GRID_TEST_POSITIONS) == 5
+        assert [p["label"] for p in state.test_points] == [
+            pos["label"] for pos in pg.GRID_TEST_POSITIONS]
+
+    def test_rows_land_on_the_canonical_web_positions(self):
+        state, robot = _FakeState(), _VerifyRobot()
+        pg.do_verify_grid(robot, state)
+        for got, want in zip(state.test_points, pg.GRID_TEST_POSITIONS):
+            assert (got["u"], got["v"]) == (want["u"], want["v"])
+
+    def test_a_perfectly_placed_arm_records_zero_error(self):
+        state, robot = _FakeState(), _VerifyRobot()
+        pg.do_verify_grid(robot, state)
+        assert all(p["deviation_mm"] == 0.0 for p in state.test_points)
+        assert all(p["error"] == [0.0, 0.0, 0.0] for p in state.test_points)
+
+    def test_a_misplaced_arm_records_the_offset(self):
+        state, robot = _FakeState(), _ReachingVerifyRobot(2.0)
+        pg.do_verify_grid(robot, state)
+        assert all(p["error"][0] == 2.0 for p in state.test_points)
+        assert all(p["deviation_mm"] == 2.0 for p in state.test_points)
+
+    def test_approaches_every_point_from_above(self):
+        state, robot = _FakeState(), _VerifyRobot()
+        pg.do_verify_grid(robot, state)
+        # Each point contributes lift, travel-above, descend â€” so a run of N
+        # points must move 3N times plus the return home.
+        assert len(robot.moves) >= 3 * len(pg.GRID_TEST_POSITIONS)
+
+    def test_returns_home_at_the_end(self):
+        state, robot = _FakeState(), _VerifyRobot()
+        start = list(robot.pose)
+        pg.do_verify_grid(robot, state)
+        assert list(robot.moves[-1][:3]) == pytest.approx(start[:3], abs=0.01)
+
+    def test_reuses_draw_running_so_estop_and_jog_blocking_cover_it(self):
+        state, robot = _FakeState(), _VerifyRobot()
+        pg.do_verify_grid(robot, state)
+        # The run must not leave draw_running latched, and draw_stop is the
+        # flag /draw/stop and E-Stop set â€” it has to be cleared on entry so a
+        # Stop left over from an earlier draw cannot abort this run.
+        assert state.draw_running is False
+        assert state.draw_stop.is_set() is False
+
+    def test_stop_during_the_walk_keeps_only_the_rows_already_done(self):
+        class _StopAfterFirst(_VerifyRobot):
+            def movl(self, *pose):
+                super().movl(*pose)
+                if len(state.test_points) == 0 and self.commanded is not None:
+                    state.draw_stop.set()
+
+        state, robot = _FakeState(), _StopAfterFirst()
+        pg.do_verify_grid(robot, state)
+        assert state.test_points == []
+        assert "aborted" in state.status
+
+    def test_a_rejected_pose_read_leaves_that_row_empty(self):
+        class _Flaky(_VerifyRobot):
+            def __init__(self):
+                super().__init__()
+                self.calls = 0
+
+            def get_pose(self):
+                # Read #1 is the entry plausibility check, #2 is the "where am
+                # I now" read before lifting, #3 is the one taken right after
+                # the first descend — the one this test corrupts.
+                self.calls += 1
+                if self.calls == 3:
+                    return [0.0] * 6
+                return list(self.commanded or self.pose)
+
+        state, robot = _FakeState(), _Flaky()
+        pg.do_verify_grid(robot, state)
+        assert len(state.test_points) == 4
+        assert state.test_points[0]["label"] == pg.GRID_TEST_POSITIONS[1]["label"]
+
+    def test_a_previous_manual_run_is_replaced_not_merged(self):
+        state, robot = _FakeState(), _VerifyRobot()
+        state.test_points = [{"index": 1, "u": 0.1, "v": 0.1,
+                              "error": [9.0, 9.0, 9.0], "source": "manual"}]
+        pg.do_verify_grid(robot, state)
+        assert len(state.test_points) == 5
+        assert all(p["source"] == "verify" for p in state.test_points)
+
+    def test_requires_a_fully_marked_grid(self):
+        state, robot = _FakeState(), _VerifyRobot()
+        state.grid_points = [[P00, None], [None, P11]]
+        pg.do_verify_grid(robot, state)
+        assert state.test_points == []
+        assert "not fully marked" in state.status
+        assert robot.moves == []
+
+    def test_refuses_to_start_when_another_motion_is_running(self):
+        state, robot = _FakeState(), _VerifyRobot()
+        state.draw_running = True
+        pg.do_verify_grid(robot, state)
+        assert robot.moves == []
+        assert "busy" in state.status
+
+
+
+class TestDrawEndCheck:
+    """One free real measurement per draw: the arm is parked on the last
+    waypoint before it is sent home, which is the only moment achievable
+    without commanding extra motion."""
+
+    def test_records_the_achieved_pose_at_the_final_waypoint(self):
+        state, robot = _FakeState(), _FakeRobot([9.0, 5.0, 0.0, 0, 0, 0])
+        pg.do_draw(robot, state, [{"tool": "rect", "points": CLOSED_RECT}])
+        check = state.last_draw_stats["draw_end_check"]
+        planned = pg.grid_pose(*CLOSED_RECT[-1], GRID2, 2, 2)[:3]
+        assert check["planned_xyz"] == pytest.approx([round(c, 2) for c in planned])
+        assert check["actual_xyz"] == [9.0, 5.0, 0.0]
+        assert check["deviation_mm"] > 0
+
+    def test_never_touches_test_points(self):
+        # ServoP lags its target, so this is tracking error â€” sheet 05's
+        # Max/RMSE must stay a pure deliberate 5-point test.
+        state, robot = _FakeState(), _FakeRobot([9.0, 5.0, 0.0, 0, 0, 0])
+        pg.do_draw(robot, state, [{"tool": "rect", "points": CLOSED_RECT}])
+        assert state.test_points == []
+
+    def test_uv_label_matches_the_compared_pose_even_with_a_trailing_empty_stroke(self):
+        state, robot = _FakeState(), _FakeRobot([4.0, 5.0, 0.0, 0, 0, 0])
+        pg.do_draw(robot, state, [{"tool": "rect", "points": CLOSED_RECT},
+                                  {"tool": "rect", "points": []}])
+        check = state.last_draw_stats["draw_end_check"]
+        assert (check["u"], check["v"]) == pytest.approx(CLOSED_RECT[-1])
+
+    def test_get_pose_failure_sentinel_records_nothing(self):
+        state, _ = _run(_FixedPoseRobot([0.0] * 6))
+        assert "draw_end_check" not in state.last_draw_stats
+
+    def test_implausible_pose_records_nothing(self):
+        state, _ = _run(_FixedPoseRobot([1e6, 1e6, 1e6, 0, 0, 0]))
+        assert "draw_end_check" not in state.last_draw_stats
+
+    def test_a_pose_read_that_raises_still_finishes_the_draw(self):
+        state, robot = _run(_RaiseOnceOnReplayRobot())
+        assert state.status.startswith("draw done")
+        assert "draw_end_check" not in state.last_draw_stats
+        assert state.draw_running is False
+
+    def test_stop_pressed_during_replay_records_nothing(self):
+        # do_draw() clears draw_stop on entry, so Stop has to arrive from the
+        # replay itself â€” setting the flag beforehand proves nothing.
+        state, _ = _run(_StopOnReplayRobot())
+        assert "draw_end_check" not in state.last_draw_stats
+
+    def test_draw_still_completes_normally_with_a_good_measurement(self):
+        state, robot = _FakeState(), _FakeRobot([5.0, 5.0, 0.0, 0, 0, 0])
+        pg.do_draw(robot, state, [{"tool": "rect", "points": CLOSED_RECT}])
+        assert state.status.startswith("draw done")
+        assert state.draw_running is False
+        assert robot.replayed == 1
+
+
+class TestDrawApproach:
+    @staticmethod
+    def _state():
+        return SimpleNamespace(
+            align_running=False,
+            draw_running=False,
+            draw_stop=threading.Event(),
+            grid_rows=2,
+            grid_cols=2,
+            grid_points=GRID2,
+            status="",
+        )
+
+    def test_approaches_and_descends_before_replaying_path(self, monkeypatch):
+        start_pose = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        first_pose = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
+        poses = [first_pose, [11.0, 21.0, 30.0, 40.0, 50.0, 60.0]]
+        events = []
+
+        class FakeRobot:
+            connected = True
+
+            def ensure_frame(self):
+                pass
+
+            def get_pose(self):
+                return start_pose
+
+            def movl(self, *pose):
+                events.append(("movl", list(pose)))
+
+            def movl_path(self, path, **kwargs):
+                events.append(("path", path))
+
+        monkeypatch.setattr(pg, "DRAW_MOTION_MODE", "cp")
+        monkeypatch.setattr(pg, "DRAW_LIFT_MM", 15.0)
+        monkeypatch.setattr(pg, "_assemble_strokes", lambda *args: poses)
+
+        pg.do_draw(FakeRobot(), self._state(), [{"tool": "pen", "points": [(0, 0)]}])
+
+        assert events[:4] == [
+            ("movl", [1.0, 2.0, 18.0, 4.0, 5.0, 6.0]),
+            ("movl", [10.0, 20.0, 45.0, 40.0, 50.0, 60.0]),
+            ("movl", first_pose),
+            ("path", poses),
+        ]
+
+    def test_stop_during_approach_prevents_next_move_and_draw(self, monkeypatch):
+        state = self._state()
+        events = []
+
+        class FakeRobot:
+            connected = True
+
+            def ensure_frame(self):
+                pass
+
+            def get_pose(self):
+                return [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+
+            def movl(self, *pose):
+                events.append(("movl", pose))
+                state.draw_stop.set()
+
+            def movl_path(self, path, **kwargs):
+                events.append(("path", path))
+
+        monkeypatch.setattr(pg, "DRAW_LIFT_MM", 15.0)
+        monkeypatch.setattr(pg, "_assemble_strokes", lambda *args: [[10, 20, 30, 40, 50, 60]])
+
+        pg.do_draw(FakeRobot(), state, [{"tool": "pen", "points": [(0, 0)]}])
+
+        assert len(events) == 1
+        assert events[0][0] == "movl"
+        assert "aborted" in state.status

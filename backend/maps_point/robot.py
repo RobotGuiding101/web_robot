@@ -130,6 +130,13 @@ class Robot:
         self._apply_frame()
         log("  [Robot] ready")
 
+    def enable_robot(self):
+        if not self.connected or not self.dashboard:
+            raise RuntimeError("robot not connected")
+        reply = self.dashboard.EnableRobot()
+        self._check_reply(reply, "EnableRobot()")
+        return reply
+
     def set_frame(self, tool_index: int = None, user_index: int = None):
         """Change which Tool/User frame absolute moves use — pass None for
         either to leave it as-is. user_index=-1 means "stop selecting a
@@ -478,6 +485,55 @@ class Robot:
         self._check_reply(reply, f"RelJointMovJ({j1},{j2},{j3},{j4},{j5},{j6})")
         self._wait_stable()
 
+    def pose_source_report(self, samples: int = 6, interval: float = 0.25) -> dict:
+        """Sample GetPose() and GetAngle() a few times and report which of
+        them carries live feedback.
+
+        GetPose() on this controller has been observed returning exactly the
+        last commanded Cartesian target after a MovL — the 2026-10-06 verify
+        run recorded error 0.000mm at all five grid test positions, and all
+        24 taught corner coordinates are float32 images of two-decimal
+        numbers, which no real pose would do. If that is true, the
+        "actual robot pose" column of the experiment form cannot be measured
+        through GetPose() at all.
+
+        Encoder-derived values must jitter in their low digits while the arm
+        stands still; commanded ones repeat byte for byte. That difference is
+        the whole test. Reads only — never commands motion, so it is safe to
+        run against live hardware.
+        """
+        pose_samples, angle_samples = [], []
+        for i in range(max(2, samples)):
+            if i:
+                sleep(interval)
+            pose_samples.append(self.get_pose())
+            angle_samples.append(self.get_angle())
+
+        def varies(series):
+            """True when the series is not perfectly constant. Compared as
+            text rather than floats because the controller prints its values,
+            and identical readings must compare identical regardless of how
+            many digits each side happened to use."""
+            return len({"[" + ",".join(f"{v:g}" for v in s) + "]" for s in series}) > 1
+
+        pose_live = varies(pose_samples)
+        angle_live = varies(angle_samples)
+        if angle_live and not pose_live:
+            verdict = "get_pose_is_command_echo__use_joint_angles"
+        elif pose_live and not angle_live:
+            verdict = "get_pose_is_live"
+        elif pose_live and angle_live:
+            verdict = "both_live"
+        else:
+            verdict = "neither_varies__controller_reports_commands_only"
+        return {
+            "verdict": verdict,
+            "get_pose_varies": pose_live,
+            "get_angles_vary": angle_live,
+            "pose_samples": pose_samples,
+            "angle_samples": angle_samples,
+        }
+
     def get_angle(self) -> list:
         if not self.dashboard:
             return [0.0] * 6
@@ -495,12 +551,11 @@ class Robot:
         self.movl(HOME_X, HOME_Y, HOME_Z, HOME_RX, HOME_RY, HOME_RZ)
 
     def disable_robot(self):
-        if not self.dashboard: return
-        self.dashboard.ClearError()
-        self.dashboard.ResetRobot()
-        sleep(0.5)
-        self.dashboard.DisableRobot()
-        self.connected = False
+        if not self.connected or not self.dashboard:
+            raise RuntimeError("robot not connected")
+        reply = self.dashboard.DisableRobot()
+        self._check_reply(reply, "DisableRobot()")
+        return reply
 
     def clear_error(self):
         if not self.dashboard: return

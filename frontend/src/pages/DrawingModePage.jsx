@@ -4,23 +4,32 @@ import {
   Canvas,
   PencilBrush,
   Line,
+  Point,
+  Polyline,
 } from 'fabric'
 import Sidebar from '../components/Sidebar'
 import TopBar from '../components/TopBar'
 import { setStreamMode } from '../components/CameraStream'
+import { backendToolFor, evaluateReportGate } from './reportGate'
+import { shapePoints } from '../lib/shapes'
 
 // ─── Tool constants ────────────────────────────────────────────────────────────
 const TOOLS = {
   SELECT: 'select',
   PEN: 'pen',
   LINE: 'line',
-
+  RECTANGLE: 'rectangle',
+  TRIANGLE: 'triangle',
+  CIRCLE: 'circle',
 }
 
 const TOOL_META = [
   { id: TOOLS.SELECT, label: 'Select', icon: '↖' },
   { id: TOOLS.PEN, label: 'Pen', icon: '✎' },
   { id: TOOLS.LINE, label: 'Line', icon: '╱' },
+  { id: TOOLS.RECTANGLE, label: 'Rectangle', icon: '□' },
+  { id: TOOLS.TRIANGLE, label: 'Triangle', icon: '△' },
+  { id: TOOLS.CIRCLE, label: 'Circle', icon: '○' },
 ]
 
 const PRESET_COLORS = [
@@ -29,6 +38,19 @@ const PRESET_COLORS = [
 ]
 
 const STROKE_WIDTHS = [1, 2, 4, 8, 16]
+
+// Grid Mapping test points, as fractions of the taught area. The four corners
+// are deliberately absent: those are the taught poses themselves, so their
+// error is zero by construction and testing them proves nothing. What is left
+// is the plus-shaped interior, which is exactly where bilinear interpolation
+// has to be right.
+const TEST_POINT_POSITIONS = [
+  { u: 0.25, v: 0.5, label: 'ซ้ายกลาง' },
+  { u: 0.5, v: 0.25, label: 'บนกลาง' },
+  { u: 0.5, v: 0.5, label: 'กลาง' },
+  { u: 0.5, v: 0.75, label: 'ล่างกลาง' },
+  { u: 0.75, v: 0.5, label: 'ขวากลาง' },
+]
 
 // ─── Teach / Grid panel constants ─────────────────────────────────────────────
 const POSE_LABELS = ['X', 'Y', 'Z', 'Rx', 'Ry', 'Rz']
@@ -54,12 +76,94 @@ const JogPillRow = ({ label, onMinus, onPlus, disabled, titleMinus, titlePlus })
 )
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+function pathObjectPoints(obj) {
+  const matrix = obj.calcTransformMatrix()
+  const offset = obj.pathOffset || new Point(0, 0)
+  const points = []
+  let current = new Point(0, 0)
+  let subpathStart = current
+
+  const addPoint = (x, y) => {
+    const localX = x - offset.x
+    const localY = y - offset.y
+    points.push(new Point(
+      matrix[0] * localX + matrix[2] * localY + matrix[4],
+      matrix[1] * localX + matrix[3] * localY + matrix[5],
+    ))
+  }
+
+  for (const command of obj.path || []) {
+    const [rawType, ...values] = command
+    const type = rawType.toUpperCase()
+    const relative = rawType !== type
+    const value = (index, base) => (relative ? base : 0) + Number(values[index])
+
+    if (type === 'M' || type === 'L') {
+      current = new Point(value(0, current.x), value(1, current.y))
+      if (type === 'M') subpathStart = current
+      addPoint(current.x, current.y)
+    } else if (type === 'H') {
+      current = new Point(value(0, current.x), current.y)
+      addPoint(current.x, current.y)
+    } else if (type === 'V') {
+      current = new Point(current.x, value(0, current.y))
+      addPoint(current.x, current.y)
+    } else if (type === 'Q') {
+      const control = new Point(value(0, current.x), value(1, current.y))
+      const end = new Point(value(2, current.x), value(3, current.y))
+      const start = current
+      for (let step = 1; step <= 4; step += 1) {
+        const t = step / 4
+        const inverse = 1 - t
+        addPoint(
+          inverse * inverse * start.x + 2 * inverse * t * control.x + t * t * end.x,
+          inverse * inverse * start.y + 2 * inverse * t * control.y + t * t * end.y,
+        )
+      }
+      current = end
+    } else if (type === 'C') {
+      const control1 = new Point(value(0, current.x), value(1, current.y))
+      const control2 = new Point(value(2, current.x), value(3, current.y))
+      const end = new Point(value(4, current.x), value(5, current.y))
+      const start = current
+      for (let step = 1; step <= 8; step += 1) {
+        const t = step / 8
+        const inverse = 1 - t
+        addPoint(
+          inverse ** 3 * start.x + 3 * inverse ** 2 * t * control1.x + 3 * inverse * t ** 2 * control2.x + t ** 3 * end.x,
+          inverse ** 3 * start.y + 3 * inverse ** 2 * t * control1.y + 3 * inverse * t ** 2 * control2.y + t ** 3 * end.y,
+        )
+      }
+      current = end
+    } else if (type === 'Z') {
+      current = subpathStart
+      addPoint(current.x, current.y)
+    }
+  }
+  return points
+}
+
 function getCanvasPathData(fc) {
   return fc.getObjects().map((obj) => {
     const type = obj.type
     const base = { type, left: obj.left, top: obj.top }
-    if (type === 'path') return { ...base, path: obj.path, stroke: obj.stroke, strokeWidth: obj.strokeWidth }
+    if (type === 'path') return { ...base, points: pathObjectPoints(obj), stroke: obj.stroke, strokeWidth: obj.strokeWidth }
     if (type === 'line') return { ...base, x1: obj.x1, y1: obj.y1, x2: obj.x2, y2: obj.y2, stroke: obj.stroke, strokeWidth: obj.strokeWidth }
+    if (type === 'polyline' && obj.pathOffset) {
+      const matrix = obj.calcTransformMatrix()
+      return {
+        ...base,
+        intendedTool: obj.intendedTool,
+        points: obj.points.map((point) => {
+          const x = point.x - obj.pathOffset.x
+          const y = point.y - obj.pathOffset.y
+          return new Point(
+            matrix[0] * x + matrix[2] * y + matrix[4],
+            matrix[1] * x + matrix[3] * y + matrix[5],
+          )
+        }),
+      }
+    }
     return base
   })
 }
@@ -108,7 +212,7 @@ const ServerLogPanel = () => {
             return next.length > SERVER_LOG_MAX ? next.slice(-SERVER_LOG_MAX) : next
           })
         })
-        .catch(() => {})
+        .catch(() => { })
     }
 
     // initial full load
@@ -121,7 +225,7 @@ const ServerLogPanel = () => {
           setLines(initial.length > SERVER_LOG_MAX ? initial.slice(-SERVER_LOG_MAX) : initial)
         }
       })
-      .catch(() => {})
+      .catch(() => { })
 
     const interval = setInterval(poll, SERVER_LOG_POLL_MS)
     return () => { dead = true; clearInterval(interval) }
@@ -193,6 +297,7 @@ const DrawingModePage = () => {
   const [strokeWidth, setStrokeWidth] = useState(2)
   const [canUndo, setCanUndo] = useState(false)
   const [canRedo, setCanRedo] = useState(false)
+  const [hasSelection, setHasSelection] = useState(false)
   const [status, setStatus] = useState('Ready')
   const [objectCount, setObjectCount] = useState(0)
   const [isSending, setIsSending] = useState(false)
@@ -201,9 +306,86 @@ const DrawingModePage = () => {
   const viewerKey = useRef(Date.now())
   const [is3DMinimized, setIs3DMinimized] = useState(false)
   const [is3DExpanded, setIs3DExpanded] = useState(false)
+  const [floating3DPos, setFloating3DPos] = useState(null)
+  const [isDragging3D, setIsDragging3D] = useState(false)
+  const floating3DRef = useRef(null)
+  const dragRef = useRef({ startX: 0, startY: 0, startLeft: 0, startTop: 0, hasMoved: false })
+
+  const handle3DDragStart = (e) => {
+    if (e.target.closest('button.dm-3d-btn')) return
+    e.preventDefault()
+
+    const floatingEl = floating3DRef.current
+    const viewportEl = dmViewportRef.current
+    if (!floatingEl || !viewportEl) return
+
+    const fRect = floatingEl.getBoundingClientRect()
+    const vRect = viewportEl.getBoundingClientRect()
+
+    const currentLeft = fRect.left - vRect.left
+    const currentTop = fRect.top - vRect.top
+
+    dragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      startLeft: currentLeft,
+      startTop: currentTop,
+      hasMoved: false,
+    }
+    setIsDragging3D(true)
+
+    const onPointerMove = (moveEvent) => {
+      const dx = moveEvent.clientX - dragRef.current.startX
+      const dy = moveEvent.clientY - dragRef.current.startY
+      if (!dragRef.current.hasMoved && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) {
+        dragRef.current.hasMoved = true
+      }
+
+      const curViewportEl = dmViewportRef.current
+      const curFloatingEl = floating3DRef.current
+      if (!curViewportEl || !curFloatingEl) return
+
+      const vpW = curViewportEl.clientWidth
+      const vpH = curViewportEl.clientHeight
+      const boxW = curFloatingEl.offsetWidth
+      const boxH = curFloatingEl.offsetHeight
+
+      const nextX = Math.max(0, Math.min(vpW - boxW, dragRef.current.startLeft + dx))
+      const nextY = Math.max(0, Math.min(vpH - boxH, dragRef.current.startTop + dy))
+
+      setFloating3DPos({ x: nextX, y: nextY })
+    }
+
+    const onPointerUp = () => {
+      setIsDragging3D(false)
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onPointerUp)
+      window.removeEventListener('pointercancel', onPointerUp)
+    }
+
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp)
+    window.addEventListener('pointercancel', onPointerUp)
+  }
+
+  // Keep floating 3D viewer in bounds when expanding
+  useEffect(() => {
+    if (!floating3DPos || !dmViewportRef.current || !floating3DRef.current) return
+    const vpW = dmViewportRef.current.clientWidth
+    const vpH = dmViewportRef.current.clientHeight
+    const boxW = is3DExpanded ? 340 : 220
+    const boxH = is3DExpanded ? 280 : 180
+    setFloating3DPos((prev) => {
+      if (!prev) return prev
+      const clampedX = Math.max(0, Math.min(vpW - boxW, prev.x))
+      const clampedY = Math.max(0, Math.min(vpH - boxH, prev.y))
+      if (clampedX === prev.x && clampedY === prev.y) return prev
+      return { x: clampedX, y: clampedY }
+    })
+  }, [is3DExpanded])
 
   // Camera mode switcher
-  const [cameraMode,  setCameraMode]  = useState('rgb')
+  const [cameraMode, setCameraMode] = useState('rgb')
   const [modeLoading, setModeLoading] = useState(false)
 
   // Teach / Grid Floating Panel
@@ -219,6 +401,10 @@ const DrawingModePage = () => {
   const teachMsgTimerRef = useRef(null)
   const [markMode, setMarkMode] = useState(false)
   const [markClickMode, setMarkClickMode] = useState('mark')
+  const [testPoints, setTestPoints] = useState([])
+  const [testAggregates, setTestAggregates] = useState(null)
+  const [reportGate, setReportGate] = useState(null)
+  const [testReportBusy, setTestReportBusy] = useState(false)
   const [alignBusy, setAlignBusy] = useState(false)
   const [markGeom, setMarkGeom] = useState(null)
   const [jointStep, setJointStep] = useState(2)
@@ -231,9 +417,9 @@ const DrawingModePage = () => {
   // ── Clear Error / Init / Home ─────────────────────────────────────────────
   const [errorStatus, setErrorStatus] = useState(null) // 'ok' | 'error' | null
   const [initLoading, setInitLoading] = useState(false)
-  const [initStatus,  setInitStatus]  = useState(null)
+  const [initStatus, setInitStatus] = useState(null)
   const [homeLoading, setHomeLoading] = useState(false)
-  const [homeStatus,  setHomeStatus]  = useState(null)
+  const [homeStatus, setHomeStatus] = useState(null)
 
   // Refs for latest state values (avoid stale closures)
   const strokeColorRef = useRef(strokeColor)
@@ -275,6 +461,11 @@ const DrawingModePage = () => {
     })
     fabricRef.current = fc
 
+    const updateSelection = () => setHasSelection(fc.getActiveObjects().length > 0)
+    fc.on('selection:created', updateSelection)
+    fc.on('selection:updated', updateSelection)
+    fc.on('selection:cleared', updateSelection)
+
     // Initial history snapshot
     historyRef.current = [fc.toJSON()]
     historyIdxRef.current = 0
@@ -295,6 +486,9 @@ const DrawingModePage = () => {
 
     return () => {
       ro.disconnect()
+      fc.off('selection:created', updateSelection)
+      fc.off('selection:updated', updateSelection)
+      fc.off('selection:cleared', updateSelection)
       fc.dispose()
     }
   }, [updateCounts])
@@ -338,7 +532,7 @@ const DrawingModePage = () => {
       return
     }
 
-    // Shape tool: only Line is exposed (see TOOL_META)
+    // Shape tools create one object per stroke so the robot follows a continuous path.
     fc.isDrawingMode = false
     fc.selection = false
     fc.getObjects().forEach((o) => { o.selectable = false; o.evented = false })
@@ -350,17 +544,41 @@ const DrawingModePage = () => {
       const sc = strokeColorRef.current
       const sw = strokeWidthRef.current
 
-      const line = new Line([ptr.x, ptr.y, ptr.x, ptr.y], {
-        stroke: sc, strokeWidth: sw, selectable: false, evented: false,
-      })
-      fc.add(line)
-      tempObjRef.current = line
+      if (activeTool === TOOLS.LINE) {
+        const line = new Line([ptr.x, ptr.y, ptr.x, ptr.y], {
+          stroke: sc, strokeWidth: sw, selectable: false, evented: false,
+        })
+        fc.add(line)
+        tempObjRef.current = line
+      }
     }
 
     const onMove = (opt) => {
-      if (!isDrawingRef.current || !tempObjRef.current) return
+      if (!isDrawingRef.current) return
       const ptr = fc.getScenePoint(opt.e)
-      tempObjRef.current.set({ x2: ptr.x, y2: ptr.y })
+      if (activeTool === TOOLS.LINE) {
+        if (!tempObjRef.current) return
+        tempObjRef.current.set({ x2: ptr.x, y2: ptr.y })
+      } else {
+        if (tempObjRef.current) fc.remove(tempObjRef.current)
+        const polyline = new Polyline(shapePoints(activeTool, startPtRef.current, ptr, { width: fc.getWidth(), height: fc.getHeight() }), {
+          fill: 'rgba(0,0,0,0)',
+          stroke: strokeColorRef.current,
+          strokeWidth: strokeWidthRef.current,
+          strokeLineCap: 'round',
+          strokeLineJoin: 'round',
+          selectable: false,
+          evented: false,
+          objectCaching: false,
+        })
+        // Fabric's own type cannot tell a rectangle from a circle — both are
+        // Polyline — so the tool that produced it is stashed here for
+        // backendToolFor() to send. Without it every shape is reported as
+        // freehand and reaches the backend's Douglas-Peucker simplifier.
+        polyline.intendedTool = activeTool
+        fc.add(polyline)
+        tempObjRef.current = polyline
+      }
       fc.renderAll()
     }
 
@@ -421,6 +639,7 @@ const DrawingModePage = () => {
     fc.clear()
     fc.backgroundColor = null   // keep transparent
     fc.renderAll()
+    setHasSelection(false)
     saveHistory()
     setStatus('Canvas cleared')
   }, [saveHistory])
@@ -434,6 +653,7 @@ const DrawingModePage = () => {
     active.forEach((o) => fc.remove(o))
     fc.discardActiveObject()
     fc.renderAll()
+    setHasSelection(false)
     saveHistory()
   }, [saveHistory])
 
@@ -464,16 +684,14 @@ const DrawingModePage = () => {
 
       const strokes = pathData.map((obj) => {
         const points = []
-        if (obj.type === 'path' && obj.path) {
-          obj.path.forEach((cmd) => {
-            if (cmd[0] === 'M' || cmd[0] === 'L') {
-              points.push([cmd[1] / cw, cmd[2] / ch])
-            }
-          })
+        if (obj.type === 'path' && obj.points) {
+          obj.points.forEach((point) => points.push([point.x / cw, point.y / ch]))
         } else if (obj.type === 'line') {
           points.push([obj.x1 / cw, obj.y1 / ch], [obj.x2 / cw, obj.y2 / ch])
+        } else if (obj.type === 'polyline' && obj.points) {
+          obj.points.forEach((point) => points.push([point.x / cw, point.y / ch]))
         }
-        return { tool: 'pen', points }
+        return { tool: backendToolFor(obj), points }
       }).filter(s => s.points.length > 0)
 
       if (strokes.length === 0) {
@@ -664,6 +882,18 @@ const DrawingModePage = () => {
     fetchTeachStatus()
   }, [showTeachMsg, fetchTeachStatus])
 
+  const teachConnected = !!(teachStatus && teachStatus.connected)
+
+  const refreshReportGate = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/map/test-report')
+      const data = await res.json()
+      setReportGate(evaluateReportGate({ report: data, positions: TEST_POINT_POSITIONS }))
+    } catch {
+      setReportGate(null)
+    }
+  }, [])
+
   // ── Teach / Grid: record current pose into a cell (1-based row/col) ──────
   const handleMarkCell = useCallback(async (row, col) => {
     if (!teachStatus || !teachStatus.connected) return
@@ -683,13 +913,139 @@ const DrawingModePage = () => {
       showTeachMsg('Mark request failed', 'error')
     }
     fetchTeachStatus()
-  }, [teachStatus, showTeachMsg, fetchTeachStatus])
+    refreshReportGate()
+  }, [teachStatus, showTeachMsg, fetchTeachStatus, refreshReportGate])
+
+  useEffect(() => {
+    if (panelTab === 'grid' && teachConnected) refreshReportGate()
+  }, [panelTab, teachConnected, testPoints.length, refreshReportGate])
+
+  // ── Grid Mapping test points + experiment-record download ────────────────
+  const handleRecordTestPoint = useCallback(async (u, v, measuredText) => {
+    const payload = { u, v }
+    const typed = String(measuredText || '').trim()
+    if (typed) {
+      const parts = typed.split(',').map((n) => Number(n.trim()))
+      if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) {
+        showTeachMsg('ค่าที่วัดเองต้องเป็นตัวเลข 3 ตัวคั่นด้วยจุลภาค เช่น -142.4, -436.5, 145.6', 'error')
+        return
+      }
+      payload.actual = parts
+    }
+    // Only the robot's own reading needs the link; a value the operator
+    // measured is already here and must be recordable either way.
+    if (!payload.actual && (!teachStatus || !teachStatus.connected)) return
+    try {
+      const res = await apiFetch('/api/map/grid/test-point', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const data = await res.json().catch(() => null)
+      if (res.ok && data && data.ok) {
+        setTestPoints((prev) => [...prev, data.test_point])
+        setTestAggregates(data.aggregates || null)
+        refreshReportGate()
+      } else {
+        showTeachMsg((data && data.error) || 'Record test point failed', 'error')
+      }
+    } catch {
+      showTeachMsg('Record test point request failed', 'error')
+    }
+  }, [teachStatus, showTeachMsg, refreshReportGate])
+
+  const handleResetTestPoints = useCallback(async () => {
+    try {
+      await apiFetch('/api/map/grid/test-reset', { method: 'POST' })
+      setTestPoints([])
+      showTeachMsg('Test points cleared')
+    } catch {
+      showTeachMsg('Reset test points failed', 'error')
+    }
+    refreshReportGate()
+  }, [showTeachMsg, refreshReportGate])
+
+  const [measured, setMeasured] = useState({})
+  const [verifyBusy, setVerifyBusy] = useState(false)
+  const verifySawBusy = useRef(false)
+
+  const handleVerifyGrid = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/map/grid/verify', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok || !data.ok) {
+        showTeachMsg((data && data.error) || 'เริ่มวัดความแม่นยำไม่สำเร็จ', 'error')
+        return
+      }
+      setVerifyBusy(true)
+      showTeachMsg('กำลังวัด 5 จุด — อย่าขยับแขน กด E-Stop ได้ทันที')
+    } catch {
+      showTeachMsg('เริ่มวัดความแม่นยำไม่สำเร็จ', 'error')
+    }
+  }, [showTeachMsg])
+
+  useEffect(() => {
+    if (!verifyBusy) {
+      verifySawBusy.current = false
+      return
+    }
+    if (teachStatus && teachStatus.draw_running) {
+      verifySawBusy.current = true
+      return
+    }
+    // Wait for busy=true first: the next status poll can land before the
+    // worker thread has set the flag, and treating that as "finished" would
+    // report a result for a run that never started.
+    if (!verifySawBusy.current) return
+    verifySawBusy.current = false
+    setVerifyBusy(false)
+    setTestPoints([])
+    setTestAggregates(null)
+    refreshReportGate()
+    showTeachMsg('วัดความแม่นยำเสร็จแล้ว')
+  }, [verifyBusy, teachStatus, refreshReportGate, showTeachMsg])
+
+  const handleDownloadReport = useCallback(async () => {
+    setTestReportBusy(true)
+    try {
+      const res = await apiFetch('/api/map/test-report')
+      const data = await res.json()
+      const gate = evaluateReportGate({ report: data, positions: TEST_POINT_POSITIONS })
+      setReportGate(gate)
+      if (!gate.canDownload) {
+        showTeachMsg(`ยังบันทึกไม่ได้ — ${gate.reasons.join(' / ')}`, 'error')
+        return
+      }
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const stamp = String(data.generated_at || '').replace(/\D/g, '') || 'report'
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `grid_test_report_${stamp}.json`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      setStatus('✓ บันทึกไฟล์ผลการทดสอบแล้ว')
+    } catch {
+      setStatus('✗ บันทึกไฟล์ไม่สำเร็จ')
+    } finally {
+      setTestReportBusy(false)
+    }
+  }, [showTeachMsg])
 
   const markCamW = (teachStatus && teachStatus.cam_w) || 848
   const markCamH = (teachStatus && teachStatus.cam_h) || 480
   const markPoints = (teachStatus && Array.isArray(teachStatus.points)) ? teachStatus.points : []
-  const markReady = !!(teachStatus && teachStatus.connected && teachStatus.camera_running)
-  const canMark = !!(markReady && markGeom && markMode)
+  const teachRobotEnabled = !!(teachStatus && teachStatus.robot_enabled)
+  const teachRobotCanMove = teachConnected && teachRobotEnabled
+  const cameraReady = !!(teachStatus && teachStatus.camera_running)
+  const robotBusy = !!(teachStatus && (
+    teachStatus.align_running || teachStatus.draw_running || teachStatus.sequence_running
+  ))
+  const markReady = teachConnected && cameraReady
+  const canMark = !!(markReady && markGeom && markMode && !robotBusy
+    && (markClickMode !== 'goto' || teachRobotEnabled))
   const fmtMark = (v, d = 2) => (v === null || v === undefined ? '—' : Number(v).toFixed(d))
 
   const measureMark = useCallback(() => {
@@ -947,7 +1303,6 @@ const DrawingModePage = () => {
   }, [showTeachMsg, fetchTeachStatus])
 
   // ── Teach / Grid: derived view data ──────────────────────────────────────
-  const teachConnected = !!(teachStatus && teachStatus.connected)
   const teachPose = (teachStatus && Array.isArray(teachStatus.pose)) ? teachStatus.pose : null
   const gRows = (teachStatus && teachStatus.grid_rows) || gridRows
   const gCols = (teachStatus && teachStatus.grid_cols) || gridCols
@@ -961,6 +1316,49 @@ const DrawingModePage = () => {
       if (Array.isArray(row)) row.forEach((p) => { if (p) markedCount += 1 })
     })
   }
+  const gridComplete = Array.isArray(gridPoints)
+    && gridPoints.length === gRows
+    && gridPoints.every((row) => Array.isArray(row) && row.length === gCols && row.every(Boolean))
+  const gridTooSmall = !!(gridComplete && gridValidate && Array.isArray(gridValidate.warnings)
+    && gridValidate.warnings.some((warning) => /no size/i.test(warning)))
+  const drawPrerequisite = !teachConnected
+    ? 'Connect and initialize the robot first.'
+    : !teachRobotEnabled
+      ? 'Robot is connected but disabled; press Init/Enable before drawing.'
+      : !gridComplete
+        ? `Mark all ${gRows * gCols} grid cells first (${markedCount}/${gRows * gCols}).`
+        : gridTooSmall
+          ? 'Grid span is too small; teach points farther apart.'
+          : objectCount === 0
+            ? 'Draw at least one path on the canvas first.'
+            : robotBusy
+              ? 'Wait until the current robot motion finishes.'
+              : 'Ready to send.'
+  const alignPrerequisite = !teachConnected || !cameraReady
+    ? 'Connect the robot and start the camera before marking or aligning.'
+    : !teachRobotEnabled
+      ? 'Enable the robot before alignment can move it.'
+      : markPoints.length < 4
+        ? `Mark 4 image corners before Align (${markPoints.length}/4).`
+        : robotBusy
+          ? 'Wait until the current robot motion finishes.'
+          : 'Ready to align.'
+  const autoFillPrerequisite = !teachConnected || !cameraReady
+    ? 'Robot and camera must be connected.'
+    : markPoints.length < 4
+      ? `Mark 4 image corners first (${markPoints.length}/4).`
+      : robotBusy
+        ? 'Wait until robot motion finishes.'
+        : 'Requires valid depth and camera intrinsics at all 4 corners.'
+  const surfaceZPrerequisite = !teachConnected || !cameraReady
+    ? 'Robot and camera must be connected.'
+    : !gridComplete
+      ? `Mark all ${gRows * gCols} grid cells first (${markedCount}/${gRows * gCols}).`
+      : !(teachStatus && Number(teachStatus.last_center_depth) > 0)
+        ? 'Mark the object in the live image to obtain a valid depth reading.'
+        : robotBusy
+          ? 'Wait until robot motion finishes.'
+          : 'For accurate surface Z, align the camera square to the work surface first.'
 
   // Grid shape preview geometry — port of the legacy 200x200 / 20px-padding scaling
   let gridShapeEls = null
@@ -1040,11 +1438,13 @@ const DrawingModePage = () => {
                 <div
                   className="dm-mark-hit"
                   style={{
-                    pointerEvents: markMode ? 'auto' : 'none',
-                    cursor: canMark ? 'crosshair' : 'default',
+                    pointerEvents: canMark && !robotBusy ? 'auto' : 'none',
+                    cursor: canMark && !robotBusy ? 'crosshair' : 'default',
                   }}
                   onClick={handleMarkClick}
-                  title={markMode ? (markClickMode === 'mark' ? 'คลิกเพื่อเพิ่มจุดมุมวัตถุ' : 'คลิกเพื่อสั่งหุ่นไปจุดนั้น') : undefined}
+                  title={markMode
+                    ? (robotBusy ? 'Wait for current robot motion to finish' : !markReady ? 'Robot and camera must be ready' : (markClickMode === 'mark' ? 'Click to add an image corner point' : 'Click to move robot to that pixel'))
+                    : undefined}
                 />
                 {markMode && markGeom && markPoints.map(([px, py], i) => (
                   <div
@@ -1076,8 +1476,8 @@ const DrawingModePage = () => {
                   }}
                 >
                   {[
-                    { id: 'rgb',   label: 'RGB',   active: '#2563eb' },
-                    { id: 'gray',  label: 'Gray',  active: '#4b5563' },
+                    { id: 'rgb', label: 'RGB', active: '#2563eb' },
+                    { id: 'gray', label: 'Gray', active: '#4b5563' },
                     { id: 'depth', label: 'Depth', active: '#dc2626' },
                   ].map(({ id, label, active }) => (
                     <button
@@ -1103,15 +1503,26 @@ const DrawingModePage = () => {
                   ))}
                 </div>
 
-                {/* ── Floating 3D Robot Arm Model (Bottom-Left) ── */}
+                {/* ── Floating 3D Robot Arm Model (Draggable) ── */}
                 <div
-                  className={`dm-3d-floating${is3DMinimized ? ' dm-3d-floating--minimized' : ''}${is3DExpanded ? ' dm-3d-floating--expanded' : ''}`}
+                  ref={floating3DRef}
+                  className={`dm-3d-floating${is3DMinimized ? ' dm-3d-floating--minimized' : ''}${is3DExpanded ? ' dm-3d-floating--expanded' : ''}${isDragging3D ? ' dm-3d-floating--dragging' : ''}`}
+                  style={floating3DPos ? {
+                    left: `${floating3DPos.x}px`,
+                    top: `${floating3DPos.y}px`,
+                    bottom: 'auto',
+                    right: 'auto',
+                  } : undefined}
                 >
                   {is3DMinimized ? (
                     <button
                       className="dm-3d-minimized-btn"
-                      onClick={() => setIs3DMinimized(false)}
-                      title="Show 3D Robot Model"
+                      onPointerDown={handle3DDragStart}
+                      onClick={() => {
+                        if (dragRef.current?.hasMoved) return
+                        setIs3DMinimized(false)
+                      }}
+                      title="Show 3D Robot Model (ลากย้ายตำแหน่งได้)"
                     >
                       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
@@ -1121,9 +1532,15 @@ const DrawingModePage = () => {
                     </button>
                   ) : (
                     <>
-                      {/* Header bar */}
-                      <div className="dm-3d-header">
+                      {/* Header bar (Drag Handle) */}
+                      <div
+                        className="dm-3d-header"
+                        onPointerDown={handle3DDragStart}
+                        onDoubleClick={() => setFloating3DPos(null)}
+                        title="คลิกค้างเพื่อลากย้ายตำแหน่ง (ดับเบิลคลิกเพื่อรีเซ็ตกลับมุมเดิม)"
+                      >
                         <div className="dm-3d-title-wrap">
+                          <span className="dm-3d-drag-handle">⋮⋮</span>
                           <span className="dm-3d-title-dot" />
                           <span className="dm-3d-title-text">3D Robot Arm</span>
                         </div>
@@ -1164,8 +1581,9 @@ const DrawingModePage = () => {
 
                       {/* 3D Model iframe */}
                       <div className="dm-3d-frame-wrap">
+                        {isDragging3D && <div className="dm-3d-drag-overlay" />}
                         <iframe
-                          src={`/robot-viewer.html?v=${viewerKey.current}&mode=display`}
+                          src={`/robot-viewer.html?v=${viewerKey.current}_all`}
                           title="Robot Arm 3D Viewer"
                           className="dm-3d-frame"
                           allow="accelerometer"
@@ -1248,14 +1666,15 @@ const DrawingModePage = () => {
                     <div className="dm-teach-body">
                       {/* Pinned Quick Status Strip & Hardware Actions */}
                       <div className="dm-panel-card" style={{ padding: '8px 10px', gap: '8px' }}>
-        
+
                         {/* Quick Hardware Actions */}
                         <div className="dm-quick-actions">
                           <button
                             type="button"
                             className={`dm-quick-btn dm-quick-btn--secondary${errorStatus === 'ok' ? ' dm-quick-btn--ok' : ''}${errorStatus === 'error' ? ' dm-quick-btn--error' : ''}`}
                             onClick={handleClearError}
-                            title="Clear robot errors and reset alarms"
+                            disabled={!teachConnected}
+                            title={!teachConnected ? 'Connect to the robot controller first' : 'Clear controller errors and reset alarms'}
                           >
                             {errorStatus === 'ok' ? 'Cleared' : errorStatus === 'error' ? 'Error' : 'Clear Error'}
                           </button>
@@ -1263,8 +1682,8 @@ const DrawingModePage = () => {
                             type="button"
                             className={`dm-quick-btn${initLoading ? ' dm-quick-btn--loading' : ''}${initStatus === 'ok' ? ' dm-quick-btn--ok' : ''}${initStatus === 'error' ? ' dm-quick-btn--error' : ''}`}
                             onClick={handleInit}
-                            disabled={initLoading}
-                            title="Connect and initialize / enable robot motors"
+                            disabled={initLoading || robotBusy}
+                            title={robotBusy ? 'Wait until robot motion finishes before Init' : 'Connect, power on, and enable robot motors'}
                           >
                             {initLoading ? <><span className="init-btn-spinner" /> Initing…</> : initStatus === 'ok' ? 'Ready' : initStatus === 'error' ? 'Error' : 'Init'}
                           </button>
@@ -1272,11 +1691,20 @@ const DrawingModePage = () => {
                             type="button"
                             className={`dm-quick-btn${homeLoading ? ' dm-quick-btn--loading' : ''}${homeStatus === 'ok' ? ' dm-quick-btn--ok' : ''}${homeStatus === 'error' ? ' dm-quick-btn--error' : ''}`}
                             onClick={handleGoHome}
-                            disabled={homeLoading || !teachConnected}
-                            title="Send robot to Home position"
+                            disabled={homeLoading || !teachRobotCanMove || robotBusy}
+                            title={!teachConnected ? 'Connect and initialize the robot first' : !teachRobotEnabled ? 'Enable robot servos first' : robotBusy ? 'Wait until robot motion finishes' : 'Requires a Home pose configured in settings'}
                           >
                             {homeLoading ? <><span className="init-btn-spinner" /> Homing…</> : homeStatus === 'ok' ? 'Homed' : homeStatus === 'error' ? 'Error' : 'Home'}
                           </button>
+                        </div>
+                        <div className="dm-action-prereq">
+                          {!teachConnected
+                            ? 'Before robot actions: press Init to connect, power on, and enable the robot.'
+                            : !teachRobotEnabled
+                              ? 'Robot is connected but disabled. Jog, Goto, Align, Home, and Draw require Init/Enable first.'
+                              : robotBusy
+                                ? 'Robot is busy; wait for the current motion to finish before Init, Home, Jog, Align, or Draw.'
+                                : 'Robot connected. Home additionally needs a Home pose configured in settings.'}
                         </div>
                       </div>
 
@@ -1290,7 +1718,8 @@ const DrawingModePage = () => {
                                 type="button"
                                 className={`dm-mark-toggle${markMode ? ' active' : ''}`}
                                 onClick={() => setMarkMode((v) => !v)}
-                                disabled={!markReady}
+                                disabled={!markReady || robotBusy}
+                                title={!markReady ? 'Robot and camera must be ready' : robotBusy ? 'Wait for current robot motion to finish' : 'Enable/disable image point marking'}
                               >
                                 {markMode ? 'Mark ON' : 'Mark OFF'}
                               </button>
@@ -1301,7 +1730,8 @@ const DrawingModePage = () => {
                                 type="button"
                                 className={`dm-mark-mode${markClickMode === 'mark' ? ' active' : ''}`}
                                 onClick={() => setMarkClickMode('mark')}
-                                disabled={!markReady}
+                                disabled={!markReady || robotBusy}
+                                title="Requires connected robot and running camera"
                               >
                                 Mark Corners
                               </button>
@@ -1309,7 +1739,8 @@ const DrawingModePage = () => {
                                 type="button"
                                 className={`dm-mark-mode${markClickMode === 'goto' ? ' active' : ''}`}
                                 onClick={() => setMarkClickMode('goto')}
-                                disabled={!markReady}
+                                disabled={!markReady || !teachRobotEnabled || robotBusy}
+                                title={!markReady ? 'Connect robot and start camera first' : !teachRobotEnabled ? 'Enable robot servos before Goto' : robotBusy ? 'Wait for current motion to finish' : 'Moves arm to clicked pixel'}
                               >
                                 Goto Position
                               </button>
@@ -1317,12 +1748,16 @@ const DrawingModePage = () => {
 
                             <div className="dm-mark-hint">
                               {!markReady
-                                ? 'Robot / Camera ไม่พร้อมใช้งาน'
-                                : markMode
-                                  ? (markClickMode === 'mark'
-                                    ? 'คลิกบนภาพ 4 จุด (มุมวัตถุ) แล้วกด Align · วาดภาพถูกปิดชั่วคราว'
-                                    : 'คลิกบนภาพ = สั่งหุ่นไปจุดนั้น')
-                                  : 'กด Mark ON แล้วคลิกจุดบนภาพ'}
+                                ? 'Prerequisite: connect and initialize robot, then start camera.'
+                                : !teachRobotEnabled
+                                  ? 'Prerequisite: enable robot servos before Align or Goto.'
+                                  : robotBusy
+                                    ? 'Prerequisite: wait for current robot motion to finish.'
+                                    : markMode
+                                      ? (markClickMode === 'mark'
+                                        ? 'คลิกบนภาพ 4 จุด (มุมวัตถุ) แล้วกด Align · วาดภาพถูกปิดชั่วคราว'
+                                        : 'คลิกบนภาพ = สั่งหุ่นไปจุดนั้น')
+                                      : 'กด Mark ON แล้วคลิกจุดบนภาพ'}
                             </div>
 
                             <div className="dm-mark-actions">
@@ -1330,7 +1765,8 @@ const DrawingModePage = () => {
                                 type="button"
                                 className="dm-mark-btn"
                                 onClick={() => alignAction('/api/map/reset_points', 'Points cleared')}
-                                disabled={!markReady || alignBusy}
+                                disabled={robotBusy || alignBusy || markPoints.length === 0}
+                                title={robotBusy ? 'Wait for current robot motion to finish' : markPoints.length === 0 ? 'No alignment points to clear' : 'Clear the alignment image points; no robot/camera connection required'}
                               >
                                 Reset
                               </button>
@@ -1338,7 +1774,8 @@ const DrawingModePage = () => {
                                 type="button"
                                 className="dm-mark-btn dm-mark-btn--primary"
                                 onClick={() => alignAction('/api/map/align', 'Align started')}
-                                disabled={!markReady || alignBusy || !!(teachStatus && teachStatus.align_running) || markPoints.length < 4}
+                                disabled={!markReady || !teachRobotEnabled || alignBusy || robotBusy || markPoints.length < 4}
+                                title={alignPrerequisite}
                               >
                                 Align
                               </button>
@@ -1346,11 +1783,13 @@ const DrawingModePage = () => {
                                 type="button"
                                 className="dm-mark-btn dm-mark-btn--danger"
                                 onClick={() => alignAction('/api/map/align/stop', 'Stop requested')}
-                                disabled={!markReady || alignBusy || !(teachStatus && teachStatus.align_running)}
+                                disabled={alignBusy || !(teachStatus && teachStatus.align_running)}
+                                title={teachStatus && teachStatus.align_running ? 'Stop the running alignment' : 'Available only while Align is running'}
                               >
                                 Stop
                               </button>
                             </div>
+                            <div className="dm-action-prereq">{alignPrerequisite}</div>
 
                             <div className="dm-align-stats dm-align-stats--rmse">
                               <div className="dm-align-stat-box">
@@ -1445,7 +1884,8 @@ const DrawingModePage = () => {
                                 type="button"
                                 className="frame-apply"
                                 onClick={handleApplyFrame}
-                                disabled={!teachConnected}
+                                disabled={!teachConnected || robotBusy}
+                                title={!teachConnected ? 'Connect and initialize the robot first' : robotBusy ? 'Wait until robot motion finishes before changing frames' : 'Apply selected Tool/User frame'}
                               >
                                 Apply
                               </button>
@@ -1494,13 +1934,16 @@ const DrawingModePage = () => {
                                 />
                               </label>
                             </div>
+                            <div className="dm-action-prereq">
+                              Set Grid only applies the selected dimensions; changing size clears existing marks and asks for confirmation. Reset Grid clears all marks. Neither action moves the robot or requires a connection.
+                            </div>
 
                             <div className="dm-teach-grid-actions">
                               <button
                                 type="button"
                                 className="dm-teach-action-btn"
-                                disabled={!teachConnected}
-                                title={teachConnected ? 'Apply grid size' : 'Robot not connected'}
+                                disabled={robotBusy}
+                                title={robotBusy ? 'Wait until robot motion finishes before changing the grid' : 'Apply selected rows/columns; changing size clears existing marks. No robot connection required'}
                                 onClick={handleSetGrid}
                               >
                                 Set Grid
@@ -1508,8 +1951,8 @@ const DrawingModePage = () => {
                               <button
                                 type="button"
                                 className="dm-teach-action-btn dm-teach-action-btn--danger"
-                                disabled={!teachConnected}
-                                title={teachConnected ? 'Clear all taught points' : 'Robot not connected'}
+                                disabled={robotBusy}
+                                title={robotBusy ? 'Wait until robot motion finishes before resetting the grid' : 'Clear all taught grid points. No robot connection required'}
                                 onClick={handleResetGrid}
                               >
                                 Reset Grid
@@ -1519,10 +1962,8 @@ const DrawingModePage = () => {
                             <button
                               type="button"
                               className="dm-teach-autofill-btn"
-                              disabled={!teachConnected || markPoints.length < 4}
-                              title={markPoints.length < 4
-                                ? 'Mark 4 corner points on the image (Align Points) first'
-                                : 'Jog Z down until the pen touches the surface FIRST, then click — the grid inherits the current Z'}
+                              disabled={!teachConnected || !cameraReady || markPoints.length < 4 || robotBusy}
+                              title={autoFillPrerequisite}
                               onClick={handleAutoFillGrid}
                             >
                               Auto-fill grid from 4 mark points
@@ -1531,8 +1972,8 @@ const DrawingModePage = () => {
                             <button
                               type="button"
                               className="dm-teach-surfacez-btn"
-                              disabled={!teachConnected || markedCount === 0}
-                              title="Compute the surface Z from the LIVE camera depth (run Align first) and drop the grid onto it — no jogging. The next Send descends ~that far."
+                              disabled={!teachConnected || !cameraReady || !gridComplete || !(teachStatus && Number(teachStatus.last_center_depth) > 0) || robotBusy}
+                              title={surfaceZPrerequisite}
                               onClick={handleGridSurfaceZ}
                             >
                               {`↧ Grid Z = measured surface (auto)${teachStatus && teachStatus.last_center_depth ? ` · depth ${Number(teachStatus.last_center_depth).toFixed(0)}mm` : ''}`}
@@ -1541,8 +1982,8 @@ const DrawingModePage = () => {
                             <button
                               type="button"
                               className="dm-teach-setz-btn"
-                              disabled={!teachConnected || markedCount === 0}
-                              title="Jog Z down until the pen touches the surface FIRST, then press — keeps the grid X/Y and takes this Z"
+                              disabled={!teachConnected || !gridComplete || robotBusy}
+                              title={!teachConnected ? 'Connect and initialize the robot first' : !gridComplete ? `Mark all ${gRows * gCols} grid cells first (${markedCount}/${gRows * gCols})` : robotBusy ? 'Wait until robot motion finishes' : 'Jog Z until the pen touches the surface, then apply current Z to all grid cells'}
                               onClick={handleSetGridZ}
                             >
                               ↧ Grid Z = current Z (jog to surface first)
@@ -1552,16 +1993,16 @@ const DrawingModePage = () => {
                               <button
                                 type="button"
                                 className="dm-teach-surfacez-btn"
-                                disabled={!teachConnected || markedCount === 0}
-                                title="Apply the surface Z configured in backend/.maps_point.env (Z_SURFACE) to every grid cell — no jogging needed"
+                                disabled={!teachConnected || !gridComplete || robotBusy}
+                                title={!teachConnected ? 'Connect and initialize the robot first' : !gridComplete ? `Mark all ${gRows * gCols} grid cells first (${markedCount}/${gRows * gCols})` : robotBusy ? 'Wait until robot motion finishes' : 'Apply configured Z_SURFACE to all grid cells'}
                                 onClick={handleSetGridZSurface}
                               >
                                 {`↧ Grid Z = surface (${teachStatus.z_surface.toFixed(1)}mm, configured)`}
                               </button>
                             )}
 
-                            <div className="dm-teach-hint">
-                              jog Z ลงให้ปากกาแตะผิวงานก่อน แล้วกด Auto-fill · หรือ jog ไปมุมจริงแล้วกดปุ่มช่องนั้น
+                            <div className="dm-action-prereq">
+                              Auto-fill: {autoFillPrerequisite} Current/Configured Grid Z: connect robot and mark all {gRows * gCols} cells. Surface Z additionally needs camera + live depth, and camera alignment is recommended.
                             </div>
                           </div>
 
@@ -1582,8 +2023,8 @@ const DrawingModePage = () => {
                                       key={`${i}-${j}`}
                                       type="button"
                                       className={`dm-teach-cell${marked ? ' dm-teach-cell--marked' : ''}`}
-                                      disabled={!teachConnected}
-                                      title={teachConnected ? `Record current pose into R${i + 1}C${j + 1}` : 'Robot not connected'}
+                                      disabled={!teachConnected || robotBusy}
+                                      title={!teachConnected ? 'Connect and initialize the robot first' : robotBusy ? 'Wait until robot motion finishes' : `Jog pen to R${i + 1}C${j + 1}, then record the current pose`}
                                       onClick={() => handleMarkCell(i + 1, j + 1)}
                                     >
                                       {`R${i + 1}C${j + 1}`}
@@ -1607,10 +2048,116 @@ const DrawingModePage = () => {
                             <svg viewBox="0 0 200 200" className="dm-teach-shape-svg">
                               {gridShapeEls || (
                                 <text x="100" y="104" textAnchor="middle" className="dm-teach-shape-empty">
-                                  mark all 4 corners
+                                  mark grid cells ({gRows}×{gCols})
                                 </text>
                               )}
                             </svg>
+                          </div>
+
+                          <div className="dm-panel-card">
+                            <div className="dm-panel-card-head">
+                              <span className="dm-panel-card-title">Test Points &amp; Report</span>
+                              <span style={{ fontSize: '10px', fontWeight: 700, color: '#059669' }}>
+                                {reportGate ? `${reportGate.coverage.matchedCount}/${TEST_POINT_POSITIONS.length}` : `${testPoints.length}`} recorded
+                              </span>
+                            </div>
+
+                            <div className="dm-teach-hint">
+                              Prerequisite: mark all {gRows * gCols} grid cells. Jog to each test location, then either record the robot's own reading or type the position you measured yourself — leave the box empty to use the robot reading.
+                            </div>
+
+                            {TEST_POINT_POSITIONS.map((p, i) => (
+                              <div key={`row-${p.u}-${p.v}`} className="dm-teach-grid-actions">
+                                <button
+                                  type="button"
+                                  className="dm-teach-action-btn"
+                                  disabled={!gridComplete || robotBusy || (!teachConnected && !String(measured[`${p.u},${p.v}`] || '').trim())}
+                                  title={!gridComplete ? `Mark all ${gRows * gCols} grid cells first (${markedCount}/${gRows * gCols})` : robotBusy ? 'Wait until robot motion finishes' : teachConnected ? `Record u=${p.u}, v=${p.v}` : 'Type the position you measured to record without the robot'}
+                                  onClick={() => handleRecordTestPoint(p.u, p.v, measured[`${p.u},${p.v}`])}
+                                >
+                                  {reportGate?.coverage?.matched?.[i] ? '✓ ' : ''}{p.label}
+                                </button>
+                                <input
+                                  className="dm-teach-measured-input"
+                                  type="text"
+                                  inputMode="decimal"
+                                  placeholder="X, Y, Z"
+                                  aria-label={`Measured position for ${p.label}`}
+                                  value={measured[`${p.u},${p.v}`] || ''}
+                                  onChange={(e) => setMeasured((prev) => ({
+                                    ...prev,
+                                    [`${p.u},${p.v}`]: e.target.value,
+                                  }))}
+                                />
+                              </div>
+                            ))}
+
+                            {reportGate && (
+                              <div className="dm-teach-grid-status">
+                                {reportGate.canDownload
+                                  ? `✓ ครบ ${reportGate.coverage.matchedCount}/${TEST_POINT_POSITIONS.length} จุด — บันทึกไฟล์ได้`
+                                  : reportGate.reasons.map((reason) => (
+                                    <div key={reason}>{`✗ ${reason}`}</div>
+                                  ))}
+                              </div>
+                            )}
+
+                            {testPoints.length > 0 && (
+                              <div className="dm-teach-grid-status">
+                                {testPoints.map((t) => (
+                                  <div key={t.index}>
+                                    {`#${t.index} u=${t.u.toFixed(2)} v=${t.v.toFixed(2)} — `}
+                                    {`ΔX=${t.error[0].toFixed(2)} ΔY=${t.error[1].toFixed(2)} ΔZ=${t.error[2].toFixed(2)} mm`}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            {testAggregates && testAggregates.count > 0 && (
+                              <div className="dm-teach-grid-status">
+                                <div>
+                                  {`n=${testAggregates.count} · Max Δ ${fmtMm(testAggregates.max_error)}mm`
+                                    + ` · Mean ${fmtMm(testAggregates.mean_error)}mm`
+                                    + ` · RMSE ${fmtMm(testAggregates.rmse)}mm`}
+                                </div>
+                              </div>
+                            )}
+
+                            <div className="dm-teach-grid-actions">
+                              <button
+                                type="button"
+                                className="dm-teach-autofill-btn"
+                                disabled={verifyBusy || robotBusy || !teachConnected || markedCount !== gRows * gCols}
+                                title={
+                                  markedCount !== gRows * gCols
+                                    ? 'Mark every grid cell first'
+                                    : robotBusy
+                                      ? 'Wait until robot motion finishes'
+                                      : 'Move the arm to all five test positions and record each one'
+                                }
+                                onClick={handleVerifyGrid}
+                              >
+                                {verifyBusy ? 'กำลังวัด 5 จุด…' : 'วัดความแม่นยำ 5 จุด'}
+                              </button>
+                              <button
+                                type="button"
+                                className="dm-teach-action-btn dm-teach-action-btn--danger"
+                                disabled={testPoints.length === 0}
+                                title={testPoints.length ? 'Clear recorded test points; no robot connection required' : 'No test points to clear'}
+                                onClick={handleResetTestPoints}
+                              >
+                                Reset test points
+                              </button>
+                              <button
+                                type="button"
+                                className="dm-teach-autofill-btn"
+                                disabled={testReportBusy}
+                                onClick={handleDownloadReport}
+                                title="Download the current grid/test-point report; test points are optional"
+                              >
+                                {testReportBusy ? 'กำลังบันทึก…' : 'บันทึกผลการทดสอบ (ชีต 05 + 09)'}
+                              </button>
+                            </div>
                           </div>
                         </>
                       )}
@@ -1620,6 +2167,13 @@ const DrawingModePage = () => {
                         <div className="dm-panel-card">
                           <div className="dm-panel-card-head">
                             <span className="dm-panel-card-title">Motion Jog Control</span>
+                          </div>
+                          <div className="dm-teach-hint">
+                            {!teachConnected
+                              ? 'Prerequisite: connect and initialize the robot.'
+                              : robotBusy
+                                ? 'Jog is unavailable while Align, Draw, or a motion sequence is running.'
+                                : 'Jog requires a connected, enabled robot; step values are in mm or degrees.'}
                           </div>
 
                           {/* Submode Switcher */}
@@ -1694,7 +2248,7 @@ const DrawingModePage = () => {
                               <JogPillRow
                                 key={axis}
                                 label={axisLabel(axis)}
-                                disabled={!teachConnected || jogBusy}
+                                disabled={!teachRobotCanMove || jogBusy || robotBusy}
                                 titleMinus={`Jog ${axisLabel(axis)} −${posStep}mm`}
                                 titlePlus={`Jog ${axisLabel(axis)} +${posStep}mm`}
                                 onMinus={() => handleJog(axis, -1)}
@@ -1706,7 +2260,7 @@ const DrawingModePage = () => {
                               <JogPillRow
                                 key={axis}
                                 label={axisLabel(axis)}
-                                disabled={!teachConnected || jogBusy}
+                                disabled={!teachRobotCanMove || jogBusy || robotBusy}
                                 titleMinus={`Jog ${axisLabel(axis)} −${rotStep}deg`}
                                 titlePlus={`Jog ${axisLabel(axis)} +${rotStep}deg`}
                                 onMinus={() => handleJog(axis, -1)}
@@ -1718,7 +2272,7 @@ const DrawingModePage = () => {
                               <JogPillRow
                                 key={j}
                                 label={`J${j}`}
-                                disabled={!teachConnected || jogBusy}
+                                disabled={!teachRobotCanMove || jogBusy || robotBusy}
                                 titleMinus={`Jog J${j} −${jointStep}deg`}
                                 titlePlus={`Jog J${j} +${jointStep}deg`}
                                 onMinus={() => handleJogJoint(j, -1)}
@@ -1767,7 +2321,77 @@ const DrawingModePage = () => {
                       {panelTab === 'draw' && (
                         <div className="dm-panel-card">
                           <div className="dm-panel-card-head">
-                            <span className="dm-panel-card-title">Send Drawing to Robot</span>
+                            <span className="dm-panel-card-title">Draw Tools</span>
+                          </div>
+
+                          <div className="dm-draw-tool-row">
+                            {TOOL_META.map((tool) => (
+                              <button
+                                key={tool.id}
+                                id={`tool-${tool.id}`}
+                                className={`dm-bar-btn ${activeTool === tool.id ? 'dm-bar-btn--active' : ''}`}
+                                title={tool.label}
+                                onClick={() => setActiveTool(tool.id)}
+                              >
+                                <span style={{ fontSize: 20 }}>{tool.icon}</span>
+                                <span style={{ fontSize: 9, fontWeight: 700 }}>{tool.label}</span>
+                              </button>
+                            ))}
+                          </div>
+
+                          <div className="dm-draw-options-row">
+                            <div className="dm-draw-colors">
+                              {PRESET_COLORS.map((color) => (
+                                <button
+                                  key={color}
+                                  className={`dm-dot ${strokeColor === color ? 'dm-dot--active' : ''}`}
+                                  style={{ background: color, border: color === '#ffffff' ? '1.5px solid #aac8e8' : `1.5px solid ${color}` }}
+                                  title={color}
+                                  aria-label={`Set drawing color ${color}`}
+                                  onClick={() => setStrokeColor(color)}
+                                />
+                              ))}
+                              <input
+                                id="stroke-color-picker"
+                                type="color"
+                                value={strokeColor}
+                                onChange={(event) => setStrokeColor(event.target.value)}
+                                className="dm-bar-color-input"
+                                title="Custom color"
+                              />
+                            </div>
+                            <div className="dm-draw-widths">
+                              {STROKE_WIDTHS.map((width) => (
+                                <button
+                                  key={width}
+                                  id={`stroke-width-${width}`}
+                                  className={`dm-bar-w-btn ${strokeWidth === width ? 'dm-bar-btn--active' : ''}`}
+                                  title={`${width}px`}
+                                  onClick={() => setStrokeWidth(width)}
+                                >{width}</button>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="dm-draw-actions-row">
+                            <button id="btn-undo" className="dm-bar-btn" onClick={undo} disabled={!canUndo} title="Undo (Ctrl+Z)">↩</button>
+                            <button id="btn-redo" className="dm-bar-btn" onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Y)">↪</button>
+                            <button
+                              id="btn-delete-selected"
+                              className="dm-bar-btn"
+                              onClick={deleteSelected}
+                              disabled={!hasSelection}
+                              aria-label="Delete selected objects"
+                              title="Delete selected object(s) (Delete)"
+                            >⌫</button>
+                            <button id="btn-clear" className="dm-bar-btn dm-bar-btn--danger" onClick={clearCanvas} title="Clear all objects">✕</button>
+                            <button
+                              id="btn-export-png"
+                              className="dm-bar-btn"
+                              onClick={exportPNG}
+                              disabled={objectCount === 0}
+                              title={objectCount === 0 ? 'Draw something before exporting' : 'Export the current canvas as PNG'}
+                            >⬇</button>
                           </div>
 
                           {/* Status */}
@@ -1797,8 +2421,14 @@ const DrawingModePage = () => {
                           {/* Object count */}
                           <div style={{ fontSize: '12px', color: '#64748b' }}>
                             {objectCount > 0
-                              ? `${objectCount} object${objectCount > 1 ? 's' : ''} on canvas — ready to send`
+                              ? `${objectCount} object${objectCount > 1 ? 's' : ''} on canvas`
                               : 'Canvas is empty — draw something first'}
+                            <span style={{ display: 'block', color: drawPrerequisite === 'Ready to send.' ? '#16a34a' : '#b45309' }}>
+                              Before Send: {drawPrerequisite} Grid {markedCount}/{gRows * gCols} marked.
+                            </span>
+                            {gridValidate && Array.isArray(gridValidate.warnings) && gridValidate.warnings.length > 0 && (
+                              <span className="dm-prereq-warning">Grid warning: {gridValidate.warnings.join('; ')}</span>
+                            )}
                           </div>
 
                           {/* Send + Stop */}
@@ -1808,8 +2438,8 @@ const DrawingModePage = () => {
                               className={`dm-quick-btn dm-quick-btn--ok${isSending ? ' dm-quick-btn--loading' : ''}`}
                               style={{ flex: 1 }}
                               onClick={sendToRobot}
-                              disabled={isSending || !teachConnected || objectCount === 0}
-                              title="Send drawing paths to robot"
+                              disabled={isSending || !teachRobotCanMove || objectCount === 0 || !gridComplete || gridTooSmall || robotBusy}
+                              title={drawPrerequisite}
                             >
                               {isSending ? '…Sending' : '▶ Send to Robot'}
                             </button>
@@ -1818,7 +2448,7 @@ const DrawingModePage = () => {
                               className="dm-quick-btn dm-quick-btn--error"
                               onClick={stopDraw}
                               disabled={!isSending && !(teachStatus && teachStatus.draw_running)}
-                              title="Stop the running draw"
+                              title={teachStatus && teachStatus.draw_running ? 'Stop the active drawing motion' : 'Available only while Draw is running'}
                             >
                               ■ Stop
                             </button>
@@ -1839,97 +2469,6 @@ const DrawingModePage = () => {
                   </>
                 )}
               </div>
-            </div>
-
-            {/* ── Bottom Toolbar ── */}
-            <div className="dm-bottom-bar">
-
-              {/* Tools */}
-              <div className="dm-bar-group">
-                {TOOL_META.map((t) => (
-                  <button
-                    key={t.id}
-                    id={`tool-${t.id}`}
-                    className={`dm-bar-btn ${activeTool === t.id ? 'dm-bar-btn--active' : ''}`}
-                    title={t.label}
-                    onClick={() => setActiveTool(t.id)}
-                  >
-                    <span style={{ fontSize: 20 }}>{t.icon}</span>
-                    <span style={{ fontSize: 9, fontWeight: 700 }}>{t.label}</span>
-                  </button>
-                ))}
-              </div>
-
-              <div className="dm-bar-sep" />
-
-              {/* Colors */}
-              <div className="dm-bar-group">
-                {PRESET_COLORS.map((c) => (
-                  <button
-                    key={c}
-                    className={`dm-dot ${strokeColor === c ? 'dm-dot--active' : ''}`}
-                    style={{ background: c, border: c === '#ffffff' ? '1.5px solid #aac8e8' : `1.5px solid ${c}` }}
-                    title={c}
-                    onClick={() => setStrokeColor(c)}
-                  />
-                ))}
-                <input
-                  id="stroke-color-picker"
-                  type="color"
-                  value={strokeColor}
-                  onChange={(e) => setStrokeColor(e.target.value)}
-                  className="dm-bar-color-input"
-                  title="Custom color"
-                />
-              </div>
-
-              <div className="dm-bar-sep" />
-
-              {/* Widths */}
-              <div className="dm-bar-group">
-                {STROKE_WIDTHS.map((w) => (
-                  <button
-                    key={w}
-                    id={`stroke-width-${w}`}
-                    className={`dm-bar-w-btn ${strokeWidth === w ? 'dm-bar-btn--active' : ''}`}
-                    title={`${w}px`}
-                    onClick={() => setStrokeWidth(w)}
-                  >{w}</button>
-                ))}
-              </div>
-
-              <div className="dm-bar-sep" />
-
-              {/* Actions */}
-              <div className="dm-bar-group">
-                <button id="btn-undo" className="dm-bar-btn" onClick={undo} disabled={!canUndo} title="Undo (Ctrl+Z)">↩</button>
-                <button id="btn-redo" className="dm-bar-btn" onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Y)">↪</button>
-                <button id="btn-clear" className="dm-bar-btn dm-bar-btn--danger" onClick={clearCanvas} title="Clear all">✕</button>
-                <button id="btn-export-png" className="dm-bar-btn" onClick={exportPNG} title="Export PNG">⬇</button>
-                <button
-                  id="btn-send-robot"
-                  className={`dm-bar-send ${isSending ? 'dm-bar-send--busy' : ''}`}
-                  onClick={sendToRobot}
-                  disabled={isSending}
-                  title="Send paths to Robot"
-                >
-                  {isSending ? '…' : 'Send'}
-                </button>
-                <button
-                  id="btn-draw-stop"
-                  className="dm-bar-btn dm-bar-btn--danger"
-                  onClick={stopDraw}
-                  disabled={!isSending && !(teachStatus && teachStatus.draw_running)}
-                  title="Stop the running draw (ClearError + ResetRobot)"
-                >■</button>
-              </div>
-
-              {/* Status */}
-              <div className="dm-bar-sep" />
-              <span className="dm-bottom-status">
-                <span className="dm-status-bar-tool">{activeTool}</span>
-                &nbsp;·&nbsp;{objectCount} obj&nbsp;·&nbsp;{status}
-              </span>
             </div>
 
           </div>

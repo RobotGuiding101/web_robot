@@ -156,6 +156,11 @@ ALIGN_RZ_MAX_ITERS    = int(os.environ.get("ALIGN_RZ_MAX_ITERS",      "20"))
 # from queuing an unbounded number of blocking moves. Units are normalized
 # canvas fractions (0..1), not pixels or mm, since the canvas element's own
 # pixel size is arbitrary.
+# Master switch for the reduction stage: 0/false/no/off skips Douglas-Peucker
+# and keeps only the uniform cap below — for A/B-ing whether DP visibly
+# flattens a hand-drawn shape. DRAW_SIMPLIFY_EPS is unused while off.
+DRAW_SIMPLIFY_ENABLED = os.environ.get(
+    "DRAW_SIMPLIFY_ENABLED", "1").strip().lower() not in ("0", "false", "no", "off")
 DRAW_SIMPLIFY_EPS = float(os.environ.get("DRAW_SIMPLIFY_EPS", "0.015"))
 # Hard cap on waypoints AFTER simplification (uniformly downsampled further
 # if still over) — bounds how long a single draw run can take/queue.
@@ -243,12 +248,15 @@ _z_surface_env = os.environ.get("Z_SURFACE", "").strip()
 # workpiece. The touch-off datum in control_robot's z_cam_calib JSON is NOT
 # this value (it was measured on a calibration tag, not the drawing surface).
 Z_SURFACE = float(_z_surface_env) if _z_surface_env else None
-# Live surface estimate (grid/surfacez): surface_Z = pose_Z - depth + these.
-# CAM_TIP_OFFSET_MM is how far the D455 sits beyond the pen tip along the tool
-# axis (~1.5mm from the 2026-06-30 z_cam_calib intercept). DRAW_SURFACE_GAP_MM
-# keeps the pen a hair ABOVE the measured surface - safer than nicking it.
+# Grid Z from live depth: Z = pose_Z - depth + CAM_TIP_OFFSET_MM + gap. depth
+# comes from the D455, which is NOT at the pen tip, so this must be the tip's
+# drop BELOW the camera along the tool axis — positive when the pen reaches
+# further down. The 1.5mm default came from the z_cam_calib intercept and only
+# holds if the camera sits level with the tip. Measure: (pose_Z while hovering
+# minus depth) minus (pose_Z with the pen touching).
 CAM_TIP_OFFSET_MM = float(os.environ.get("CAM_TIP_OFFSET_MM", "1.5"))
 DRAW_SURFACE_GAP_MM = float(os.environ.get("DRAW_SURFACE_GAP_MM", "2.0"))
+
 HOME_RX = float(os.environ.get("HOME_RX", "0.0"))
 HOME_RY = float(os.environ.get("HOME_RY", "0.0"))
 HOME_RZ = float(os.environ.get("HOME_RZ", "0.0"))

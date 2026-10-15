@@ -1,0 +1,79 @@
+[
+ {
+  "id": "SEC-01",
+  "case": "บังคับ Bearer ทุก /api/*",
+  "expected": "401",
+  "observed_code": 401,
+  "observed": "{\"detail\":\"Not authenticated\"}"
+ },
+ {
+  "id": "SEC-01b",
+  "case": "token เสียบน /api/map/status",
+  "expected": "401",
+  "observed_code": 401,
+  "observed": "{\"detail\":\"Invalid token\"}"
+ },
+ {
+  "id": "SEC-01c",
+  "case": "token ถูกต้องบน /api/map/status",
+  "expected": "200",
+  "observed_code": 200,
+  "observed": "{\"connected\":true,\"camera_running\":true,\"cam_w\":848,\"cam_h\":480,\"stream_w\":848,\""
+ },
+ {
+  "id": "SEC-01d",
+  "case": "/api/auth/* เปิดได้ไม่ต้อง token",
+  "expected": "401 (/me ต้องใช้)",
+  "observed_code": 401,
+  "observed": "auth exempt from middleware"
+ },
+ {
+  "id": "SEC-02",
+  "case": "CORS ตาม ALLOWED_ORIGINS",
+  "expected": "มี ACAO เมื่อ origin อนุญาต",
+  "observed_code": 200,
+  "observed": "ACAO=http://192.168.10.104"
+ },
+ {
+  "id": "SEC-02b",
+  "case": "CORS ปฏิเสธ origin นอก allowlist",
+  "expected": "ไม่มี ACAO",
+  "observed_code": 200,
+  "observed": "ACAO=(ไม่มี header)"
+ },
+ {
+  "id": "SEC-03",
+  "case": "OPTIONS ไม่ถูกบล็อกด้วย 401",
+  "expected": "2xx/3xx/4xx แต่ไม่ใช่ 401",
+  "observed_code": 200,
+  "observed": "ACAO=http://192.168.10.104 methods=DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT, QUERY"
+ },
+ {
+  "id": "SEC-04",
+  "case": "Root health",
+  "expected": "200 + Robot Arm API is running",
+  "observed_code": 200,
+  "observed": "<!doctype html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"UTF-8\" />\n    <link"
+ },
+ {
+  "id": "API-05",
+  "case": "endpoint ป้องกันตอบ 401",
+  "expected": "401",
+  "observed_code": 401,
+  "observed": "{\"detail\":\"Invalid token\"}"
+ },
+ {
+  "id": "API-06",
+  "case": "401 จาก /api/auth/login",
+  "expected": "401",
+  "observed_code": 401,
+  "observed": "{\"detail\":\"Invalid credentials\"}"
+ },
+ {
+  "id": "DASH-01",
+  "case": "สถานะเชื่อมต่อ (ข้อมูลที่ Dashboard ใช้)",
+  "expected": "200",
+  "observed_code": 404,
+  "observed": "{\"detail\":\"Not Found\"}"
+ }
+]

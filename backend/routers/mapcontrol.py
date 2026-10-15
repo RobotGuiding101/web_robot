@@ -32,14 +32,21 @@ from maps_point.config import (ROBOT_IP, ROBOT_MODE_LABELS,
                                DRAW_GRID_MAX_ROWS, DRAW_GRID_MAX_COLS,
                                DRAW_MIN_GRID_SPAN_MM, Z_SURFACE,
                                CAM_TIP_OFFSET_MM, DRAW_SURFACE_GAP_MM,
-                               MIN_DEPTH_MM)
+                               DRAW_LIFT_MM, MIN_DEPTH_MM,
+                               HOME_X, HOME_Y, HOME_Z,
+                               HOME_RX, HOME_RY, HOME_RZ)
 from maps_point.logs import log, server_ring, robot_ring
 from maps_point.robot import Robot, RobotMoveError
 from maps_point.camera import Camera
 from maps_point.align import AppState, do_align, start_tracking_thread
 from maps_point.motion import do_goto, pixel_to_world_xy
 from maps_point import floorcalib
-from maps_point.planegrid import do_draw, validate_grid, project_grid_2d, bilinear_cell, grid_pose
+from maps_point.planegrid import (do_draw, do_verify_grid, validate_grid,
+                                  project_grid_2d, bilinear_cell, grid_pose,
+                                  draw_stats, grid_fingerprint,
+                                  pose_read_is_plausible, test_aggregates,
+                                  build_test_report_payload, parse_measured_pose,
+                                  TEST_POINTS_EXPECTED, GRID_TEST_POSITIONS)
 from maps_point.render import draw_overlay
 
 router = APIRouter(prefix="/api/map", tags=["MapControl"])
@@ -72,14 +79,29 @@ def _log_user_event(request: Request, device: str, state_name: str, detail: str 
 
 def _bind_draw_done_hook(request: Request) -> None:
     """Give the (thread-run) do_draw a way to log its outcome to device_logs
-    with the requesting user's id, since a background thread has no request."""
+    with the requesting user's id, since a background thread has no request.
+
+    Also folds the outcome back into state.last_draw_stats so the
+    /api/map/test-report download can state whether the replay actually
+    completed — the "ผลการวาดจริง" column is the one number a static request
+    payload cannot know, because it only exists once the motion thread ends."""
     try:
         header = request.headers.get("authorization", "")
         if not header.startswith("Bearer "):
             state.on_draw_done = None
             return
         sub = jwt.decode(header[7:], SECRET_KEY, algorithms=[ALGORITHM]).get("sub", "")
-        state.on_draw_done = lambda action, detail="": log_event(sub, "draw", action, detail)
+
+        def _hook(action, detail=""):
+            stats = dict(getattr(state, "last_draw_stats", None) or {})
+            stats["result"] = {"action": action, "detail": detail, "at": time.time()}
+            state.last_draw_stats = stats
+            try:
+                log_event(sub, "draw", action, detail)
+            except Exception:
+                pass
+
+        state.on_draw_done = _hook
     except Exception:
         state.on_draw_done = None
 
@@ -1018,6 +1040,42 @@ def api_init(request: Request):
     return {"ok": True, "connected": robot.connected}
 
 
+@router.post("/enable")
+def api_enable(request: Request):
+    if not robot.connected:
+        return {"ok": False, "error": "not connected"}
+    if state.align_running or state.draw_running or sequence_running:
+        return {"ok": False, "error": "robot busy (align/draw/sequence running)"}
+    try:
+        with robot_lock:
+            if state.align_running or state.draw_running or sequence_running:
+                return {"ok": False, "error": "robot busy (align/draw/sequence running)"}
+            reply = robot.enable_robot()
+        _log_user_event(request, "robot", "enable", str(reply))
+        return {"ok": True, "reply": str(reply)}
+    except Exception as e:
+        _log_user_event(request, "robot", "enable", f"failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+@router.post("/disable")
+def api_disable(request: Request):
+    if not robot.connected:
+        return {"ok": False, "error": "not connected"}
+    if state.align_running or state.draw_running or sequence_running:
+        return {"ok": False, "error": "robot busy (align/draw/sequence running)"}
+    try:
+        with robot_lock:
+            if state.align_running or state.draw_running or sequence_running:
+                return {"ok": False, "error": "robot busy (align/draw/sequence running)"}
+            reply = robot.disable_robot()
+        _log_user_event(request, "robot", "disable", str(reply))
+        return {"ok": True, "reply": str(reply)}
+    except Exception as e:
+        _log_user_event(request, "robot", "disable", f"failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+
 @router.post("/camstart")
 def api_camstart(request: Request):
     ok = cam.start()
@@ -1049,6 +1107,8 @@ def api_emergency(request: Request):
 
 
 _HOME_KEYS = ("home_x", "home_y", "home_z", "home_rx", "home_ry", "home_rz")
+_HOME_ENV = {"home_x": HOME_X, "home_y": HOME_Y, "home_z": HOME_Z,
+             "home_rx": HOME_RX, "home_ry": HOME_RY, "home_rz": HOME_RZ}
 
 
 async def _user_home_pose(db: AsyncSession, user_id: str):
@@ -1060,10 +1120,11 @@ async def _user_home_pose(db: AsyncSession, user_id: str):
     )
     saved = {s.key: s.value for s in rows.scalars().all()}
     try:
-        pose = [float(saved.get(k, "0.0")) for k in _HOME_KEYS]
+        pose = tuple(float(saved[k]) if k in saved else _HOME_ENV[k]
+                     for k in _HOME_KEYS)
     except (TypeError, ValueError):
         return None
-    return tuple(pose) if any(pose[:3]) else None
+    return pose if any(pose[:3]) else None
 
 
 @router.post("/home")
@@ -1400,6 +1461,20 @@ def api_grid_mark(request: Request, body: GridMarkBody):
     return {"ok": True, "message": msg, "grid_points": state.grid_points}
 
 
+def _vertical_depth(depth: float, Rx: float, Ry: float) -> float:
+    """Depth as measured along the camera's optical axis, converted to the
+    drop in robot Z.
+
+    RealSense reports distance along its own viewing axis. Once align() has
+    squared the tool to the workpiece that axis is the surface normal, which
+    is only parallel to robot Z when the workpiece is level with the table —
+    on a raked workpiece the two differ, and subtracting the raw depth
+    would place the grid that much too high. The tool axis' Z component for
+    Dobot's ZYX Euler order is cos(Rx)*cos(Ry)."""
+    tilt = math.cos(math.radians(Rx)) * math.cos(math.radians(Ry))
+    return depth * abs(tilt)
+
+
 @router.post("/grid/autofill")
 def api_grid_autofill(request: Request):
     """Fill the whole grid from the 4 image points already marked on the
@@ -1423,20 +1498,31 @@ def api_grid_autofill(request: Request):
     robot.ensure_frame()
     X, Y, Z, Rx, Ry, Rz = robot.get_pose()
     tl, tr, br, bl = _sort_corners(pts[:4])
+    ordered = (("top-left", tl), ("top-right", tr),
+               ("bottom-right", br), ("bottom-left", bl))
+    samples = []
+    for name, (px, py) in ordered:
+        d = cam.sample_depth(int(px), int(py))
+        if d <= 0:
+            return {"ok": False,
+                    "error": f"no depth reading at the {name} point ({px},{py}) — "
+                             f"re-mark it on the object surface"}
+        samples.append(d)
+    # One depth for all four corners: pixel_to_world_xy scales XY by depth, so
+    # a per-corner value scales each corner differently and turns a square into
+    # a trapezoid whenever the reading wobbles or leaks onto the background.
+    # The median keeps the shape faithful; absolute size is still whatever the
+    # depth says it is.
+    depth = sorted(samples)[len(samples) // 2]
     corners = {}
-    for name, (px, py) in (("top-left", tl), ("top-right", tr),
-                           ("bottom-right", br), ("bottom-left", bl)):
-        xy = pixel_to_world_xy(cam, px, py, (X, Y))
+    for name, (px, py) in ordered:
+        xy = pixel_to_world_xy(cam, px, py, (X, Y), depth)
         if xy is None:
             return {"ok": False,
                     "error": f"no depth at the {name} point ({px},{py}) — "
                              f"re-mark it on the object surface"}
-        depth = cam.sample_depth(int(px), int(py))
-        if depth <= 0:
-            return {"ok": False,
-                    "error": f"no depth reading at the {name} point ({px},{py}) — "
-                             f"re-mark it on the object surface"}
-        surface_z = Z - depth + CAM_TIP_OFFSET_MM + DRAW_SURFACE_GAP_MM
+        surface_z = Z - _vertical_depth(depth, Rx, Ry) \
+                    + CAM_TIP_OFFSET_MM + DRAW_SURFACE_GAP_MM
         corners[name] = [xy[0], xy[1], surface_z, Rx, Ry, Rz]
 
     rows, cols = state.grid_rows, state.grid_cols
@@ -1505,7 +1591,8 @@ def api_grid_surfacez(request: Request):
                 "error": "no depth reading yet — mark the object on the image first"}
     robot.ensure_frame()
     _, _, pose_z, Rx, Ry, Rz = robot.get_pose()
-    surface_z = pose_z - depth + CAM_TIP_OFFSET_MM + DRAW_SURFACE_GAP_MM
+    vert_depth = _vertical_depth(depth, Rx, Ry)
+    surface_z = pose_z - vert_depth + CAM_TIP_OFFSET_MM + DRAW_SURFACE_GAP_MM
     for i in range(state.grid_rows):
         for j in range(state.grid_cols):
             p = state.grid_points[i][j]
@@ -1526,6 +1613,129 @@ def api_grid_reset(request: Request):
             state.grid_points[i][j] = None
     _log_user_event(request, "draw", "grid_reset", f"{state.grid_rows}x{state.grid_cols}")
     return {"ok": True}
+
+
+class GridTestPointBody(BaseModel):
+    u: float
+    v: float
+    actual: Optional[list] = None
+
+
+@router.post("/grid/test-point")
+def api_grid_test_point(request: Request, body: GridTestPointBody):
+    """Record one Grid Mapping test point: the pose the taught grid predicts
+    for canvas position (u,v), against the pose the robot is actually at now.
+
+    Read-only — the operator jogs to the spot by hand first; nothing here
+    moves the arm.
+
+    `actual` lets the operator supply the measured pose instead. On this
+    controller GetPose() has been observed returning exactly the last
+    commanded Cartesian target, which made a hand-verified run report 0.000mm
+    error at all five positions; a value read from a gauge, a rule, or the
+    controller's own screen is a real measurement and must win over the
+    echoed command. The grid prediction, the errors and the aggregates are
+    computed the same way either way."""
+    if not _grid_fully_marked():
+        return {"ok": False, "error": "grid not fully marked"}
+    u, v = float(body.u), float(body.v)
+    if not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0):
+        return {"ok": False, "error": "u and v must be within [0,1]"}
+    computed = grid_pose(u, v, state.grid_points, state.grid_rows, state.grid_cols)
+    actual, measured_error = parse_measured_pose(body.actual)
+    if measured_error:
+        return {"ok": False, "error": measured_error}
+    if actual is None:
+        if not robot.connected:
+            return {"ok": False, "error": "robot not connected"}
+        actual = robot.get_pose()
+        # get_pose() never raises — it returns [0.0]*6 on ANY dashboard failure
+        # (robot.py:160-168), which this endpoint used to record as a real
+        # ~400mm deviation and feed straight into sheet 05's Max/RMSE.
+        if not pose_read_is_plausible(actual, state.grid_points):
+            return {"ok": False, "error": "pose read unavailable — nothing recorded"}
+        source = "manual"
+    else:
+        source = "measured"
+    err = [computed[i] - actual[i] for i in range(3)]
+    rec = {"index": len(state.test_points) + 1, "u": u, "v": v,
+           "computed": [round(c, 2) for c in computed],
+           "actual": [round(a, 2) for a in actual],
+           "error": [round(e, 3) for e in err],
+           "deviation_mm": round(math.sqrt(sum(e * e for e in err)), 3),
+           "recorded_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+           "source": source,
+           "grid_fingerprint": grid_fingerprint(state.grid_points)}
+    state.test_points.append(rec)
+    _log_user_event(request, "draw", "test_point",
+                    f"u={u:.3f} v={v:.3f} dev={rec['deviation_mm']:.2f}mm")
+    return {"ok": True, "test_point": rec, "count": len(state.test_points),
+            "expected": TEST_POINTS_EXPECTED,
+            "aggregates": test_aggregates(state.test_points)}
+
+
+@router.post("/grid/test-reset")
+def api_grid_test_reset(request: Request):
+    state.test_points = []
+    _log_user_event(request, "draw", "test_reset", "")
+    return {"ok": True, "count": 0}
+
+
+@router.post("/grid/verify")
+def api_grid_verify(request: Request):
+    """Walk the arm through all five Grid Mapping test positions and record
+    each one, so the form's error table fills from a single press.
+
+    Moves the arm — it approaches every point from above with a
+    DRAW_LIFT_MM clearance, the same sequence do_draw() uses, and returns to
+    where it started. Runs under draw_running/draw_stop, so E-Stop, the jog
+    rejection and /draw/stop all apply without any extra wiring. Replaces
+    whatever was recorded before: this is the canonical full run, and mixing
+    hand-jogged rows into it would make the aggregates meaningless."""
+    if not _grid_fully_marked():
+        return {"ok": False, "error": "grid not fully marked"}
+    if not robot.connected:
+        return {"ok": False, "error": "robot not connected"}
+    if state.align_running or state.draw_running:
+        return {"ok": False, "error": "already running"}
+    state.status = "verify: starting…"
+    _log_user_event(request, "draw", "verify_start", f"{len(GRID_TEST_POSITIONS)} points")
+    threading.Thread(target=_run_locked, args=(do_verify_grid, robot, state),
+                     daemon=True).start()
+    return {"ok": True, "positions": GRID_TEST_POSITIONS}
+
+
+@router.get("/pose-source")
+def api_pose_source(request: Request):
+    """Read-only diagnostic: does this controller expose a live pose at all?
+
+    Samples GetPose() and GetAngle() while the arm stands still and reports
+    which of them varies. GetPose() has been seen returning exactly the last
+    commanded target, which makes it unusable as the measured pose for the
+    Grid Mapping form. Nothing here moves the robot.
+    """
+    if not robot.connected:
+        return {"ok": False, "error": "robot not connected"}
+    report = robot.pose_source_report()
+    _log_user_event(request, "draw", "pose_source", report["verdict"])
+    return {"ok": True, **report}
+
+
+@router.get("/test-report")
+def api_test_report(user: User = Depends(get_current_user)):
+    """Everything the Grid Mapping (05) and Drawing (09) sheets of the
+    experiment record need, as one downloadable payload.
+
+    Read-only snapshot — the operator already produced every number by
+    teaching the grid, jogging to each test point and pressing Send. The
+    payload itself is assembled by build_test_report_payload() so the
+    contract is testable without the HTTP layer."""
+    return build_test_report_payload(
+        state.grid_points, state.grid_rows, state.grid_cols,
+        _grid_fully_marked(), state.test_points,
+        dict(getattr(state, "last_draw_stats", None) or {}),
+        getattr(user, "username", None),
+        time.strftime("%Y-%m-%d %H:%M:%S"))
 
 
 class GridRestoreBody(BaseModel):
@@ -1631,6 +1841,9 @@ def api_draw(request: Request, body: DrawBody):
         return {"ok": False, "error": "already running"}
 
     _log_grid_mapping(strokes)
+    state.last_draw_stats = draw_stats(strokes, state.grid_points,
+                                       state.grid_rows, state.grid_cols,
+                                       DRAW_LIFT_MM)
     _log_user_event(request, "draw", "start",
                     f"strokes={len(strokes)} grid={state.grid_rows}x{state.grid_cols}")
     _bind_draw_done_hook(request)
@@ -1672,6 +1885,7 @@ def api_status():
         "user_index": robot.user_index,
         "robot_mode": mode,
         "robot_mode_label": ROBOT_MODE_LABELS.get(mode, "?"),
+        "robot_enabled": mode in {5, 6, 7, 8, 10, 11},
         "points": state.points,
         "align_running": state.align_running,
         "last_tilt": state.last_tilt,

@@ -1,0 +1,299 @@
+﻿Module,No,Test Case,Type,Precondition,Steps,Expected Result,File,Result,Note,Observed Result
+Authentication & Session,AUTH-01,Login สำเร็จ,Manual,มี user ใน DB,"1. เปิดหน้า /login
+2. กรอก username และ password ที่มีในระบบ
+3. กดปุ่ม Login","200 + access_token (JWT, exp 72 ชม.) + token_type=bearer + username",,Pass,POST /api/auth/login,HTTP 200 · token 203 chars · username=qa_manual_2026
+Authentication & Session,AUTH-02,Login รหัสผิด,Manual,มี user,"1. เปิดหน้า /login
+2. กรอก username ถูก แต่ password ผิด
+3. กดปุ่ม Login","401 ""Invalid credentials""",,Pass,รหัสผิด,HTTP 401 · Invalid credentials
+Authentication & Session,AUTH-03,Login user ไม่มี,Manual,–,"1. เปิดหน้า /login
+2. กรอก username ที่ไม่มีในระบบ
+3. กดปุ่ม Login","401 ""Invalid credentials""",,Pass,user ไม่มีในระบบ,HTTP 401 · Invalid credentials
+Authentication & Session,AUTH-04,เข้าหน้าป้องกันโดยไม่มี token,Manual,ล้าง localStorage.access_token,"1. ล้าง token (logout หรือลบ localStorage)
+2. พิมพ์ URL เช่น /dobot แล้วกด Enter
+3. ทำซ้ำกับ /camera, /drawing, /settings, /dashboard",เด้งไป /login (RequireAuth),,Pass,GET /api/auth/me ไม่มี token,HTTP 401
+Authentication & Session,AUTH-05,token หมดอายุ,Manual,token exp ผ่านไปแล้ว,"1. ใช้ token ที่หมดอายุแล้ว
+2. เปิดหน้า protected เช่น /dobot",เด้งไป /login,,Pass,JWT exp=1500000001 หมดอายุ,HTTP 401
+Authentication & Session,AUTH-06,token เสียรูป,Manual,ใส่ token มั่ว,"1. ใส่ token ที่ผิดรูปแบบ
+2. เปิดหน้า protected หรือเรียก /api/auth/me",401,,Pass,token ไม่ใช่ JWT,HTTP 401
+Authentication & Session,AUTH-07,/me ไม่มี header,Manual,–,"1. ไม่แนบ header Authorization
+2. เรียก GET /api/auth/me",401,,Pass,ไม่มี Authorization header,HTTP 401
+Authentication & Session,AUTH-08,/me token ถูกต้อง,Manual,login แล้ว,"1. Login ให้ได้ token
+2. เรียก GET /api/auth/me พร้อม Bearer token","200 + {id, username}",,Pass,token ที่ถูกต้อง,HTTP 200 · username=qa_manual_2026
+Authentication & Session,AUTH-09,Register ต้อง login ก่อน,Manual,–,"1. ไม่ login (ไม่มี token)
+2. เรียก POST /api/auth/register",401,,Pass,POST /api/auth/register ไม่มี token,HTTP 401
+Authentication & Session,AUTH-10,Register username สั้น,Manual,login อยู่,"1. Login ก่อน
+2. เรียก register ด้วย username ยาว 1 ตัวอักษร",400,,Pass,ชื่อ 'a',HTTP 400 · Username must be at least 2 characters
+Authentication & Session,AUTH-11,Register password สั้น,Manual,login อยู่,"1. Login ก่อน
+2. เรียก register ด้วย password ยาว 1 ตัวอักษร",400,,Pass,รหัส 'ab',HTTP 400 · Password must be at least 4 characters
+Authentication & Session,AUTH-12,Register username ซ้ำ,Manual,"มี user ""admin""","1. Login ก่อน
+2. ให้มี user ชื่อ admin อยู่แล้ว
+3. เรียก register ด้วย username admin",409,,Pass,ชื่อซ้ำ,HTTP 409 · Username already exists
+Authentication & Session,AUTH-13,Register สำเร็จ,Manual,login อยู่,"1. Login ก่อน
+2. เรียก register ด้วย username ≥2 ตัว และ password ≥4 ตัว ที่ยังไม่มี",200 + token + username,,Pass,register ด้วย token,HTTP 200 · สร้าง qa_manual_created_1 สำเร็จ
+Authentication & Session,AUTH-14,Logout,Manual,login อยู่,"1. Login อยู่
+2. กดปุ่ม Logout
+3. สังเกตว่าเด้งกลับหน้า /login","ล้าง token, เด้งไป /login",,Pass,GET /api/settings ด้วย token เสีย,HTTP 401
+API Client / Error Handling (Frontend),API-01,🟢 แนบ Bearer อัตโนมัติ,Manual,มี token,"1. ให้มี token ใน localStorage
+2. เรียก apiFetch ไป endpoint ที่ต้อง auth
+3. ดู header ของ request ที่ส่งออก",request มี header Authorization: Bearer <token>,,Pass,ดู header จริงตอนเปิด /dashboard,Authorization: Bearer ติดไปกับ request ของแอปเอง
+API Client / Error Handling (Frontend),API-02,🟢 ไม่ทับ Authorization ที่ส่งมาเอง,Manual,มี token,"1. ให้มี token
+2. เรียก apiFetch พร้อม header Authorization ที่ส่งมาเอง
+3. ดู header ที่ส่งออกจริง",ใช้ค่า Bearer x ที่ส่งมา,,Pass,covered by FE-01 auto,
+API Client / Error Handling (Frontend),API-03,🟢 GET เจอ 5xx → retry 1 ครั้ง,Manual,mock server คืน 500,"1. ให้ server ตอบ 500 ครั้งแรก แล้ว 200
+2. เรียก apiFetch (GET)
+3. นับจำนวนครั้งที่ fetch ถูกเรียก",ยิงซ้ำ 1 ครั้ง (รวม 2 ครั้ง),,Pass,covered by FE-02 auto (retry),
+API Client / Error Handling (Frontend),API-04,🟢 5xx → แสดง banner,Manual,–,"1. ทำให้เกิด response 5xx
+2. สังเกตแบนเนอร์แจ้งเตือนด้านบนจอ",dispatch api:server-error → ApiErrorBanner ขึ้นข้อความ,,Pass,covered by FE-03 auto (banner),
+API Client / Error Handling (Frontend),API-05,🟢 401 (protected) → เด้ง login,Manual,อยู่หน้า /dobot,"1. อยู่หน้า /dobot (มี token)
+2. เรียก endpoint ที่ตอบ 401
+3. สังเกตว่าเด้งไป /login",clear token + location.replace('/login'),,Pass,evidence/API-05_invalid_token_redirects_login.png,เด้งจาก /dobot ไป /login เมื่อ token เสีย
+API Client / Error Handling (Frontend),API-06,🟢 401 จาก /api/auth/* ไม่เด้ง,Manual,–,"1. เรียก /api/auth/login ที่ตอบ 401
+2. สังเกตว่าไม่มีการเด้งไป /login",ไม่ redirect,,Pass,ทดสอบขณะล็อกอินอยู่แล้ว,401 จาก /api/auth/login · ยังอยู่ /dashboard ไม่เด้ง
+API Client / Error Handling (Frontend),API-07,🔵 Banner auto-hide,Manual,–,"1. ทำให้เกิด 5xx
+2. รอ 8 วินาที (หรือกดปุ่ม ✕ ปิด)",banner หายเอง (หรือกดปุ่ม ✕ ปิดได้),,Pass,covered by FE-03 auto (auto-hide),
+Dashboard,DASH-01,🔵 แสดงสถานะเชื่อมต่อ,Manual,login แล้ว,"1. Login
+2. เปิดเมนู Dashboard",แสดงสถานะ robot/camera/ระบบ,,Pass,evidence/DASH-01_dashboard.png,connected=true · robot_mode_label=RUNNING · camera_running=true · IP 192.168.10.110
+Dashboard,DASH-02,🔵 อัปเดต realtime,Manual,ต่อหุ่นจริง,"1. เชื่อมต่อหุ่นจริง
+2. เปิด Dashboard
+3. เฝ้าดู 2–3 วินาที",ข้อมูลอัปเดตจาก /api/map/status (poll),,Pass,API poll 200; visual poll ต้องการ browser,
+Dashboard,DASH-03,🔵 ระบบออฟไลน์,Manual,ปิดหุ่น/กล้อง,"1. ปิดหุ่น/กล้อง
+2. เปิด Dashboard
+3. ดูสถานะว่ารอ/ตัดการเชื่อมต่อ",แสดงสถานะ Disconnected ไม่ค้าง,,Needs Rig,ต้องปิดหุ่น/กล้องจริง,
+Dobot Controller (/dobot),DOB-01,🔵 Jog Cartesian,Manual,ต่อหุ่นแล้ว,"1. เชื่อมต่อหุ่น
+2. เลือกแกน X และ step = 1
+3. กดปุ่ม + แล้วกดปุ่ม −",หุ่นขยับทีละ 1mm (POST /api/map/jog),,Needs Rig,jog = หุ่นขยับ ต้องดูจริง,
+Dobot Controller (/dobot),DOB-02,🔵 Jog Joint,Manual,ต่อหุ่น,"1. เชื่อมต่อหุ่น
+2. เลือกข้อต่อ J1
+3. กดปุ่ม + / −",ข้อต่อขยับ (POST /api/map/jog_joint),,Needs Rig,jog joint = หุ่นขยับ,
+Dobot Controller (/dobot),DOB-03,🔵 เลือก step 0.1/1/5/10,Manual,–,"1. เลือก step = 0.1
+2. กด jog แล้ววัดระยะที่ขยับ
+3. ทำซ้ำกับ step 1, 5, 10",ระยะขยับตรงกับ step,,Needs Rig,วัดระยะจริง,
+Dobot Controller (/dobot),DOB-04,🔵 Live coordinate,Manual,ต่อหุ่น,"1. เชื่อมต่อหุ่น
+2. ดูแถบพิกัด (X/Y/Z/RX/RY/RZ + J1–J6) แบบสด",แสดง X/Y/Z/RX/RY/RZ + J1–J6 realtime,,Pass,status มี joints realtime (WS 20Hz),
+Dobot Controller (/dobot),DOB-05,🔵 3D Viewer sync,Manual,เปิด /dobot,"1. เปิดหน้า /dobot
+2. เทียบท่าทางโมเดล 3D กับพิกัดจริง",ท่าทางโมเดลตรงกับพิกัดจริง,,Needs Browser,3D viewer ต้องเห็นจริง,
+Dobot Controller (/dobot),DOB-06,🔵 IK drag end-effector,Manual,เปิด viewer,"1. เปิด 3D viewer
+2. ลากลูกบอลสีส้มที่ปลายแขน
+3. สังเกตว่าทุกข้อต่อขยับตาม",ทุกข้อต่อขยับตาม (CCD IK),,Needs Browser,IK drag UI,
+Dobot Controller (/dobot),DOB-07,🔵 Home,Manual,ต่อหุ่น,"1. เชื่อมต่อหุ่น
+2. กดปุ่ม Home
+3. รอหุ่นเคลื่อนไปตำแหน่ง HOME",POST /api/map/home → หุ่นไป HOME_*,,Needs Rig,Home = เคลื่อนหุ่น,
+Dobot Controller (/dobot),DOB-08,🚨 Emergency Stop,Manual,ต่อหุ่น,"1. เริ่มให้มีการเคลื่อนที่ (jog/align/draw)
+2. กดปุ่ม E-Stop
+3. สังเกตว่าหุ่นหยุดทันที",POST /api/map/emergency → หยุดทันที + cancel align/draw,,Pass,emergency -> emergency_stop_triggered,
+Dobot Controller (/dobot),DOB-09,🔵 Error clear,Manual,หุ่น error,"1. ทำให้หุ่นเข้า error state
+2. กดปุ่ม Clear error",เคลียร์ error (robot.clear_error),,Needs Rig,ต้องทำให้หุ่น error ก่อน,
+Dobot Controller (/dobot),DOB-10,🔵 Connect / Init / CamStart,Manual,–,"1. กดปุ่ม Connect
+2. กดปุ่ม Init
+3. กดปุ่ม Start Camera","endpoint ทำงาน, สถานะเปลี่ยนเป็น connected",,Pass,connect/init/camstart ทั้ง 3 ผ่าน,
+Dobot Controller (/dobot),DOB-11,🔵 CLI command,Manual,ต่อหุ่น,"1. เชื่อมต่อหุ่น
+2. พิมพ์คำสั่งในช่อง CLI
+3. กดส่ง แล้วดูผลลัพธ์",POST /api/map/cli → ผลลัพธ์แสดงกลับ,,Pass,"CLI 200, output กลับ (GetAngle)",
+Camera (/camera),CAM-01,🔵 Live MJPEG,Manual,กล้องทำงาน,"1. เปิดหน้า /camera
+2. ดูภาพสดจากกล้อง",เห็นภาพสด (GET /api/map/video_feed / /api/camera/stream),,Pass,MJPEG multipart 200 (กล้องหลักทำงาน),
+Camera (/camera),CAM-02,🔵 Snapshot,Manual,กล้องทำงาน,"1. เปิดหน้า /camera
+2. กดปุ่ม Capture
+3. ตรวจว่ามีไฟล์ภาพ JPEG",ได้ไฟล์ JPEG (GET /api/camera/snapshot),,Pass,snapshot JPEG 161KB,
+Camera (/camera),CAM-03,🔵 สลับโหมด rgb/gray/depth,Manual,กล้องทำงาน,"1. เปิดหน้า /camera
+2. กดสลับโหมด rgb / gray / depth
+3. สังเกตภาพเปลี่ยนตามโหมด",ภาพเปลี่ยนโหมด (POST /api/camera/mode),,Pass,mode rgb -> 200,
+Camera (/camera),CAM-04,🔵 Mode toggle,Manual,–,"1. กดปุ่ม toggle โหมด
+2. สังเกตว่าโหมดวนไปตามลำดับ",วนโหมด (POST /api/camera/mode/toggle),,Pass,mode toggle -> 200,
+Camera (/camera),CAM-05,🔵 ตรวจกล้องที่ต่ออยู่,Manual,–,"1. เปิดหน้า /camera
+2. กด Scan หรือดูรายการกล้อง
+3. เห็น serial ของกล้องทั้งหมด",GET /api/camera/devices แสดง serial ทั้งหมด,,Pass,devices: D455 x2 (215122252229 / ...),
+Camera (/camera),CAM-06,🔵 กล้องตัวที่ 2 (CAM2),Manual,มี D455 2 ตัว,"1. ต่อกล้อง D455 2 ตัว
+2. เปิด stream ของกล้องตัวที่ 2",เห็นภาพกล้องที่ 2 (GET /api/camera/stream2),,Pass,stream2 MJPEG 200 (กล้องรองทำงาน),
+Camera (/camera),CAM-07,🔵 Swap view,Manual,มี 2 กล้อง,"1. ต่อกล้อง 2 ตัว
+2. กดปุ่ม Swap View
+3. ภาพกล้องหลัก/รองสลับกัน",สลับภาพกล้องหลัก/รอง (POST /api/camera/swap),,Needs Rig,swap กระทบ primary — ไม่รันรบกวน,
+Camera (/camera),CAM-08,🔵 เลือกกล้อง primary,Manual,มีหลายกล้อง,"1. ต่อกล้องหลายตัว
+2. เลือกกล้องหลักจากรายการ
+3. ภาพหลักเปลี่ยนตามที่เลือก",กล้องหลักเปลี่ยนตามที่เลือก,,Needs Rig,select primary — ไม่รันรบกวน,
+Camera (/camera),CAM-09,🔵 Snap กล้อง 2,Manual,มี 2 กล้อง,"1. ต่อกล้อง 2 ตัว
+2. กด Capture ของกล้องตัวที่ 2",ได้ภาพจากกล้อง 2,,Pass,snapshot2 JPEG 88KB,
+Camera (/camera),CAM-10,🔵 Snapshot แปะ marking,Manual,มีจุด mark,"1. mark จุดบนภาพ
+2. กด Capture
+3. ตรวจว่าจุดที่ mark ปรากฏในภาพที่บันทึก",ภาพที่ได้มีจุด mark ตรงกับที่เห็น,,Needs Browser,ต้อง mark บน UI,
+Drawing Mode (/drawing),DRAW-01,🔵 ตั้งขนาด grid,Manual,เปิด /drawing,"1. เปิดหน้า /drawing
+2. ไปแท็บ Grid
+3. ตั้งค่า rows/cols (ไม่เกิน 7×7)",รับค่า rows/cols (≤ 7×7),,Needs Rig,grid บนหุ่นจริง,
+Drawing Mode (/drawing),DRAW-02,🔵 Mark จุด grid,Manual,jog หุ่นไปจุด,"1. jog หุ่นไปที่จุดมุม
+2. กดปุ่ม Mark
+3. ทำซ้ำจนครบทุกจุดใน grid",POST /api/map/grid/mark เก็บ pose,,Needs Rig,jog+mark จริง,
+Drawing Mode (/drawing),DRAW-03,🔵 Validate grid,Manual,mark ครบ,"1. mark จุดให้ครบ
+2. ดูผลการ validate
+3. เตือนเมื่อ span เล็กเกินไป หรือ rmse > 3mm",แจ้งเตือนถ้า span เล็กไป หรือ rmse > 3mm,,Needs Rig,,
+Drawing Mode (/drawing),DRAW-04,🔵 Auto-fill Z,Manual,mark แล้ว,"1. mark จุดแล้ว
+2. กดปุ่ม Autofill Z
+3. ดูค่า Z ถูกเติมตามพื้นผิว",POST /api/map/grid/autofill เติม Z ตามพื้นผิว,,Needs Rig,,
+Drawing Mode (/drawing),DRAW-05,🔵 Reset grid,Manual,มี grid,"1. มี grid ที่สอนไว้
+2. กดปุ่ม Reset grid",POST /api/map/grid/reset ล้าง grid,,Needs Rig,,
+Drawing Mode (/drawing),DRAW-06,🔵 Restore grid,Manual,มี pose ครบ,"1. มี pose ของ grid ครบ
+2. เรียก /api/map/grid/restore
+3. grid กลับมาโดยไม่ต้องสอนใหม่",grid กลับมาตั้งได้โดยไม่ต้องสอนใหม่,,Needs Rig,,
+Drawing Mode (/drawing),DRAW-07,🔵 Return-to-start,Manual,วาดจบ,"1. วาดจนจบงาน
+2. สังเกตว่าหัวหุ่นกลับไปจุดเริ่ม",หัวหุ่นกลับไปจุดเริ่ม (ไม่ค้างที่จุดสุดท้าย),,Needs Rig,,
+Drawing Mode (/drawing),DRAW-08,🔵 วาดเส้น (pen),Manual,grid ครบ,"1. สอน grid ให้ครบ
+2. วาดเส้นบน canvas
+3. กดปุ่ม Send แล้วดูหุ่นวาดตามเส้น",หุ่นวาดตามเส้นบนพื้นผิวจริง (POST /api/map/draw),,Needs Rig,วาดจริงต้องหุ่น+ปากกา,
+Drawing Mode (/drawing),DRAW-09,🔵 หยุดกลางการวาด,Manual,กำลังวาด,"1. เริ่มวาด (กำลังเคลื่อนที่)
+2. กดปุ่ม Stop
+3. หยุดทันที",POST /api/map/draw/stop → หยุดทันที,,Needs Rig,,
+Drawing Mode (/drawing),DRAW-10,🔵 Pen-lift ระหว่างรูป,Manual,วาด 2 รูป,"1. วาด 2 รูปคนละตำแหน่ง
+2. กด Send
+3. สังเกตการยกหัวก่อนข้ามไปรูปถัดไป",ยกหัวหุ่นก่อนข้ามไปรูปถัดไป,,Needs Rig,,
+Drawing Mode (/drawing),DRAW-11,🔵 Goto / Point (mark click),Manual,ต่อหุ่น,"1. เชื่อมต่อหุ่น
+2. กดจุดบนภาพ (โหมด goto/point)
+3. หุ่นไปยังจุดนั้น",POST /api/map/goto หรือ /point ทำงานตามโหมด,,Needs Rig,goto/point = เคลื่อนหุ่น,
+Drawing Mode (/drawing),DRAW-12,🔵 Frame control,Manual,ต่อหุ่น,"1. เชื่อมต่อหุ่น
+2. เปลี่ยน frame เป็น User/Tool
+3. สังเกตพิกัดเปลี่ยนตาม frame",POST /api/map/frame เปลี่ยน coordinate,,Needs Rig,frame = เคลื่อนหุ่น,
+Drawing Mode (/drawing),TP-01,🔵 สลับแท็บ panel,Manual,เปิด /drawing,"1. เปิดหน้า /drawing
+2. กดแท็บ Align, Grid, Jog, All สลับไปมา
+3. สังเกตว่าเนื้อหา panel เปลี่ยนตามแท็บ",เนื้อหา panel เปลี่ยนตามแท็บที่เลือก (แสดงเฉพาะการ์ดของแท็บนั้น),,Pass,evidence/TP-01_tab_*.png,แท็บ Align/Jog/Grid/Draw มีครบ · สลับแต่ละแท็บแล้ว class active ถูกต้อง
+Drawing Mode (/drawing),TP-02,🔵 พับ/กาง panel,Manual,–,"1. เปิดหน้า /drawing
+2. กดปุ่ม Fold
+3. สังเกต panel ย่อ และกดอีกครั้งเพื่อกาง",panel ย่อ/ขยาย (isTeachMinimized) และปุ่มเปลี่ยน label,,Needs Browser,UI fold,
+Drawing Mode (/drawing),TP-03,🔵 Status pills,Manual,ต่อหุ่น,"1. เชื่อมต่อหุ่น
+2. ดู status pills บน panel
+3. สถานะ/โหมดหุ่นแสดงถูกต้อง",แสดงสถานะเชื่อมต่อ/โหมดหุ่นถูกต้อง,,Pass,evidence/TP-05_grid_tab.png,pill: Connected · Camera 1 — offline · 4/4 marked · grid 2x2 Z=148.6mm span=202.6mm rmse=0.2447mm · 0/5 recorded
+Drawing Mode (/drawing),TP-04,🔵 Quick actions,Manual,ต่อหุ่น,"1. เชื่อมต่อหุ่น
+2. กด Connect, Init, CamStart, Heatmap ทีละปุ่ม
+3. endpoint ถูกเรียกตามปุ่ม",เรียก endpoint ตรง (connect/init/camstart/heatmap toggle),,Pass,evidence/TP-05_grid_tab.png,quick actions: Clear Error / Init / Home / Set Grid / Reset Grid / Reset test points
+Drawing Mode (/drawing),TP-05,🔵 Grid Setup (rows×cols),Manual,–,"1. ไปแท็บ Grid
+2. เปลี่ยนค่า rows/cols
+3. ขนาด grid อัปเดต (ไม่เกิน 7×7)",ขนาด grid อัปเดต (grid/size) ≤ 7×7,,Pass (observed),evidence/TP-05_grid_tab.png,"GRID SETUP (2×2) · ช่อง ROWS/COLS = 2, min=2 max=7 · ไม่ได้เปลี่ยนค่าเพราะการเปลี่ยนขนาดจะล้าง mark เดิม"
+Drawing Mode (/drawing),TP-06,🔵 Cells Matrix & Shape,Manual,mark ครบ,"1. mark grid ครบ
+2. ดูการ์ด Cells Matrix & Shape
+3. เห็น preview รูปร่าง grid ตามที่สอน",แสดง preview รูปร่าง grid ตามที่สอน (grid_shape_2d),,Pass,evidence/TP-05_grid_tab.png,"cells matrix = R1C1, R1C2, R2C1, R2C2 ตรงกับ grid 2×2"
+Drawing Mode (/drawing),TP-07,🔵 Jog ใน panel,Manual,ต่อหุ่น,"1. เชื่อมต่อหุ่น
+2. ไปแท็บ Jog
+3. กดปุ่ม jog ตามแกน/step",ยิง POST /api/map/jog / jog_joint ตามแกน/step,,Needs Browser,,
+Drawing Mode (/drawing),TP-08,🔵 Motion / Step controls,Manual,–,"1. ปรับค่า step/speed
+2. กด jog
+3. ระยะ/ความเร็วสอดคล้องกับค่าที่ตั้ง",ค่า step/speed ถูกส่งตอน jog,,Needs Browser,,
+Drawing Mode (/drawing),TP-09,🔵 Corner Alignment (4 points),Manual,mark 4 มุม,"1. mark 4 มุม
+2. ไปแท็บ Align
+3. กดปุ่ม Align",POST /api/map/align เริ่ม align,,Needs Rig,align = เคลื่อนหุ่น,
+Drawing Mode (/drawing),TP-10,🔵 Coordinate Frame (panel),Manual,ต่อหุ่น,"1. เชื่อมต่อหุ่น
+2. เปลี่ยน coordinate frame ใน panel",POST /api/map/frame เปลี่ยน coordinate,,Pass,evidence/TP-01_tab_Align.png,COORDINATE FRAME: Tool / User / Apply อยู่ในแท็บ Align
+Drawing Mode (/drawing),TP-11,🔵 3D viewer มุมล่างซ้าย,Manual,เปิด /drawing,"1. เปิดหน้า /drawing
+2. สังเกตตำแหน่ง 3D viewer
+3. viewer อยู่มุมล่างซ้าย",viewer อยู่มุมล่างซ้ายของหน้า,,Needs Browser,viewer ตำแหน่ง UI,
+Align / Calibration,ALN-01,🔵 Start align,Manual,mark 4 จุด + กล้อง depth,"1. mark 4 จุด และเปิดกล้อง depth
+2. กดปุ่ม Start Align
+3. หุ่นเริ่มหมุนเพื่อปรับระนาบ",POST /api/map/align เริ่ม rotate ให้ระนาบตรง,,Needs Rig,align = เคลื่อนหุ่น,
+Align / Calibration,ALN-02,🔵 Align converge,Manual,เริ่มแล้ว,"1. เริ่ม align
+2. เฝ้าดูค่า tilt ใน status
+3. หยุดเองเมื่อ tilt ≤ ALIGN_TOL_DEG",tilt ลดลงจน ≤ ALIGN_TOL_DEG แล้วหยุด,,Needs Rig,,
+Align / Calibration,ALN-03,🔵 หยุด align,Manual,กำลัง align,"1. ระหว่าง align
+2. กดปุ่ม Stop",POST /api/map/align/stop → หยุด,,Needs Rig,,
+Align / Calibration,ALN-04,🔵 กัน points ไม่ lock,Manual,mark ยังไม่ติด,"1. mark จุดที่ tracker ยังไม่ lock
+2. เริ่ม align
+3. มีการลองใหม่สั้น ๆ แล้วแจ้ง points not locked","retry สั้น ๆ แล้วแจ้ง ""points not locked""",,Needs Rig,,
+Align / Calibration,ALN-05,🔵 Reset points,Manual,มีจุด mark,"1. มีจุด mark อยู่
+2. กดปุ่ม Clear points",POST /api/map/reset_points,,Needs Rig,,
+Align / Calibration,ALN-06,🔵 Heatmap toggle,Manual,depth ทำงาน,"1. เปิดกล้อง depth
+2. กดปุ่ม toggle heatmap",POST /api/map/heatmap/toggle,,Pass,heatmap toggle -> on,
+Move / Sequence,MOV-01,🔵 Move to pose,Manual,ต่อหุ่น,"1. เชื่อมต่อหุ่น
+2. เรียก move_to ด้วย pose เป้าหมาย
+3. หุ่นเคลื่อนไปยัง pose นั้น",หุ่นเคลื่อนไป pose ที่ระบุ,,Needs Rig,move = เคลื่อนหุ่น,
+Move / Sequence,MOV-02,🔵 Move sequence,Manual,ตั้งลำดับแล้ว,"1. ตั้งลำดับ waypoint
+2. เรียก move_sequence
+3. หุ่นวิ่งตามลำดับ",วิ่งตามลำดับ,,Needs Rig,,
+Move / Sequence,MOV-03,🔵 หยุด sequence,Manual,กำลังวิ่ง,"1. เริ่ม move sequence
+2. กดปุ่มหยุด sequence",หยุดทันที,,Needs Rig,,
+Move / Sequence,MOV-04,🔵 /api/robot/move,Manual,ต่อหุ่น,"1. เชื่อมต่อหุ่น
+2. ส่ง {axis, direction, step}
+3. หุ่นขยับตามที่สั่ง",ขยับตามที่สั่ง,,Needs Rig,,
+Move / Sequence,MOV-05,🚨 /api/robot/emergency-stop,Manual,ต่อหุ่น,"1. เชื่อมต่อหุ่น
+2. เรียก /api/robot/emergency-stop",หยุดฉุกเฉิน,,Pass,emergency-stop -> triggered,
+Settings & Devices,SET-01,🔵 โหลด settings,Manual,login,"1. Login
+2. เปิดหน้า /settings
+3. ดูค่าที่โหลดมาแสดง",GET /api/settings แสดงค่า,,Pass,GET settings 200,
+Settings & Devices,SET-02,🔵 แก้ settings,Manual,–,"1. เปิดหน้า /settings
+2. แก้ค่า แล้วกดบันทึก
+3. โหลดใหม่แล้วค่ายังอยู่",บันทึกค่าใหม่,,Pass,PUT + persist (key กลับมา),
+Settings & Devices,SET-03,🔵 แก้ราย key,Manual,–,"1. แก้ค่าเฉพาะ key เดียว
+2. บันทึก
+3. key อื่นไม่เปลี่ยน",อัปเดตเฉพาะ key,,Pass,key อื่นไม่โดนแก้,
+Settings & Devices,DEV-01,🔵 Relay toggle,Manual,มี Blynk token,"1. ตั้ง Blynk token
+2. กดปุ่ม toggle relay",สลับ relay สำเร็จ,,Needs Config,ต้องมี Blynk token,
+Settings & Devices,DEV-02,🔵 Relay state,Manual,–,"1. เปิดหน้า Devices
+2. ดูสถานะ relay ปัจจุบัน",คืนสถานะปัจจุบัน,,Needs Config,,
+Settings & Devices,DEV-03,🔵 Relay history,Manual,–,"1. เปิดหน้า Devices
+2. ดูประวัติการสั่ง relay",คืนประวัติการสั่ง,,Needs Config,,
+Settings & Devices,DEV-04,🔵 Ping device,Manual,–,"1. เปิดหน้า Devices
+2. กดปุ่ม ping
+3. แสดงสถานะเข้าถึงได้/ไม่ได้",คืนสถานะ reachable,,Pass,ping 200 (device unreachable=false result),
+Security / Middleware,SEC-01,🔵 บังคับ Bearer ทุก /api/*,Manual,–,"1. ไม่แนบ token
+2. เรียก /api/map/status
+3. สังเกตว่าได้ 401 (ยกเว้น /api/auth/*)",401 (middleware) ยกเว้น /api/auth/*,,Pass,evidence/HTTP_sec_transcript.json,ไม่มี token→401 · token เสีย→401 · token ถูกต้อง→200 · สแกน 8 GET endpoint ไม่มีตัวไหนตอบ 200 โดยไม่มี token
+Security / Middleware,SEC-02,🔵 CORS ตาม ALLOWED_ORIGINS,Manual,ตั้ง env,"1. ตั้ง ALLOWED_ORIGINS
+2. ยิงจาก origin ที่อนุญาต และที่ไม่อนุญาต
+3. เทียบผล",อนุญาตเฉพาะ origin ในลิสต์,,Pass,"ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1,http://192.168.10.104",ACAO ตรงกับ origin ที่อนุญาต 3 ตัว · evil.example.com ไม่ได้ ACAO
+Security / Middleware,SEC-03,🔵 OPTIONS ไม่ถูกบล็อก,Manual,–,"1. ส่ง preflight OPTIONS ไป endpoint
+2. สังเกตว่าไม่ถูกบล็อกด้วย 401",ผ่าน (ไม่โดน 401),,Pass,OPTIONS /api/map/status,HTTP 200 (ไม่ใช่ 401)
+Security / Middleware,SEC-04,🔵 Root health,Manual,–,"1. เรียก GET /
+2. ได้ข้อความ Robot Arm API is running","200 {""message"":""Robot Arm API is running""}",,Pass,GET /,HTTP 200 · Robot Arm API is running
+Scan & Fuse (/scan panel),SCAN-01,Capture cam1 (+cam1),Manual,"กล้อง 2 ตัวทำงาน, เปิด viewer",1. เปิด viewer 2. กดปุ่ม +cam1,POST /api/scan/capture cam=1 → ok + views เพิ่ม 1,,Pass,verify: capture ทำงาน (API),
+Scan & Fuse (/scan panel),SCAN-02,Capture cam2 (+cam2),Manual,กล้อง 2 ตัวทำงาน,1. กดปุ่ม +cam2,capture cam=2 → ok,,,,
+Scan & Fuse (/scan panel),SCAN-03,Views list + map_n,Manual,capture แล้ว,1. ดู scan-count / GET /api/scan/views,views ครบ + map_n เพิ่มตาม capture,,Pass,verify: /api/scan/views 200 map_n=300000,
+Scan & Fuse (/scan panel),SCAN-04,Live fused (WS /api/scan/ws),Manual,เปิด chk-scanlive,1. ติ๊ก Live fused 2. กวาดแขน cam1,เห็น cloud fused สีสะสม (cam1 เติม blind spot cam2),,,,
+Scan & Fuse (/scan panel),SCAN-05,Fuse,Manual,มี capture,1. กด Fuse,fused cloud สี ~80k-150k จุด (POST /api/scan/fuse),,,,
+Scan & Fuse (/scan panel),SCAN-06,Save session,Manual,fuse แล้ว,1. กด Save,ไฟล์ scan_sessions/<ts>/ (fused.ply/.npz/meta.json),,,,
+Scan & Fuse (/scan panel),SCAN-07,Load session,Manual,มี session,1. เลือก session 2. กด Load,cloud กลับมาแสดง (POST /api/scan/load/{id}),,,,
+Scan & Fuse (/scan panel),SCAN-08,Extrinsics persist,Manual,เปิด viewer,1. ปรับ slider cam2 2. เปิดหน้าใหม่,ค่าใน camera_extrinsics.json + โหลดกลับ (XYZ euler ตรง),,Pass,verify: /api/scan/extrinsics 200 + json มีค่า,
+Scan & Fuse (/scan panel),SCAN-09,Clear views + map,Manual,มี views/map,1. กด Clear,views ล้าง + map_n=0 + mesh2 reset,,,,
+Align / Calibration,ALN-07,Auto-align ผ่าน WS (chk-auto),Manual,"กล้อง 2 ตัวเห็นฉากซ้อน, แขนนิ่ง",1. ติ๊ก chk-auto 2. สังเกต 3. รอ auto-off,cam2 glide เข้าหา mesh1 ~1s (ไม่กระโดด) แล้ว auto ปิดเอง (WS /api/scan/ws/align),,,,
+Align / Calibration,ALN-08,ไม่ align ตอนแขนขยับ,Manual,auto เปิดอยู่,1. jog แขนระหว่าง auto,ค่า extrinsic ไม่เปลี่ยน/ไม่วาป (arm-motion gate 1.5s),,,,
+Align / Calibration,ALN-09,Correction cap 5cm/3°,Manual,extrinsic ห่างมาก,1. เปิด auto โดย extrinsic ผิดไกล,ICP reject (ไม่กระโดดเกิน 5cm/3° ต่อรอบ),,,,
+Camera (/camera),CAM-11,mesh2 คงผิวตอนแขนกวาด,Manual,เปิด chk-mesh2,1. กวาดแขนผ่านหน้า cam2,mesh2 ไม่หาย (occlude-keep d<prev×0.9),,,,
+Camera (/camera),CAM-12,mesh2 ยอมรับวัตถุวางบังค้าง,Manual,แขนนิ่ง,1. วางวัตถุบัง >8s หน้า cam2,mesh ตามทัน (timer 8s),,,,
+Camera (/camera),CAM-13,Clear ล้าง mesh2,Manual,มี mesh,1. กด Clear,depth_grid2 reset (reset_cam2_depth_map),,,,
+Camera (/camera),CAM-14,Inter-cam sync (D455),Manual,มีสาย sync / env ตั้ง,1. ดู log หลัง start,"cam1 sync=2 (slave), cam2 sync=1 (master)",,,,
+Dobot Controller (/dobot),DOB-12,ปุ่ม Cam1 toggle panel,Manual,เปิด /dobot,1. กดปุ่ม Cam1,panel cam1 (mount) เปิด/ปิดตัวเดียว (default ปิด),,,,
+Dobot Controller (/dobot),DOB-13,chk-mark1 ซ่อน marker cam1,Manual,เปิด viewer,1. ติ๊ก 'แสดง cam1 marker',cone+label cam1 แสดง/ซ่อน (default ซ่อน),,,,
+Dobot Controller (/dobot),DOB-14,⚙ Tune เปิดเฉพาะ cam2,Manual,เปิด viewer,1. กด ⚙ Tune,เปิดเฉพาะ panel cam2 (cam1 ไม่เปิดตาม),,,,
+Activity Log (/logs),LOG-01,หน้า /logs แสดง events,Manual,login,1. เปิด /logs,เห็น events (robot/camera/align/scan) พร้อม user,,Pass,evidence/LOG-01_activity_log.png,100 รายการ ครบ 5 คอลัมน์ (เวลา/ผู้ใช้/อุปกรณ์/การกระทำ/รายละเอียด)
+Activity Log (/logs),LOG-02,Filter events,Manual,มี events,1. กรอง device/username/search,ผลกรองถูกต้อง (GET /api/devices/events),,Pass,evidence/LOG-02_filter_estop.png,filter robot→เหลือ ROBOT · filter estop→TESTOP · ค้น 'strokes'→เจอ 4 รายการ DRAW · รีเซ็ตกลับได้ครบ
+Activity Log (/logs),LOG-03,Align/scan progress log,Manual,รัน align,1. รัน align/scan 2. ดู /logs,เห็น step/rz_step + detail (device align_icp/scan),,,,
+Settings & Devices,SET-04,Camera selection persist,Manual,มี 2 กล้อง,1. เลือกกล้องหลัก/รอง 2. restart backend,กล้องหลัก/รองกลับมาเหมือนเดิม (camera_selection.json),,,,
+Settings & Devices,SET-05,Home per-user,Manual,มี 2 user,1. ตั้ง home user A 2. login user B ดู home,home แยกต่อผู้ใช้ (user_settings),,,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-01,bilinear_cell — มุม/กลาง/ยังอยู่บนระนาบ,Automated,,,,backend/tests/test_planegrid.py,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-02,"grid_pose — clamp, 2×2, 3×3",Automated,,,,backend/tests/test_planegrid.py,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-03,validate_grid — flat / span เล็ก / ไม่ coplanar,Automated,,,,backend/tests/test_planegrid.py,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-04,project_grid_2d — shape + ทิศทาง,Automated,,,,backend/tests/test_planegrid.py,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-05,_cap_points / densify_path / simplify_stroke,Automated,,,,backend/tests/test_planegrid.py,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-06,"config — default, env override, type coercion, mode lowercase, Z_SURFACE",Automated,,,,backend/tests/test_config.py,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-07,"models — UUID default, username unique, setting unique, relationship, device log",Automated,,,,backend/tests/test_models.py,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-08,"auth — token roundtrip, bcrypt, login/me/register",Automated,,,,backend/tests/test_auth.py,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 FE-01,token storage / isTokenValid / authHeaders / redirectToLogin,Automated,,,,frontend/src/lib/api.test.js,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 FE-02,"apiFetch — bearer, retry GET 5xx, event, 401 redirect",Automated,,,,frontend/src/lib/api.test.js,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 FE-03,ApiErrorBanner — แสดง/ปิด/auto-hide,Automated,,,,frontend/src/components/ApiErrorBanner.test.jsx,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 FE-04,RequireAuth — redirect / render,Automated,,,,frontend/src/components/RequireAuth.test.jsx,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-09,draw_stats — closed / points_uv / length_mm / span_mm ต่อสตรอค และ drawn แยกจาก total travel,Automated,,,,backend/tests/test_planegrid.py,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-10,_stroke_path — pen ผ่าน simplify ส่วนรูปทรงไม่ผ่าน (กัน DP ทำวงกลมเป็นเหลี่ยม),Automated,,,,backend/tests/test_planegrid.py,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-11,_final_stroke_uv — uv ตรงกับสตรอคที่ให้ waypoint สุดท้าย แม้สตรอคท้ายไม่มีจุด,Automated,,,,backend/tests/test_planegrid.py,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-12,"grid_fingerprint — คงที่, รอด JSON round-trip, เปลี่ยนเมื่อสอนกริดใหม่",Automated,,,,backend/tests/test_planegrid.py,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-13,"pose_read_is_plausible — ปฏิเสธ sentinel [0,0,0], NaN/Inf และค่านอกกริด",Automated,,,,backend/tests/test_planegrid.py,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-14,report_missing_codes — คืนรหัสช่องว่างครบ (กริดไม่ครบ/ไม่มีจุด/ไม่ได้วาด/กริดเปลี่ยน),Automated,,,,backend/tests/test_planegrid.py,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-15,"test_aggregates — ไม่มีจุดคือ absence ไม่ใช่ 0, max ตามขนาด, mean เก็บเครื่องหมาย",Automated,,,,backend/tests/test_planegrid.py,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-16,test_aggregates — rmse = sqrt(mean(d²)) มาตรฐาน ตรงนิยามเดียวกับ plane_rmse_mm และต้อง ≥ mean_error (หารด้วย 3n เคยรายงานต่ำกว่าจริง √3 เท่า),Automated,,,,backend/tests/test_planegrid.py,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-17,"parse_measured_pose — รับ/ปฏิเสธค่าที่ผู้ใช้กรอกเอง (สั้น, คำ, NaN, ไม่ใช่ list)",Automated,,,,backend/tests/test_planegrid.py,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-18,parse_measured_pose — ศูนย์เป็นพิกัดที่ถูกต้อง ต่างจาก sentinel ของ GetPose(),Automated,,,,backend/tests/test_planegrid.py,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-19,"build_test_report_payload — สัญญา 13 ช่องครบ, ไม่มี key เดิมหาย, ว่างแทน 0",Automated,,,,backend/tests/test_planegrid.py,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-20,"do_verify_grid — วัดครบ 5 ตำแหน่ง, เข้าหาจากบน, กดหยุดได้, ค่าเพี้ยนไม่ถูกบันทึก, กลับจุดเริ่ม",Automated,,,,backend/tests/test_planegrid.py,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-21,draw_end_check + do_draw — ไม่มีทางบันทึกตัวเลขผิด และไม่กระทบการวาดเมื่อวัดล้มเหลว,Automated,,,,backend/tests/test_planegrid.py,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-22,pose_source_report — บอกว่า GetPose() คืนค่าคำสั่งหรือ feedback จริง (อ่านอย่างเดียว),Automated,,,,backend/tests/test_pose_source.py,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 FE-05,"evaluateReportGate — อนุญาต/ปฏิเสธ, ครอบคลุม 5 ตำแหน่ง, ใช้รายการจาก server",Automated,,,,frontend/src/pages/reportGate.test.js,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 FE-06,"humaniseRobotLog — แปลง raw TCP เป็นภาษาคน, เตือน error, เก็บของดิบไว้ใน tooltip",Automated,,,,frontend/src/lib/robotLogFormat.test.js,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 FE-07,"shapePoints — สี่เหลี่ยม/สามเหลี่ยม/วงกลม ปิดรูป, ลากกลับทิศ, ลากขนาดศูนย์",Automated,,,,frontend/src/lib/shapes.test.js,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 FE-08,DrawingModePage — mount ได้ไม่ crash (จับ temporal dead zone ที่ build/lint มองไม่เห็น),Automated,,,,frontend/src/pages/DrawingModePage.smoke.test.jsx,Pass,,
+Automated Unit Tests (รันอัตโนมัติอยู่แล้ว),🟢 BE-23,"floorcalib — homography จากจุด 4 ตัวขึ้น, จุด collinear ถูกปฏิเสธ, project/invert round-trip, rmse สะท้อน noise, save/load",Automated,,,,backend/tests/test_floorcalib.py,Pass,,
+Public Access (Cloudflare Tunnel),🔵 PUB-01,HTTPS public URL เปิดได้และโหลด SPA,Manual,,,,ทดสอบผ่าน https://robot-web.box-dex.win,Pass,เทียบ LAN: build เดียวกัน (index-D1q7yGYr.js),HTTP 200 · title=frontend · bundle index-D1q7yGYr.js
+Public Access (Cloudflare Tunnel),🔵 PUB-02,login ผ่าน tunnel,Manual,,,,ทดสอบผ่าน https://robot-web.box-dex.win,Pass,qa_manual_2026,HTTP 200 · ได้ access_token
+Public Access (Cloudflare Tunnel),🔵 PUB-03,auth ผ่าน tunnel,Manual,,,,ทดสอบผ่าน https://robot-web.box-dex.win,Pass,ตรวจแล้วไม่มีช่องโหว่เหมือนกับ LAN,มี token→200 · ไม่มี token→401
+Public Access (Cloudflare Tunnel),🔵 PUB-04,WebSocket /ws/joints ผ่าน tunnel,Manual,,,,ทดสอบผ่าน https://robot-web.box-dex.win,Pass,tunnel ส่ง Upgrade header ได้ถูกต้อง,wss handshake → 101 Switching Protocols
+Public Access (Cloudflare Tunnel),🔵 PUB-05,WebSocket /api/scan/ws/align ผ่าน tunnel,Manual,,,,ทดสอบผ่าน https://robot-web.box-dex.win,Pass,แก้แล้ว: middleware ข้าม websocket handshake + nginx ส่ง Upgrade ที่ /api/scan/ws · console error 0,wss handshake → 101 Switching Protocols (ผ่าน Cloudflare / nginx / ตรง :8000 ครบทั้ง 3 ทาง)
