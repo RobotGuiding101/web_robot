@@ -16,7 +16,6 @@
 | **[MANUAL_TESTS_ON_SITE.md](MANUAL_TESTS_ON_SITE.md)** | คู่มือทดสอบ manual หน้างาน (on-site runbook) |
 | **[TEST_CASES_new.xlsx](TEST_CASES_new.xlsx)** | ผลทดสอบจริง 150 เคส (ค่าที่รันแล้ว) |
 | **[evidence/](evidence/)** | ผลทดสอบ + ภาพหลักฐาน (`test_cases_verified.csv`, `manual_results_observed.csv`, PNG) |
-| **[WORK_LOG.md](WORK_LOG.md)** | บันทึกการแก้ปัญหา/ผลทดสอบราย session |
 | **[archive/](archive/)** | ไฟล์รุ่นเก่าที่ถูกแทนที่แล้ว (ดู [archive/README.md](archive/README.md)) |
 
 ---
@@ -95,7 +94,6 @@ web_robot/
 ├── TEST_CASES.md                  # สเปกชุด test case (102 เคส)
 ├── MANUAL_TESTS_ON_SITE.md        # runbook ทดสอบ manual หน้างาน
 ├── TEST_CASES_new.xlsx            # ผลทดสอบจริง 150 เคส
-├── WORK_LOG.md                    # บันทึกงานราย session
 ├── docker-compose.yml             # PostgreSQL + Backend + Frontend
 ├── evidence/                      # CSV ผลทดสอบ + ภาพหลักฐาน
 ├── archive/                       # ไฟล์รุ่นเก่าที่ถูกแทนที่แล้ว
