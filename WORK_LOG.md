@@ -15,7 +15,7 @@
 | อะไร | ค่า |
 |---|---|
 | Repo | `RobotGuiding101/web_robot` branch `dev-back-test` |
-| Pi | `pi@192.168.191.125` (pass `Cpe123456`) |
+| Pi | `pi@192.168.191.125` (รหัสผ่านดูใน `PI5.md` ซึ่งอยู่ใน `.gitignore` — **ห้าม commit**) |
 | Deploy dir (ที่รันจริง) | `~/thesis_robot/web_robot_30_9_2026_19_37_00` |
 | Docker stack | `robot_frontend`, `robot_backend`, `robot_postgres`, `robot_adminer`, `cloudflared` |
 | Robot (Dobot CR5) | `192.168.10.110` (ตั้งใน `backend/.env` + `backend/.maps_point.env`) |
@@ -24,9 +24,9 @@
 ### วิธี deploy ขึ้น Pi (ที่ใช้ session นี้)
 ```bash
 # ก๊อปไฟล์ที่แก้เข้า deploy dir แล้ว rebuild เฉพาะ frontend
-sshpass -p 'Cpe123456' scp frontend/public/robot-viewer.html \
+sshpass -p '<PI_PASSWORD>' scp frontend/public/robot-viewer.html \
   pi@192.168.191.125:~/thesis_robot/web_robot_30_9_2026_19_37_00/frontend/public/robot-viewer.html
-sshpass -p 'Cpe123456' ssh pi@192.168.191.125 \
+sshpass -p '<PI_PASSWORD>' ssh pi@192.168.191.125 \
   "cd ~/thesis_robot/web_robot_30_9_2026_19_37_00 && docker compose build frontend && docker compose up -d frontend"
 # (ถ้าแก้ src/ ใช้ docker compose up -d --build แทน)
 ```
@@ -110,3 +110,80 @@ Tool(3) ack=-1 (ไม่มี)
 ## 🧾 หมายเหตุการทดสอบ
 - ทุกครั้งที่แก้ frontend ต้อง **`docker compose build frontend && up -d frontend`** แล้ว **hard refresh (Ctrl+F5)** เพราะ `robot-viewer.html` เป็น iframe
 - ตรวจว่า serve แล้วได้โค้ดใหม่: `curl -s http://localhost/robot-viewer.html | grep <marker>`
+
+---
+---
+
+# 📝 Work Log — เอกสาร & ส่งมอบงาน (2026-10-15)
+
+> Session ปิดงาน เพื่อจัดไฟล์ให้พร้อมส่งต่อ — branch `main` (PR #3 รวม `dev-back-test` แล้ว) · commit ก่อน session นี้ `3e84f59`
+
+## 🎯 เป้าหมาย
+- ตรวจสุขภาพโปรเจคก่อนส่งต่อ (เทสต์ / lint / build)
+- เก็บเอกสารที่หาย + จัดโครงสร้างรากโปรเจคให้อ่านง่าย
+- เขียนเอกสารส่งมอบ (HANDOFF)
+
+---
+
+## 🔍 สิ่งที่ตรวจพบ
+
+| # | เรื่อง | ผล |
+|---|---|---|
+| 1 | `CAMERA_STREAM.md` หายไป | ถูก GitHub Desktop stash ทั้งที่ → กู้คืนจาก `stash@{0}` แล้ว |
+| 2 | `frontend/public/models/Link6s.dae` (~3.6 MB) | **ไม่มีโค้ดโหลด** — `viewer-boot.js:425` โหลด `Link6_S.dae` แทน → ย้ายเข้า `archive/models/` |
+| 3 | `TEST_CASES.xlsx` / `TEST_CASES.csv` (102 เคส) | ถูกแทนที่ด้วยชุด 150 เคส (`TEST_CASES_new.xlsx`, `evidence/test_cases_verified.csv`) → ย้ายเข้า `archive/test-cases-v102/` |
+| 4 | `TEST_CASES_SUMMARY.csv` | คอลัมน์ Pass/Fail ว่างทั้งหมด (ไม่มีผลจริง) → ย้ายเข้า `archive/` |
+| 5 | **รหัสผ่าน Pi ถูก commit ใน `WORK_LOG.md`** (3 จุด) | ลบออกจากไฟล์ → เหลือ `<PI_PASSWORD>` / ชี้ไป `PI5.md` (อยู่ใน `.gitignore`) |
+| 6 | README โครงสร้างโปรเจกต์ไม่ตรงโค้ดจริง | ขาด `viewer-*.js` (7 ไฟล์), `scan.py`, `LogsPage.jsx`, `shapes.js`, `robotLogFormat.js`, `reportGate.js`, `RobotLogPanel.jsx` → sync แล้ว |
+| 7 | README เขียนว่า "ชุดทดสอบ 102 เคส" | ชุดที่รันจริง = **150 เคส** (102 เดิม + 48 ใหม่) → แก้ตัวเลข + ชี้ไฟล์ผลจริง |
+| 8 | `TEST_CASES.md` ยังเป็นสเปก 102 เคส | ครอบคลุมครบทุกเคสในชุด 150 แต่ขาด 48 เคสใหม่ → ค้างไว้ในรายการงาน |
+
+---
+
+## ✅ ผลตรวจสุขภาพ (รันจริง)
+
+| รายการ | คำสั่ง | ผล |
+|---|---|---|
+| Backend tests | `cd backend && python -m pytest -q` | ✅ **158 passed** |
+| Frontend tests | `cd frontend && npm run test` | ✅ **100 passed** (7 files) |
+| Lint | `cd frontend && npm run lint` | ✅ ไม่มี error (warning ~30 เรื่อง = ตัวแปรที่ยังไม่ได้ใช้) |
+| Build | `cd frontend && npm run build` | ✅ สำเร็จ (bundle 665 kB / gzip 201 kB) |
+| Git hygiene | `git status` / `git ls-files` | ✅ ไม่มี secret/ไฟล์ cache ติด git · ไม่มี untracked ค้าง · repo 25.5 MB |
+| Encoding | ตรวจทุกไฟล์ `.md` / `.csv` | ✅ UTF-8 ทั้งหมด (CSV มี BOM, MD ไม่มี) |
+
+---
+
+## 📁 ไฟล์ที่เพิ่ม/ย้าย
+
+```
++ CAMERA_STREAM.md          (กู้คืนจาก stash — สรุปกล้อง/การเชื่อม/MJPEG/pyrealsense2+OpenCV)
++ HANDOFF.md                (ใหม่ — จุดส่งมอบงาน)
++ archive/README.md         (ใหม่ — อธิบายไฟล์ที่ย้าย + วิธีคืน)
+~ README.md                 (เพิ่มดัชนีเอกสาร + sync โครงสร้าง + แก้ตัวเลข 102→150)
+~ WORK_LOG.md               (ลบรหัสผ่าน + เพิ่มบันทึก session นี้)
+rename TEST_CASES.csv              → archive/test-cases-v102/
+rename TEST_CASES.xlsx             → archive/test-cases-v102/
+rename TEST_CASES_SUMMARY.csv      → archive/test-cases-v102/
+rename models/Link6s.dae           → archive/models/
+```
+
+---
+
+## ⚠️ ความเสี่ยงที่เหลือ (ส่งต่อต้องบอก)
+
+1. **Tool 2 (probe tip) = offset 0** — ผลกระทบสูงสุดต่อความแม่นของ align (หมุนรอบ flange ไม่ใช่ปลายจริง)
+2. **รหัสผ่าน Pi ยังอยู่ใน git history** แม้ลบจากไฟล์แล้ว (commit `f5a1c72`) — **ควรเปลี่ยนรหัสผ่าน** หรือใช้ `git filter-repo` หาก repo เป็น public
+3. **Model FK drift ~11 mm** — ต้อง calibrate link length จาก CAD จริง
+4. **DB ไม่มี migration** — เพิ่มคอลัมน์ต้อง `ALTER TABLE` เอง
+5. **web_robot กับ version_3.0 จอง Dobot/D455 ได้ทีละแอป**
+
+---
+
+## 👉 งานต่อ (สรุปทั้งหมด)
+
+- [ ] เปลี่ยนรหัสผ่าน Pi / ล้างรหัสผ่านออกจาก git history
+- [ ] ตั้ง **Tool 2 (probe tip)** ใน DobotStudio Pro แล้วทดสอบ align ซ้ำ
+- [ ] ปิดงาน 30 เคส `Needs Rig` + 19 เคสที่ยังไม่บันทึกผล + 7 เคส `Needs Browser` + 3 เคส `Needs Config`
+- [ ] อัปเดต `TEST_CASES.md` ให้ครอบคลุม 150 เคส
+- [ ] calibrate link length ของโมเดลให้ตรง CR5 จริง
+- [ ] เก็บ lint warnings (~30 รายการ)

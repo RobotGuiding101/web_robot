@@ -4,7 +4,20 @@
 
 ระบบรันบน **Raspberry Pi 5** เป็น Docker stack (FastAPI + React + PostgreSQL) และสามารถเปิดให้เข้าถึงจากระยะไกลผ่าน **Cloudflare Tunnel** ได้
 
-> 📚 เอกสารประกอบ: **[DATABASE.md](DATABASE.md)** (schema/ER) · **[BACKEND_CAMERA_DOBOT.md](BACKEND_CAMERA_DOBOT.md)** (ออกแบบ backend) · **[TEST_CASES.md](TEST_CASES.md)** (ชุดทดสอบ 102 เคส)
+### 📚 เอกสารประกอบ (Documentation Index)
+
+| เอกสาร | เนื้อหา |
+|---|---|
+| **[HANDOFF.md](HANDOFF.md)** | 📦 **จุดส่งมอบงาน** — สถานะปัจจุบัน, วิธีรัน/ทดสอบ, รายการงานค้าง |
+| **[DATABASE.md](DATABASE.md)** | โครงสร้างฐานข้อมูล (schema / ER diagram) |
+| **[BACKEND_CAMERA_DOBOT.md](BACKEND_CAMERA_DOBOT.md)** | การออกแบบ backend (กล้อง / Dobot / align) |
+| **[CAMERA_STREAM.md](CAMERA_STREAM.md)** | กล้อง 2 ตัว, การเชื่อมต่อ, MJPEG stream, pyrealsense2 + OpenCV |
+| **[TEST_CASES.md](TEST_CASES.md)** | สเปกชุดทดสอบ (102 เคส) |
+| **[MANUAL_TESTS_ON_SITE.md](MANUAL_TESTS_ON_SITE.md)** | คู่มือทดสอบ manual หน้างาน (on-site runbook) |
+| **[TEST_CASES_new.xlsx](TEST_CASES_new.xlsx)** | ผลทดสอบจริง 150 เคส (ค่าที่รันแล้ว) |
+| **[evidence/](evidence/)** | ผลทดสอบ + ภาพหลักฐาน (`test_cases_verified.csv`, `manual_results_observed.csv`, PNG) |
+| **[WORK_LOG.md](WORK_LOG.md)** | บันทึกการแก้ปัญหา/ผลทดสอบราย session |
+| **[archive/](archive/)** | ไฟล์รุ่นเก่าที่ถูกแทนที่แล้ว (ดู [archive/README.md](archive/README.md)) |
 
 ---
 
@@ -75,10 +88,17 @@
 ```text
 web_robot/
 ├── README.md
-├── DATABASE.md                   # ER diagram + schema ฐานข้อมูล
-├── BACKEND_CAMERA_DOBOT.md       # สรุปการออกแบบ backend (กล้อง/หุ่น)
-├── TEST_CASES.md                 # ชุด test case (manual + automated)
-├── docker-compose.yml            # PostgreSQL + Backend + Frontend
+├── HANDOFF.md                     # 📦 จุดส่งมอบงาน (สถานะ/วิธีรัน/งานค้าง)
+├── DATABASE.md                    # ER diagram + schema ฐานข้อมูล
+├── BACKEND_CAMERA_DOBOT.md        # สรุปการออกแบบ backend (กล้อง/หุ่น)
+├── CAMERA_STREAM.md               # กล้อง 2 ตัว + การเชื่อมต่อ + MJPEG stream
+├── TEST_CASES.md                  # สเปกชุด test case (102 เคส)
+├── MANUAL_TESTS_ON_SITE.md        # runbook ทดสอบ manual หน้างาน
+├── TEST_CASES_new.xlsx            # ผลทดสอบจริง 150 เคส
+├── WORK_LOG.md                    # บันทึกงานราย session
+├── docker-compose.yml             # PostgreSQL + Backend + Frontend
+├── evidence/                      # CSV ผลทดสอบ + ภาพหลักฐาน
+├── archive/                       # ไฟล์รุ่นเก่าที่ถูกแทนที่แล้ว
 │
 ├── backend/                      # FastAPI Server
 │   ├── main.py                   # App entry, lifespan, middleware, /ws/joints
@@ -92,24 +112,25 @@ web_robot/
 │   ├── routers/
 │   │   ├── auth.py               # /api/auth — Register/Login/Me (JWT)
 │   │   ├── mapcontrol.py         # /api/map — สั่งหุ่น/กล้อง/status/stream
-│   │   ├── camera.py             # /api/camera — stream/scan/select/mode
+│   │   ├── camera.py             # /api/camera — stream/scan/select/swap/mode
+│   │   ├── scan.py               # /api/scan — scan panel + WS progress
 │   │   ├── settings.py           # /api/settings — settings per-user
 │   │   ├── devices.py            # /api/devices — relay + event log + ping
 │   │   ├── device_events.py      # best-effort event-log writer
 │   │   └── robot.py              # /api/robot — E-Stop เท่านั้น
 │   ├── maps_point/               # ชั้นควบคุมฮาร์ดแวร์ (ไม่ผูก HTTP)
 │   │   ├── config.py             # รวม config จาก .maps_point.env
-│   │   ├── camera.py             # D455 pipeline + depth-only plane fit
+│   │   ├── camera.py             # D455 pipeline + capture thread + depth
 │   │   ├── robot.py              # Dobot SDK wrapper (2 ports, timeout)
 │   │   ├── dobot_api_v3.py       # Dobot SDK (dashboard/move)
-│   │   ├── align.py              # อัลกอริทึม align 3 เฟส
+│   │   ├── align.py              # อัลกอริทึม align (ตรงกับ version_3.0)
 │   │   ├── planegrid.py          # grid plane + replay เส้นวาด (bilinear)
 │   │   ├── motion.py             # pixel → robot XY (eye-in-hand)
 │   │   ├── floorcalib.py         # homography (eye-to-hand)
 │   │   ├── render.py             # วาด overlay ลงเฟรม
 │   │   ├── recording.py          # บันทึก align run ลงดิสก์
 │   │   └── logs.py               # ring logs (server + robot)
-│   └── tests/                    # pytest (planegrid/config/models/auth/floorcalib)
+│   └── tests/                    # pytest (planegrid/config/models/auth/floorcalib/pose)
 │
 └── frontend/                     # React + Vite Web App
     ├── index.html
@@ -124,11 +145,15 @@ web_robot/
         ├── index.css             # Global Design System
         ├── lib/
         │   ├── api.js            # apiFetch (แนบ Bearer, retry, 401→login)
+        │   ├── shapes.js         # ตรวจรูปทรง/validation ของข้อมูล
+        │   ├── robotLogFormat.js # จัดรูปแบบ log
+        │   ├── reportGate.js     # gate รายงานผลทดสอบ
         │   └── useJointsSocket.js# shared /ws/joints hook
         ├── components/
         │   ├── Sidebar.jsx       # nav + speed + logout
         │   ├── TopBar.jsx        # title + connection + E-Stop
         │   ├── CameraStream.jsx  # canvas MJPEG (abort when hidden)
+        │   ├── RobotLogPanel.jsx # แผง log ฝั่งขวา
         │   ├── RequireAuth.jsx   # auth guard
         │   └── ApiErrorBanner.jsx
         └── pages/
@@ -137,10 +162,18 @@ web_robot/
             ├── DobotControllerPage.jsx
             ├── CameraViewPage.jsx
             ├── DrawingModePage.jsx
+            ├── LogsPage.jsx
             └── SystemSettingsPage.jsx
     └── public/
         ├── robot-viewer.html     # Three.js 3D viewer (iframe)
-        └── models/               # โมเดล .dae (base_link, Link1..Link6)
+        ├── viewer-boot.js        # โหลดโมเดล/แสดงผล (แยกจาก html แล้ว)
+        ├── viewer-loop.js        # render loop
+        ├── viewer-gizmo.js       # gizmo ลากหุ่น + TIP
+        ├── viewer-ik.js          # IK / joint apply
+        ├── viewer-projector.js   # project world → pixel
+        ├── viewer-scan-align.js  # scan/align overlay
+        ├── viewer-host-bridge.js # bridge ไป React host
+        └── models/               # โมเดล .dae (base_link, Link1..Link6, Link6_S)
 ```
 
 ---
@@ -395,10 +428,11 @@ cd frontend && npm run test      # หรือ npm run test:watch
 
 | ฝั่ง | ชุดทดสอบ |
 |---|---|
-| Backend | `test_planegrid` (bilinear/grid/validate), `test_config` (env/type), `test_models` (UUID/unique), `test_auth` (JWT/bcrypt/login), `test_floorcalib` (homography) |
-| Frontend | `lib/api.test.js` (token/apiFetch), `ApiErrorBanner.test.jsx`, `RequireAuth.test.jsx` |
+| Backend | `test_planegrid` (bilinear/grid/validate), `test_config` (env/type), `test_models` (UUID/unique), `test_auth` (JWT/bcrypt/login), `test_floorcalib` (homography), `test_pose_source` (แหล่งข้อมูล pose) |
+| Frontend | `lib/api.test.js`, `lib/shapes.test.js`, `lib/robotLogFormat.test.js`, `reportGate.test.js`, `ApiErrorBanner.test.jsx`, `RequireAuth.test.jsx`, `DrawingModePage.smoke.test.jsx` |
 
-**Manual** — ดูชุดทดสอบครบ 102 เคส (Auth / API / Dashboard / Dobot / Camera / Drawing / Align / Move / Settings / Security) ที่ **[TEST_CASES.md](TEST_CASES.md)**
+**Manual** — ผลทดสอบจริง 150 เคส (102 เคสเดิม + 48 เคสใหม่: Align, Scan, Activity Log, Public Access, Automated Unit Tests) อยู่ใน **[evidence/test_cases_verified.csv](evidence/test_cases_verified.csv)** และ **[TEST_CASES_new.xlsx](TEST_CASES_new.xlsx)**
+สเปกฉบับอ่านสะดวกของ 102 เคสแรก — **[TEST_CASES.md](TEST_CASES.md)** · วิธีทดสอบหน้างาน — **[MANUAL_TESTS_ON_SITE.md](MANUAL_TESTS_ON_SITE.md)**
 
 ---
 
