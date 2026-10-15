@@ -10,12 +10,11 @@
 | ไฟล์ | สถานะ | ถูกแทนที่โดย |
 |---|---|---|
 | `TEST_CASES.csv` | เคส 102 รายการ (10 คอลัมน์, ยังไม่มีผล) | `evidence/test_cases_verified.csv` (150 เคส + ผลจริง) |
-| `TEST_CASES.xlsx` | ส่งออกจาก CSV ข้างบน (102 แถว) | `TEST_CASES_new.xlsx` (150 แถว) |
+| `TEST_CASES.xlsx` | ส่งออกจาก CSV ข้างบน (102 แถว) | `evidence/test_cases_verified.csv` (150 แถว + ผลจริง) |
 | `TEST_CASES_SUMMARY.csv` | สรุป 17 โมดูล แต่คอลัมน์ Pass/Fail **ว่างทั้งหมด** | ผลจริงอยู่ใน `evidence/test_cases_verified.csv` |
 
-> เอกสารสเปกฉบับอ่านสะดวกของชุด 102 เคสยังอยู่ที่รากคือ **`TEST_CASES.md`**
 > ชุดที่ใช้งานจริงปัจจุบันคือ **150 เคส** = 102 เคสเดิม + 48 เคสใหม่
-> (Align/BE-*, CAM-11/12, Scan, Activity Log, Public Access, Automated Unit Tests)
+> (Align/BE-*, CAM-11/12, Scan, Activity Log, Public Access, Automated Unit Tests) — ทั้งหมดอยู่ใน `evidence/`
 
 ---
 

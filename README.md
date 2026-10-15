@@ -8,13 +8,7 @@
 
 | เอกสาร | เนื้อหา |
 |---|---|
-| **[HANDOFF.md](HANDOFF.md)** | 📦 **จุดส่งมอบงาน** — สถานะปัจจุบัน, วิธีรัน/ทดสอบ, รายการงานค้าง |
-| **[DATABASE.md](DATABASE.md)** | โครงสร้างฐานข้อมูล (schema / ER diagram) |
-| **[BACKEND_CAMERA_DOBOT.md](BACKEND_CAMERA_DOBOT.md)** | การออกแบบ backend (กล้อง / Dobot / align) |
-| **[CAMERA_STREAM.md](CAMERA_STREAM.md)** | กล้อง 2 ตัว, การเชื่อมต่อ, MJPEG stream, pyrealsense2 + OpenCV |
-| **[TEST_CASES.md](TEST_CASES.md)** | สเปกชุดทดสอบ (102 เคส) |
-| **[MANUAL_TESTS_ON_SITE.md](MANUAL_TESTS_ON_SITE.md)** | คู่มือทดสอบ manual หน้างาน (on-site runbook) |
-| **[TEST_CASES_new.xlsx](TEST_CASES_new.xlsx)** | ผลทดสอบจริง 150 เคส (ค่าที่รันแล้ว) |
+| **README.md** (ไฟล์นี้) | วิธีติดตั้ง / ใช้งาน / โครงสร้าง / API |
 | **[evidence/](evidence/)** | ผลทดสอบ + ภาพหลักฐาน (`test_cases_verified.csv`, `manual_results_observed.csv`, PNG) |
 | **[archive/](archive/)** | ไฟล์รุ่นเก่าที่ถูกแทนที่แล้ว (ดู [archive/README.md](archive/README.md)) |
 
@@ -87,13 +81,6 @@
 ```text
 web_robot/
 ├── README.md
-├── HANDOFF.md                     # 📦 จุดส่งมอบงาน (สถานะ/วิธีรัน/งานค้าง)
-├── DATABASE.md                    # ER diagram + schema ฐานข้อมูล
-├── BACKEND_CAMERA_DOBOT.md        # สรุปการออกแบบ backend (กล้อง/หุ่น)
-├── CAMERA_STREAM.md               # กล้อง 2 ตัว + การเชื่อมต่อ + MJPEG stream
-├── TEST_CASES.md                  # สเปกชุด test case (102 เคส)
-├── MANUAL_TESTS_ON_SITE.md        # runbook ทดสอบ manual หน้างาน
-├── TEST_CASES_new.xlsx            # ผลทดสอบจริง 150 เคส
 ├── docker-compose.yml             # PostgreSQL + Backend + Frontend
 ├── evidence/                      # CSV ผลทดสอบ + ภาพหลักฐาน
 ├── archive/                       # ไฟล์รุ่นเก่าที่ถูกแทนที่แล้ว
@@ -219,7 +206,7 @@ PostgreSQL 16 — 3 ตาราง: `users`, `user_settings`, `device_logs` (�
 - `user_settings` — key/value ต่อผู้ใช้: `home_*`, `cam_serial`/`cam_serial2`, `cam_devices` (JSON), `sidebar_speed`
 - `device_logs` — event log (`robot` / `align` / `camera` / `estop` / `relay_v1`) + คอลัมน์ `detail`
 
-> 📑 ดู **ER Diagram** + รายละเอียดทั้งหมดที่ **[DATABASE.md](DATABASE.md)**
+> 📑 ดู **ER Diagram** + รายละเอียดทั้งหมดได้ที่หัวข้อ “ฐานข้อมูล” ด้านบน และโค้ดต้นแบบอยู่ใน `backend/models.py`
 
 ### 🔎 ดูฐานข้อมูลด้วย Adminer (เหมือน phpMyAdmin)
 
@@ -429,8 +416,7 @@ cd frontend && npm run test      # หรือ npm run test:watch
 | Backend | `test_planegrid` (bilinear/grid/validate), `test_config` (env/type), `test_models` (UUID/unique), `test_auth` (JWT/bcrypt/login), `test_floorcalib` (homography), `test_pose_source` (แหล่งข้อมูล pose) |
 | Frontend | `lib/api.test.js`, `lib/shapes.test.js`, `lib/robotLogFormat.test.js`, `reportGate.test.js`, `ApiErrorBanner.test.jsx`, `RequireAuth.test.jsx`, `DrawingModePage.smoke.test.jsx` |
 
-**Manual** — ผลทดสอบจริง 150 เคส (102 เคสเดิม + 48 เคสใหม่: Align, Scan, Activity Log, Public Access, Automated Unit Tests) อยู่ใน **[evidence/test_cases_verified.csv](evidence/test_cases_verified.csv)** และ **[TEST_CASES_new.xlsx](TEST_CASES_new.xlsx)**
-สเปกฉบับอ่านสะดวกของ 102 เคสแรก — **[TEST_CASES.md](TEST_CASES.md)** · วิธีทดสอบหน้างาน — **[MANUAL_TESTS_ON_SITE.md](MANUAL_TESTS_ON_SITE.md)**
+**Manual** — ผลทดสอบจริง 150 เคส (102 เคสเดิม + 48 เคสใหม่: Align, Scan, Activity Log, Public Access, Automated Unit Tests) อยู่ใน **[evidence/test_cases_verified.csv](evidence/test_cases_verified.csv)** และ **[evidence/manual_results_observed.csv](evidence/manual_results_observed.csv)** พร้อมภาพหลักฐานในโฟลเดอร์เดียวกัน
 
 ---
 
