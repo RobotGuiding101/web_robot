@@ -142,16 +142,45 @@ npm run dev                           # http://localhost:5173
 graph TD
     User([Operator]) <-->|HTTPS| CF[Cloudflare Tunnel]
     CF --> NG["nginx :80"]
-    NG -->|/api/*| API["FastAPI :8000"]
-    NG -->|/ws| API
+    NG -->|"/api/*"| API["FastAPI :8000"]
+    NG -->|"/ws"| API
     NG -->|static| FE[React SPA]
 
     API -->|librealsense| CAM["RealSense D455"]
     API -->|TCP 29999 / 30003| DOB[Dobot CR5]
     API --> PG[(PostgreSQL)]
+
     FE -->|iframe| VIEW["robot-viewer.html"]
-    FE <-->|WebSocket| API
+
+    FE <-->|"GET /api/*"| API
+    FE <-->|"/ws/joints"| WSJ["joint broadcast<br/>20 Hz"]
+    VIEW <-->|"/api/scan/ws"| WSS["live fused cloud<br/>binary"]
+    VIEW <-->|"/api/scan/ws/align"| WSA["ICP result<br/>4 Hz"]
+    WSJ & WSS & WSA --- API
+
+    FE <-->|"postMessage"| VIEW
 ```
+
+### ช่องทางการสื่อสารทั้ง 4 แบบ
+
+| ช่องทาง | ใช้ทำอะไร | ลักษณะ |
+|---|---|---|
+| REST `/api/*` | คำสั่งและสถานะทั้งหมด | request/response, ต้องมี Bearer token |
+| MJPEG `/api/map/video_feed`, `/api/camera/stream2` | ภาพกล้องสด | streaming, unbuffered, อ่านด้วยการแยกเฟรมเอง |
+| WebSocket | ข้อมูลต่อเนื่อง | ยืนยันตัวตนด้วย `?token=` เพราะ handshake ส่ง header ไม่ได้ |
+| `postMessage` | viewer ประสานงานกับ React | ในเครื่องผ่าน iframe ไม่ออกเครือข่าย |
+
+### WebSocket ทั้ง 3 ช่อง
+
+| Endpoint | ผู้ฟัง | ข้อมูล | ความถี่ |
+|---|---|---|---|
+| `/ws/joints` | React (`useJointsSocket`) | `{ angles, connected, pose }` ทุก tick ปัจจุบัน | 20 Hz (pose ทุก tick คู่) |
+| `/api/scan/ws` | viewer (`viewer-scan-align.js`) | binary: `uint32 N` + `int16[N,3]` mm + `uint8[N,3]` rgb | 0.15 s เมื่อมีผู้ดู, 0.3 s idle |
+| `/api/scan/ws/align` | viewer | `{ xyz, rpy, fitness, rmse }` จาก ICP | 0.25 s |
+
+ทุก handler ตรวจ token เองก่อน accept และปิดด้วย code 1008 เมื่อไม่ผ่าน ฝั่ง client คือ `useJointsSocket` ที่ใช้ socket เดียวร่วมกันทั้งแอป (ref count) ส่วนอีกสองช่องเปิดเฉพาะเมื่อมี viewer เปิดค้างไว้
+
+> ช่องทางอื่นที่ viewer ใช้เป็น HTTP polling ไม่ใช่ WebSocket ได้แก่ depth grid (100–200 ms), point cloud (700–800 ms) และภาพ MJPEG
 
 ### หลักการที่ยึด
 
@@ -160,8 +189,6 @@ graph TD
 **การ encode แชร์กัน** — `_encode_frame()` encode JPEG ครั้งเดียวต่อเฟรมแล้วเก็บใน cache ผู้ชม N คนจึงใช้ CPU เท่ากับคนเดียว พร้อมกั้นเวลา `X-Accel-Buffering: no` และ `proxy_buffering off` ที่ nginx เพื่อไม่ให้สตรีมถูกบัฟเฟอร์
 
 **ทุกการเคลื่อนที่ถูก serialize** — `robot_lock` ครอบทุกคำสั่ง jog, move, align และ draw ป้องกันคำสั่งชนกัน
-
-**WebSocket ยืนยันตัวตนเอง** — เบราว์เซอร์ส่ง header `Authorization` ไม่ได้ตอน handshake จึงส่ง JWT เป็น query `?token=` และทุก handler ตรวจ token เองก่อน accept
 
 ### Startup sequence
 
