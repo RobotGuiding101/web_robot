@@ -1,0 +1,11 @@
+# Map the commit identities that were used inconsistently onto one
+# canonical name/email per person, so `git shortlog` and GitHub attribute
+# every commit to the right account.
+#
+# format:  Proper-Name <proper-email>  <commit-name> <commit-email>
+
+# Same person, two different names on the same email (177 commits)
+NCWJJ-BOX <55176031+NCWJJ-BOX@users.noreply.github.com> Numchai Wongjanjaroen <55176031+NCWJJ-BOX@users.noreply.github.com>
+
+# Same person, two different emails (117 commits on gmail -> GitHub noreply)
+Nawin0 <93501830+Nawin0@users.noreply.github.com> Nawin0 <nawin.wan13@gmail.com>
