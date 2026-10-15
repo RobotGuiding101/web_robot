@@ -21,6 +21,8 @@ Web Robot คือเว็บแอปพลิเคชันสำหรั�
 - [การทดสอบ](#การทดสอบ)
 - [Deploy](#deploy)
 - [ข้อจำกัดที่รู้อยู่](#ข้อจำกัดที่รู้อยู่)
+- [License](#license)
+- [Credits](#credits)
 
 ---
 
@@ -638,6 +640,65 @@ Backend ใช้ `network_mode: host` เพราะต้องเข้า�
 
 ---
 
-## License & Credits
+## License
 
-พัฒนาขึ้นสำหรับการเชื่อมต่อและควบคุมหุ่นยนต์แขนกล Dobot CR5 ร่วมกับ Intel RealSense D455 ผ่านเว็บเทคโนโลยี (FastAPI + React + Three.js)
+โปรเจคนี้ใช้ **Apache License 2.0** — ดู [LICENSE](LICENSE) เต็มฉบับ
+
+การใช้งานซอร์สโค้ดและไฟล์โมเดล `.dae` ภายในโปรเจคนี้ต้องคงหัวข้อสัญญาอนุญาตไว้ ส่วนซอร์สโค้ดที่ vendor มา (`backend/maps_point/dobot_api_v3.py`) ยังคงลิขสิทธิ์ของ Dobot ไว้ตามเดิม
+
+## Credits
+
+### ฮาร์ดแวร์
+
+| อุปกรณ์ | ผู้ผลิต |
+|---|---|
+| Dobot CR5 | Dobot Robotics |
+| Intel RealSense D455 (สูงสุด 2 ตัว) | Intel |
+| Raspberry Pi 5 | Raspberry Pi Foundation |
+
+### Backend
+
+| ไลบรารี | ใช้ทำอะไร |
+|---|---|
+| [FastAPI](https://fastapi.tiangolo.com/) + [Uvicorn](https://www.uvicorn.org/) | web framework และ ASGI server |
+| [SQLAlchemy](https://www.sqlalchemy.org/) + [asyncpg](https://github.com/MagicStack/asyncpg) | ORM และ PostgreSQL driver |
+| [python-jose](https://python-jose.readthedocs.io/) + [passlib](https://passlib.readthedocs.io/) | JWT และ bcrypt |
+| [python-dotenv](https://pypi.org/project/python-dotenv/) | โหลดค่าจากไฟล์ env |
+| [OpenCV](https://opencv.org/) (`opencv-python-headless`) | region growing, colormap, encode JPEG, overlay |
+| [NumPy](https://numpy.org/) | คำนวณภาพ |
+| [pyrealsense2](https://github.com/IntelRealSense/librealsense) | SDK ของ RealSense |
+| [pytest](https://pytest.org/) | unit tests |
+
+### Frontend
+
+| ไลบรารี | ใช้ทำอะไร |
+|---|---|
+| [React](https://react.dev/) + [React Router](https://reactrouter.com/) | UI และ routing |
+| [Vite](https://vitejs.dev/) | build tool |
+| [Three.js](https://threejs.org/) r128 | 3D viewer (โหลดจาก CDN) |
+| [Fabric.js](https://fabricjs.com/) | canvas วาดเส้น |
+| [Oxlint](https://oxc.rs/) | linting |
+| [Vitest](https://vitest.dev/) + [Testing Library](https://testing-library.com/) | unit tests |
+
+### Infrastructure
+
+| เครื่องมือ | ใช้ทำอะไร |
+|---|---|
+| [PostgreSQL](https://www.postgresql.org/) 16 | ฐานข้อมูล |
+| [Docker](https://www.docker.com/) + Compose | container orchestration |
+| [nginx](https://nginx.org/) | static serving และ reverse proxy |
+| [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) | Cloudflare Tunnel |
+| [Adminer](https://www.adminer.org/) | เว็บดูฐานข้อมูล (ตัวเลือก) |
+
+### ผู้พัฒนา
+
+| ชื่อ | บัญชี GitHub |
+|---|---|
+| nareboo04 | [`nareboo04`](https://github.com/nareboo04) |
+| Nawin0 | [`Nawin0`](https://github.com/Nawin0) |
+| Numchai Wongjanjaroen | [`NCWJJ-BOX`](https://github.com/NCWJJ-BOX) |
+> repository นี้อยู่ภายใต้องค์กร `RobotGuiding101`
+
+### อ้างอิง
+
+อัลกอริทึมการจับระนาบและการควบคุมการเคลื่อนที่อ้างอิงแนวทางจากโปรเจกต์ `version_3.0` ใน repository [RobotGuiding101/control_robot](https://github.com/RobotGuiding101/control_robot) (ผู้พัฒนา: `nareboo04`)
