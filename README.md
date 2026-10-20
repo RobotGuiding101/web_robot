@@ -694,7 +694,7 @@ Backend ใช้ `network_mode: host` เพราะต้องเข้า�
 
 | ชื่อ | บัญชี GitHub |
 |---|---|
-| nareboo04 | [`nareboo04`](https://github.com/nareboo04) |
+| Nareubad Todsarad | [`nareboo04`](https://github.com/nareboo04) |
 | Nawin0 | [`Nawin0`](https://github.com/Nawin0) |
 | Numchai Wongjanjaroen | [`NCWJJ-BOX`](https://github.com/NCWJJ-BOX) |
 > repository นี้อยู่ภายใต้องค์กร `RobotGuiding101`
